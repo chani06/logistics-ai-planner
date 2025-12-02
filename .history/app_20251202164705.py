@@ -332,8 +332,6 @@ def process_dataframe(df):
             rename_map[col] = 'Longitude'
         elif 'จังหวัด' in col_clean:
             rename_map[col] = 'Province'
-        elif col_upper in ['TRIP', 'TRIPNO', 'TRIPCODE'] or 'ทริป' in col_clean or 'เที่ยว' in col_clean:
-            rename_map[col] = 'Trip'
     
     df = df.rename(columns=rename_map)
     
@@ -381,14 +379,19 @@ def predict_trips(test_df, model_data):
     trip_vehicles = model_data.get('trip_vehicles', {}).copy()
     branch_vehicles = model_data.get('branch_vehicles', {})
     
-    # ★ ถ้าไฟล์อัปโหลดมีคอลัมน์ Trip ให้ใช้เป็นข้อมูลอ้างอิงหลัก
+    # ★ ถ้าไฟล์อัปโหลดมีคอลัมน์ Trip/ทริป ให้ใช้เป็นข้อมูลอ้างอิงหลัก
     # เพราะเป็นแผนงานที่ใช้จริงมาแล้ว
-    if 'Trip' in test_df.columns:
-        st.info(f"📋 พบคอลัมน์ทริปในไฟล์ - ใช้แผนงานจริงเป็นข้อมูลอ้างอิง")
+    trip_col = None
+    for col in test_df.columns:
+        col_clean = str(col).strip().upper()
+        if col_clean in ['TRIP', 'TRIPNO', 'TRIP_NO', 'ทริป', 'เที่ยว']:
+            trip_col = col
+            break
+    
+    if trip_col:
+        st.info(f"📋 พบคอลัมน์ '{trip_col}' - ใช้แผนงานจากไฟล์เป็นข้อมูลอ้างอิง")
         # สร้าง trip_pairs จากไฟล์แผนงาน
-        for trip_id, group in test_df.groupby('Trip'):
-            if pd.isna(trip_id):
-                continue
+        for trip_id, group in test_df.groupby(trip_col):
             codes = group['Code'].unique().tolist()
             # สร้างคู่สาขาในทริปเดียวกัน
             for i in range(len(codes)):
