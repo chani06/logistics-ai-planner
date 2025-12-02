@@ -92,9 +92,20 @@ def get_province_zone(province):
     return 'UNKNOWN'
 
 def is_same_zone(code1, code2, zone_map, geo):
+    """เช็คว่า 2 สาขาอยู่ zone เดียวกันหรือไม่ - เข้มงวดมาก"""
     if not STRICT_ZONE_MODE:
         return True
     
+    # เช็คภูมิภาคก่อน - ต้องเหมือนกัน 100%
+    zone1 = zone_map.get(code1, 'UNKNOWN')
+    zone2 = zone_map.get(code2, 'UNKNOWN')
+    
+    # ถ้ารู้ภูมิภาคทั้ง 2 ต้องเหมือนกัน ไม่งั้นห้ามรวม
+    if zone1 != 'UNKNOWN' and zone2 != 'UNKNOWN':
+        if zone1 != zone2:
+            return False
+    
+    # ถ้าไม่รู้ภูมิภาคอย่างใดอย่างหนึ่ง เช็คระยะทาง
     if code1 in geo and code2 in geo:
         lat1, lon1 = geo[code1]
         lat2, lon2 = geo[code2]
@@ -102,12 +113,9 @@ def is_same_zone(code1, code2, zone_map, geo):
             dist = haversine(lat1, lon1, lat2, lon2)
             if dist > MAX_ZONE_DISTANCE:
                 return False
-    
-    zone1 = zone_map.get(code1, 'UNKNOWN')
-    zone2 = zone_map.get(code2, 'UNKNOWN')
-    
-    if zone1 != 'UNKNOWN' and zone2 != 'UNKNOWN':
-        if zone1 != zone2:
+    else:
+        # ถ้าไม่มีพิกัดและไม่รู้ภูมิภาค ห้ามรวม
+        if zone1 == 'UNKNOWN' or zone2 == 'UNKNOWN':
             return False
     
     return True
