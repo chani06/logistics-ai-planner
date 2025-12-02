@@ -21,7 +21,8 @@ TARGET_DROPS = 10
 MAX_DROPS_FLEX = 12
 NEARBY_RADIUS = 5.0
 MAX_ZONE_DISTANCE = 100.0
-STRICT_ZONE_MODE = True
+STRICT_ZONE_MODE = True  # เปิดการเช็คโซนภาค
+HISTORICAL_ONLY_MODE = False  # ปิดโหมดเข้มงวด ให้จัดกลุ่มตามประวัติแบบยืดหยุ่น
 
 # Utilization thresholds for truck optimization
 MIN_CUBE_UTILIZATION = 0.90  # อย่างต่ำ 90% ก่อนปิดรถ
@@ -141,7 +142,7 @@ def load_excel(content, sheet_name=None):
         
         # ถ้ายังไม่เจอ ใช้ลำดับความสำคัญ
         if not target_sheet:
-            priority = ['2.punthai', '2.', 'punthai', 'order', 'history', 'data', 'sheet']
+            priority = ['2.punthai', '2. punthai', '2.', 'punthai', 'order', 'history', 'data', 'sheet']
             
             for p in priority:
                 for s in xls.sheet_names:
@@ -181,18 +182,49 @@ def process_dataframe(df):
     df = df.loc[:, ~df.columns.duplicated()]
     rename_map = {}
     for c in df.columns:
+        c_stripped = c.strip()
         cu = c.upper().replace(' ','').replace('_','')
-        if 'BRANCHCODE' in cu or 'รหัสสาขา' in cu: rename_map[c] = 'Code'
-        elif 'BRANCH' in cu or 'ชื่อสาขา' in cu or 'สาขา'==c: rename_map[c] = 'Name'
-        elif 'WGT' in cu or 'น้ำหนัก' in cu: rename_map[c] = 'Wgt'
-        elif 'CUBE' in cu or 'คิว' in cu: rename_map[c] = 'Cube'
-        elif 'LAT' in cu: rename_map[c] = 'Lat'
-        elif 'LON' in cu: rename_map[c] = 'Lon'
-        elif 'TRIP' in cu or 'BOOKING' in cu: rename_map[c] = 'Trip'
-        elif 'VEHICLE' in cu or 'TRIPNO' in cu: rename_map[c] = 'Vehicle'
-        elif 'จังหวัด' in cu: rename_map[c] = 'Province'
+        
+        # ตรวจสอบชื่อคอลัมน์แบบตรงตัว (exact match) ก่อน
+        if c_stripped == 'BranchCode':
+            rename_map[c] = 'Code'
+        elif c_stripped == 'Branch':
+            rename_map[c] = 'Name'
+        elif c_stripped == 'TOTALWGT':
+            rename_map[c] = 'Wgt'
+        elif c_stripped == 'TOTALCUBE':
+            rename_map[c] = 'Cube'
+        elif c_stripped == 'latitude' or c_stripped == ' latitude ':
+            rename_map[c] = 'Lat'
+        elif c_stripped == 'longitude':
+            rename_map[c] = 'Lon'
+        elif c_stripped == 'Trip':
+            rename_map[c] = 'Trip'
+        elif c_stripped == 'Trip no':
+            rename_map[c] = 'Vehicle'
+        elif c_stripped == 'จังหวัด':
+            rename_map[c] = 'Province'
+        # ถ้าไม่ตรงแบบ exact ให้ใช้ partial match
+        elif 'BRANCHCODE' in cu or 'รหัสสาขา' in cu:
+            rename_map[c] = 'Code'
+        elif 'WGT' in cu or 'น้ำหนัก' in cu:
+            rename_map[c] = 'Wgt'
+        elif 'CUBE' in cu or 'คิว' in cu:
+            rename_map[c] = 'Cube'
+        elif 'LAT' in cu:
+            rename_map[c] = 'Lat'
+        elif 'LON' in cu:
+            rename_map[c] = 'Lon'
+        elif 'BOOKING' in cu:
+            rename_map[c] = 'Trip'
+        elif 'VEHICLE' in cu or 'TRIPNO' in cu:
+            rename_map[c] = 'Vehicle'
     
     df.rename(columns=rename_map, inplace=True)
+    
+    # รีเซ็ต index เพื่อป้องกัน duplicate labels
+    df = df.reset_index(drop=True)
+    
     if 'Code' not in df.columns:
         if 'Name' in df.columns: df['Code'] = df['Name']
         else: return None
@@ -201,10 +233,22 @@ def process_dataframe(df):
     for c in ['Wgt','Cube','Lat','Lon']:
         if c not in df.columns: df[c] = 0.0
         else: df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0)
-        
-    mask_ex = df['Code'].isin(EXCLUDE)
-    if 'Name' in df.columns: mask_ex |= df['Name'].apply(lambda x: any(k in str(x) for k in EXCLUDE))
-    return df[~mask_ex].copy()
+    
+    # ใช้ numpy array เพื่อหลีกเลี่ยงปัญหา duplicate index
+    import numpy as np
+    mask_to_keep = ~df['Code'].isin(EXCLUDE).values
+    
+    if 'Name' in df.columns:
+        # สร้าง mask จาก Name โดยใช้ numpy array
+        name_str = df['Name'].astype(str).values
+        for exclude_key in EXCLUDE:
+            name_mask = np.array([exclude_key not in s for s in name_str])
+            mask_to_keep = mask_to_keep & name_mask
+    
+    # กรองข้อมูลโดยใช้ boolean indexing
+    df = df[mask_to_keep].reset_index(drop=True)
+    
+    return df.copy()
 
 def process_geo(df):
     if df is None: return {}
@@ -257,7 +301,8 @@ def train_ai(df_list):
         for t, g in df.groupby('Trip'):
             codes = g['Code'].unique()
             veh = str(g['Vehicle'].iloc[0]).upper() if 'Vehicle' in g.columns else ''
-            rank = 3 if '6' in veh else (2 if 'J' in veh else 1)
+            # ตรวจจับประเภทรถจาก Trip no (4W, 6W, JB)
+            rank = 3 if '6W' in veh or '6ล้อ' in veh else (2 if 'JB' in veh or 'จัมโบ' in veh else 1)
             
             # บันทึก requirement ของแต่ละสาขา
             for c in codes: 
@@ -502,20 +547,33 @@ def merge_small_trips(df_result, geo, region_map):
 def run_prediction(df_test, G, geo, constraints, region_map):
     df_test['Lat'] = df_test.apply(lambda r: geo.get(r['Code'],(0,0))[0] if r['Lat']==0 else r['Lat'], axis=1)
     df_test['Lon'] = df_test.apply(lambda r: geo.get(r['Code'],(0,0))[1] if r['Lon']==0 else r['Lon'], axis=1)
-    df_test['Region'] = df_test['Code'].map(lambda x: region_map.get(x, 'UNKNOWN'))
     
+    # ถ้ามีข้อมูล Province ในไฟล์ Test ให้ใช้ข้อมูลนั้น ถ้าไม่มีให้ใช้จาก region_map
+    if 'Province' in df_test.columns:
+        df_test['Region'] = df_test.apply(
+            lambda r: get_province_zone(r['Province']) if pd.notna(r['Province']) 
+            else region_map.get(r['Code'], 'UNKNOWN'), 
+            axis=1
+        )
+    else:
+        df_test['Region'] = df_test['Code'].map(lambda x: region_map.get(x, 'UNKNOWN'))
+    
+    # ใช้ connected components จาก Graph เพื่อจัดกลุ่มสาขาที่เคยไปด้วยกัน
     hist_map = {n:i for i,c in enumerate(nx.connected_components(G)) for n in c}
     df_test['Cluster'] = df_test['Code'].map(lambda x: f"H-{hist_map[x]}" if x in hist_map else "UNK")
     
+    # เพิ่มโซนภาคเข้าไปใน Cluster เพื่อแยกกลุ่มตามภูมิภาค
     if STRICT_ZONE_MODE:
         new_clusters = []
         for idx, row in df_test.iterrows():
-            if row['Cluster'] != 'UNK' and row['Region'] != 'UNKNOWN':
+            # ถ้ารู้จักภูมิภาค ให้เพิ่มเข้าไปใน cluster
+            if row['Region'] != 'UNKNOWN':
                 new_clusters.append(f"{row['Cluster']}-{row['Region']}")
             else:
                 new_clusters.append(row['Cluster'])
         df_test['Cluster'] = new_clusters
     
+    # จัดกลุ่มสาขาที่ไม่รู้จัก (UNK)
     mask_unk = df_test['Cluster']=="UNK"
     if mask_unk.any():
         mask_geo = (df_test['Lat']!=0) & mask_unk
@@ -601,15 +659,21 @@ def run_prediction(df_test, G, geo, constraints, region_map):
                         if not (is_same_name or is_nearby): 
                             continue
                     
+                    # คำนวณคะแนน โดยเน้นชื่อเหมือนกันเป็นหลัก
                     score = dist
                     if is_same_name:
-                        score -= 1000
+                        score -= 10000  # ลดคะแนนมากๆ สำหรับชื่อเหมือนกัน
                     
-                    is_better = (score < best_score)
+                    # ชื่อเหมือนกัน = ลำดับแรกเสมอ
+                    is_better = False
                     if is_same_name and not best_is_same_name:
-                        is_better = True
+                        is_better = True  # ชื่อเหมือนกันชนะทุกกรณี
                     elif best_is_same_name and not is_same_name:
-                        is_better = False
+                        is_better = False  # ถ้า best เป็นชื่อเหมือนแล้ว ไม่เปลี่ยน
+                    elif is_same_name and best_is_same_name:
+                        is_better = (score < best_score)  # ทั้งคู่ชื่อเหมือน เลือกใกล้กว่า
+                    else:
+                        is_better = (score < best_score)  # ทั้งคู่ไม่เหมือน เลือกใกล้กว่า
                     
                     if is_better:
                         best_score = score
@@ -652,11 +716,15 @@ def run_prediction(df_test, G, geo, constraints, region_map):
             
             # ถ้า utilization ยังต่ำ (<90%) และยังมี pool เหลือ → พยายามใส่เพิ่ม
             # แต่ไม่เกิน MAX_DROPS_FLEX (12 จุด)
+            # จำกัดการสแกนไม่เกิน 20 รอบเพื่อประหยัดเวลา
+            max_scan = min(20, len(pool))
             if cube_util < MIN_CUBE_UTILIZATION and len(pool) > 0 and drops < MAX_DROPS_FLEX:
                 # สแกนหาสาขาที่ใส่เพิ่มได้โดยไม่เกินขีดจำกัด
                 # ใช้ while loop และตรวจสอบ index ที่ถูกต้อง
                 i = 0
-                while i < len(pool) and cube_util < MIN_CUBE_UTILIZATION and drops < MAX_DROPS_FLEX:
+                scan_count = 0
+                while i < len(pool) and cube_util < MIN_CUBE_UTILIZATION and drops < MAX_DROPS_FLEX and scan_count < max_scan:
+                    scan_count += 1
                     cand = pool[i]
                     
                     # เช็คว่าใส่เพิ่มได้ไหม
@@ -670,7 +738,7 @@ def run_prediction(df_test, G, geo, constraints, region_map):
                         can_add = True
                         
                         # เช็ค zone อย่างเข้มงวด
-                        if STRICT_ZONE_MODE:
+                        if STRICT_ZONE_MODE and can_add:
                             # เช็คระยะทางจากจุดล่าสุด
                             if last_lat != 0 and cand['Lat'] != 0:
                                 zone_dist = haversine(last_lat, last_lon, cand['Lat'], cand['Lon'])
@@ -723,10 +791,15 @@ def run_prediction(df_test, G, geo, constraints, region_map):
             v_type = select_truck(curr_w, curr_c, max_req, avg_distance, cube_util)
             tid = f"AI-{trip_cnt:03d}"
             
+            # หาภาคของทริปนี้ (ใช้ภาคของสาขาแรก)
+            trip_region = region_map.get(current_truck[0]['Code'], 'UNKNOWN')
+            
             for item in current_truck:
+                item_region = region_map.get(item['Code'], 'UNKNOWN')
                 final_rows.append({
                     'Booking No': tid, 'ประเภทรถ': v_type,
                     'รหัสสาขา': item['Code'], 'สาขา': item['Name'],
+                    'ภาค': item_region,  # เพิ่มคอลัมน์ภาค
                     'TOTALWGT': item['Wgt'], 'TOTALCUBE': item['Cube'],
                     'Remark': f"Drops:{drops}", 'Lat': item['Lat'], 'Lon': item['Lon']
                 })
@@ -734,23 +807,152 @@ def run_prediction(df_test, G, geo, constraints, region_map):
             
     return pd.DataFrame(final_rows)
 
-def export_styled_excel(df, filename):
+def analyze_branch_groups(df_result, G):
+    """
+    วิเคราะห์กลุ่มสาขาจากผลลัพธ์และเทียบกับประวัติ
+    ระบุว่ากลุ่มใดเคยไปด้วยกันในประวัติ (บางส่วนก็พอ)
+    """
+    branch_groups = []
+    
+    for booking_no, group in df_result.groupby('Booking No'):
+        codes = group['รหัสสาขา'].tolist()
+        names = group['สาขา'].tolist()
+        
+        # เช็คว่าสาขาในกลุ่มนี้เคยไปด้วยกันในประวัติหรือไม่
+        # ผ่อนปรน: มีประวัติบางส่วนก็ถือว่ามี
+        historical_match = False
+        if len(codes) > 1:
+            # นับจำนวนคู่ที่มีประวัติ
+            total_pairs = 0
+            paired_count = 0
+            for i in range(len(codes)):
+                for j in range(i+1, len(codes)):
+                    total_pairs += 1
+                    if G.has_edge(codes[i], codes[j]):
+                        paired_count += 1
+            
+            # ถ้ามีประวัติอย่างน้อย 30% ของคู่ทั้งหมด ถือว่ามีประวัติ
+            if paired_count > 0 and (paired_count / total_pairs) >= 0.3:
+                historical_match = True
+        
+        # ดึงข้อมูลภาค
+        regions_in_group = group['ภาค'].unique() if 'ภาค' in group.columns else ['UNKNOWN']
+        region_text = ', '.join(regions_in_group) if len(regions_in_group) <= 3 else f"{regions_in_group[0]} +{len(regions_in_group)-1}"
+        
+        # สร้างข้อมูลกลุ่ม (เน้นชื่อสาขา)
+        group_info = {
+            'Booking No': booking_no,
+            'ภาค': region_text,  # เพิ่มคอลัมน์ภาค
+            'ประเภทรถ': group['ประเภทรถ'].iloc[0],
+            'จำนวนสาขา': len(codes),
+            'รายชื่อสาขา': ', '.join(names),  # แสดงชื่อแทนรหัส
+            'รายชื่อสาขาเต็ม': '\n'.join([f"{name} ({code})" for code, name in zip(group['รหัสสาขา'], group['สาขา'])]),  # ชื่อก่อน รหัสหลัง
+            'น้ำหนักรวม': group['TOTALWGT'].sum(),
+            'คิวรวม': group['TOTALCUBE'].sum(),
+            'Drops': group['Remark'].iloc[0] if 'Remark' in group.columns else f"Drops:{len(codes)}",
+            'เคยไปด้วยกันในประวัติ': 'ใช่ ✓' if historical_match else 'ไม่ ✗'
+        }
+        
+        branch_groups.append(group_info)
+    
+    return pd.DataFrame(branch_groups)
+
+def export_styled_excel(df, filename, df_groups=None):
     try:
         import xlsxwriter
         writer = pd.ExcelWriter(filename, engine='xlsxwriter')
+        
+        # แท็บ 1: กลุ่มสาขา (Branch Groups)
+        if df_groups is not None:
+            df_groups.to_excel(writer, index=False, sheet_name='Branch Groups')
+            wb = writer.book
+            ws_groups = writer.sheets['Branch Groups']
+            
+            # Format headers
+            fmt_h = wb.add_format({
+                'bold': True, 
+                'bg_color': '#4472C4', 
+                'font_color': 'white', 
+                'border': 1,
+                'text_wrap': True,
+                'align': 'center',
+                'valign': 'vcenter'
+            })
+            
+            # Format for historical match (Yes)
+            fmt_yes = wb.add_format({
+                'bg_color': '#C6EFCE', 
+                'font_color': '#006100',
+                'border': 1,
+                'align': 'center'
+            })
+            
+            # Format for historical match (No)
+            fmt_no = wb.add_format({
+                'bg_color': '#FFC7CE', 
+                'font_color': '#9C0006',
+                'border': 1,
+                'align': 'center'
+            })
+            
+            # Format for normal cells
+            fmt_normal = wb.add_format({'border': 1, 'text_wrap': True, 'valign': 'top'})
+            fmt_number = wb.add_format({'border': 1, 'num_format': '#,##0.00'})
+            
+            # Write headers
+            for c, val in enumerate(df_groups.columns):
+                ws_groups.write(0, c, val, fmt_h)
+            
+            # Write data with conditional formatting
+            for r, row in df_groups.iterrows():
+                for c, (col_name, val) in enumerate(row.items()):
+                    if col_name == 'เคยไปด้วยกันในประวัติ':
+                        if 'ใช่' in str(val):
+                            ws_groups.write(r+1, c, val, fmt_yes)
+                        else:
+                            ws_groups.write(r+1, c, val, fmt_no)
+                    elif col_name in ['น้ำหนักรวม', 'คิวรวม']:
+                        ws_groups.write(r+1, c, val, fmt_number)
+                    else:
+                        ws_groups.write(r+1, c, val, fmt_normal)
+            
+            # Adjust column widths
+            ws_groups.set_column('A:A', 15)  # Booking No
+            ws_groups.set_column('B:B', 18)  # ประเภทรถ
+            ws_groups.set_column('C:C', 12)  # จำนวนสาขา
+            ws_groups.set_column('D:D', 30)  # รายชื่อสาขา
+            ws_groups.set_column('E:E', 40)  # รายชื่อสาขาเต็ม
+            ws_groups.set_column('F:F', 15)  # น้ำหนักรวม
+            ws_groups.set_column('G:G', 12)  # คิวรวม
+            ws_groups.set_column('H:H', 15)  # Drops
+            ws_groups.set_column('I:I', 20)  # เคยไปด้วยกันในประวัติ
+        
+        # แท็บ 2: ผลการจัดทริปแบบเต็ม (Plan)
         df.to_excel(writer, index=False, sheet_name='Plan')
-        wb = writer.book; ws = writer.sheets['Plan']
+        wb = writer.book
+        ws = writer.sheets['Plan']
+        
         fmt_h = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1})
         fmt_1 = wb.add_format({'bg_color': '#FFFFFF', 'border': 1})
         fmt_2 = wb.add_format({'bg_color': '#D9D9D9', 'border': 1})
-        for c, val in enumerate(df.columns): ws.write(0, c, val, fmt_h)
-        curr = None; toggle = False
+        
+        for c, val in enumerate(df.columns):
+            ws.write(0, c, val, fmt_h)
+        
+        curr = None
+        toggle = False
         for r, row in df.iterrows():
-            if row['Booking No'] != curr: toggle = not toggle; curr = row['Booking No']
+            if row['Booking No'] != curr:
+                toggle = not toggle
+                curr = row['Booking No']
             fmt = fmt_1 if toggle else fmt_2
-            for c, val in enumerate(row): ws.write(r+1, c, val, fmt)
+            for c, val in enumerate(row):
+                ws.write(r+1, c, val, fmt)
+        
         writer.close()
-    except:
+    except Exception as e:
+        st.error(f"❌ Error exporting Excel: {str(e)}")
+        # Fallback to simple export
         df.to_excel(filename, index=False)
 
 # ==========================================
@@ -759,17 +961,7 @@ def export_styled_excel(df, filename):
 def main():
     st.set_page_config(page_title="AI Logistics Planner", page_icon="🚚", layout="wide")
     
-    st.title("🚚 AI Logistics Planner: Sticky Routing Edition")
-    st.markdown("---")
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.info("✨ **Sticky Routing**: ชื่อเหมือนกันไปก่อน + ใกล้กันไปก่อน")
-    with col2:
-        st.info("📦 **Drop Rules**: 1-10 ✓ | 11-12 (ชื่อเหมือน/ใกล้≤5km) ✓ | 13+ ✗")
-    with col3:
-        st.info("🌏 **Zone Filter**: Geofence 100km + Province/Region Aware")
-    
+    st.title("🚚 AI Logistics Planner")
     st.markdown("---")
     
     # ตรวจสอบโฟลเดอร์ DC (ซ่อนไว้)
@@ -829,8 +1021,30 @@ def main():
                     except:
                         pass
             
+            # เช็คว่าไฟล์ประวัติมีข้อมูลจังหวัดหรือไม่
+            has_province_in_history = False
+            for df in tr_dfs:
+                if df is not None and 'Province' in df.columns:
+                    if df['Province'].notna().sum() > 0:
+                        has_province_in_history = True
+                        break
+            
+            if not has_province_in_history:
+                st.warning("⚠️ **ไม่พบข้อมูลจังหวัดในไฟล์ประวัติ!** กรุณาเพิ่มคอลัมน์ 'จังหวัด' ในไฟล์ประวัติเพื่อให้ระบบจัดกลุ่มตามภูมิภาคได้อย่างถูกต้อง")
+            
             # Train AI
             G, const, regions, learning_stats = train_ai(tr_dfs)
+            
+            # Debug: แสดงข้อมูลการเรียนรู้
+            st.info(f"📚 โหลดไฟล์ประวัติ: {len(tr_dfs)} ไฟล์")
+            st.info(f"🔗 จำนวน edges ใน Graph: {G.number_of_edges()}")
+            st.info(f"🏪 จำนวนสาขาที่รู้จัก: {G.number_of_nodes()}")
+            
+            known_regions = len([k for k, v in regions.items() if v != 'UNKNOWN'])
+            if known_regions > 0:
+                st.success(f"✅ จำนวนสาขาที่รู้จักภูมิภาค: {known_regions} สาขา")
+            else:
+                st.error(f"❌ ไม่มีสาขาที่รู้จักภูมิภาค! ระบบจะไม่สามารถแยกกลุ่มตามภาคได้")
             
             # แสดงสถิติการเรียนรู้ (ซ่อนไว้)
             with st.expander("📊 ข้อมูลที่เรียนรู้จากประวัติ", expanded=False):
@@ -874,6 +1088,13 @@ def main():
                 st.error("❌ เกิดข้อผิดพลาดในการอ่านไฟล์ Test")
                 return
             
+            # Debug: เช็คว่ามีข้อมูลจังหวัดในไฟล์ Test หรือไม่
+            if 'Province' in df_test.columns:
+                prov_count = df_test['Province'].notna().sum()
+                st.info(f"✅ พบข้อมูลจังหวัดในไฟล์ Test: {prov_count}/{len(df_test)} สาขา")
+            else:
+                st.warning("⚠️ ไม่พบคอลัมน์จังหวัดในไฟล์ Test → จะใช้ข้อมูลจากประวัติ")
+            
             # ดึงพิกัดจากชีต Location ในไฟล์ Test (ถ้ามี)
             test_file.seek(0)  # reset file pointer
             df_location = load_excel(test_file.read(), sheet_name='Location')
@@ -887,8 +1108,8 @@ def main():
             # Run prediction
             res = run_prediction(df_test, G, geo, const, regions)
             
-            # Post-processing: รวมทริปเล็กๆ
-            res = merge_small_trips(res, geo, regions)
+            # ปิด Post-processing: merge_small_trips เพื่อความเร็ว
+            # res = merge_small_trips(res, geo, regions)
             
             res = res.sort_values(by=['Booking No', 'Lat'])
             
@@ -916,17 +1137,85 @@ def main():
             with col4:
                 st.metric("📦 คิวเฉลี่ย", f"{trip_summary['TOTALCUBE'].mean():.2f} cbm/เที่ยว")
             
-            # Display dataframe
-            st.subheader("📋 ผลลัพธ์")
-            st.dataframe(res, use_container_width=True, height=400)
+            # วิเคราะห์กลุ่มสาขา
+            df_groups = analyze_branch_groups(res, G)
+            
+            # Display tabs
+            st.markdown("---")
+            tab1, tab2 = st.tabs(["📊 กลุ่มสาขา (Branch Groups)", "📋 ผลการจัดทริป (Plan)"])
+            
+            with tab1:
+                st.subheader("📊 สรุปกลุ่มสาขาที่เคยไปด้วยกันในประวัติ")
+                st.markdown("""
+                **คำอธิบาย:**
+                - แสดงเฉพาะกลุ่มสาขาที่มีประวัติไปด้วยกันในไฟล์เก่า
+                - ระบบจะจัดทริปโดยอิงจากประวัติเท่านั้น (Historical-Based Routing)
+                """)
+                
+                # กรองเฉพาะกลุ่มที่เคยไปด้วยกันในประวัติ
+                df_groups_historical = df_groups[df_groups['เคยไปด้วยกันในประวัติ'].str.contains('ใช่')].copy()
+                
+                # แสดงสถิติ
+                total_groups = len(df_groups)
+                historical_groups = len(df_groups_historical)
+                new_groups = total_groups - historical_groups
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("📦 จำนวนกลุ่มทั้งหมด", total_groups)
+                with col2:
+                    st.metric("✅ เคยไปด้วยกันในประวัติ", historical_groups)
+                with col3:
+                    st.metric("🆕 การจับคู่ใหม่", new_groups)
+                
+                # แสดงตาราง (เฉพาะกลุ่มที่เคยไปด้วยกัน)
+                if len(df_groups_historical) > 0:
+                    st.dataframe(
+                        df_groups_historical,
+                        use_container_width=True,
+                        height=400,
+                    column_config={
+                        'Booking No': st.column_config.TextColumn('Booking No', width='small'),
+                        'ภาค': st.column_config.TextColumn('ภาค', width='small'),
+                        'ประเภทรถ': st.column_config.TextColumn('ประเภทรถ', width='medium'),
+                        'จำนวนสาขา': st.column_config.NumberColumn('จำนวนสาขา', width='small'),
+                        'รายชื่อสาขา': st.column_config.TextColumn('รายชื่อสาขา', width='large'),
+                        'รายชื่อสาขาเต็ม': st.column_config.TextColumn('รายชื่อสาขา (เต็ม)', width='large'),
+                        'น้ำหนักรวม': st.column_config.NumberColumn('น้ำหนักรวม (kg)', format='%.2f'),
+                        'คิวรวม': st.column_config.NumberColumn('คิวรวม (cbm)', format='%.2f'),
+                        'Drops': st.column_config.TextColumn('Drops', width='small'),
+                        'เคยไปด้วยกันในประวัติ': st.column_config.TextColumn('เคยไปด้วยกันในประวัติ', width='medium')
+                    }
+                )
+                
+                else:
+                    st.warning("⚠️ ไม่พบกลุ่มสาขาที่เคยไปด้วยกันในประวัติ")
+                
+                # แสดงข้อมูลสาขาเดี่ยว (ถ้ามี)
+                if new_groups > 0:
+                    st.info(f"ℹ️ มี {new_groups} ทริปที่เป็นสาขาเดี่ยวหรือไม่มีประวัติ (ดูรายละเอียดในแท็บ Plan)")
+                    
+                    new_group_list = df_groups[df_groups['เคยไปด้วยกันในประวัติ'].str.contains('ไม่')]
+                    with st.expander("📋 ดูรายละเอียดสาขาเดี่ยว/ไม่มีประวัติ"):
+                        for _, row in new_group_list.iterrows():
+                            st.markdown(f"""
+                            **{row['Booking No']}** ({row['ประเภทรถ']})
+                            - สาขา: {row['รายชื่อสาขา']}
+                            - น้ำหนัก: {row['น้ำหนักรวม']:.2f} kg
+                            - คิว: {row['คิวรวม']:.2f} cbm
+                            """)
+            
+            with tab2:
+                st.subheader("📋 ผลการจัดทริปแบบเต็ม")
+                st.dataframe(res, use_container_width=True, height=400)
             
             # Export
             output_filename = 'AI_Sticky_Routing_Plan.xlsx'
-            export_styled_excel(res, output_filename)
+            export_styled_excel(res, output_filename, df_groups)
             
             with open(output_filename, 'rb') as f:
                 st.download_button(
-                    label="💾 ดาวน์โหลดไฟล์ Excel",
+                    label="💾 ดาวน์โหลดไฟล์ Excel (2 แท็บ)",
                     data=f,
                     file_name=output_filename,
                     mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
