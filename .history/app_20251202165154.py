@@ -51,16 +51,9 @@ def can_fit_truck(total_weight, total_cube, truck_type):
     return total_weight <= max_w and total_cube <= max_c
 
 def suggest_truck(total_weight, total_cube, max_allowed='6W'):
-    """
-    แนะนำรถที่เหมาะสม โดยเลือกรถที่:
-    1. ใส่ของได้พอดี (ไม่เกินขีดจำกัด)
-    2. ใช้งานได้มากที่สุด (ใกล้ 100% ที่สุด)
-    """
+    """แนะนำรถที่เหมาะสม โดยคำนึงถึงข้อจำกัดของสาขา"""
     vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
     max_size = vehicle_sizes.get(max_allowed, 3)
-    
-    best_truck = None
-    best_utilization = 0
     
     for truck in ['4W', 'JB', '6W']:
         truck_size = vehicle_sizes.get(truck, 0)
@@ -68,19 +61,7 @@ def suggest_truck(total_weight, total_cube, max_allowed='6W'):
         if truck_size > max_size:
             continue
         if can_fit_truck(total_weight, total_cube, truck):
-            # คำนวณ % การใช้รถ
-            limits = LIMITS[truck]
-            w_util = (total_weight / limits['max_w']) * 100
-            c_util = (total_cube / limits['max_c']) * 100
-            utilization = max(w_util, c_util)
-            
-            # เลือกรถที่ใช้งานได้มากที่สุด (ใกล้ 100%)
-            if utilization > best_utilization:
-                best_utilization = utilization
-                best_truck = truck
-    
-    if best_truck:
-        return best_truck
+            return truck
     
     # ถ้าไม่มีรถที่เหมาะสม ใช้รถใหญ่สุดที่อนุญาต
     return max_allowed if max_allowed in LIMITS else '6W+'
@@ -404,7 +385,6 @@ def predict_trips(test_df, model_data):
     
     # ★ ถ้าไฟล์อัปโหลดมีคอลัมน์ Trip ให้ใช้เป็นข้อมูลอ้างอิงหลัก
     # เพราะเป็นแผนงานที่ใช้จริงมาแล้ว
-    file_trip_vehicles = {}  # เก็บประเภทรถจากไฟล์แผนงาน
     if 'Trip' in test_df.columns:
         st.info(f"📋 พบคอลัมน์ทริปในไฟล์ - ใช้แผนงานจริงเป็นข้อมูลอ้างอิง")
         # สร้าง trip_pairs จากไฟล์แผนงาน
@@ -412,37 +392,11 @@ def predict_trips(test_df, model_data):
             if pd.isna(trip_id):
                 continue
             codes = group['Code'].unique().tolist()
-            
-            # ดึงประเภทรถจาก TripNo (เช่น 4W009 -> 4W, JB014 -> JB)
-            if 'TripNo' in group.columns:
-                trip_no = group['TripNo'].iloc[0]
-                if pd.notna(trip_no):
-                    trip_no_str = str(trip_no).strip()
-                    if trip_no_str.startswith('4W'):
-                        vehicle_type = '4W'
-                    elif trip_no_str.startswith('JB'):
-                        vehicle_type = 'JB'
-                    elif trip_no_str.startswith('6W'):
-                        vehicle_type = '6W'
-                    else:
-                        vehicle_type = None
-                    
-                    # เก็บประเภทรถสำหรับแต่ละคู่สาขา
-                    if vehicle_type:
-                        for i in range(len(codes)):
-                            for j in range(i+1, len(codes)):
-                                pair = tuple(sorted([codes[i], codes[j]]))
-                                file_trip_vehicles[pair] = vehicle_type
-            
             # สร้างคู่สาขาในทริปเดียวกัน
             for i in range(len(codes)):
                 for j in range(i+1, len(codes)):
                     pair = tuple(sorted([codes[i], codes[j]]))
                     trip_pairs.add(pair)  # เพิ่มเข้า trip_pairs
-    
-    # รวม file_trip_vehicles เข้ากับ trip_vehicles (ให้ไฟล์มีความสำคัญกว่า)
-    for pair, vehicle in file_trip_vehicles.items():
-        trip_vehicles[pair] = {'most_used': vehicle, 'vehicle': vehicle}
     
     # เพิ่มสาขาใหม่
     for code in test_df['Code'].unique():
