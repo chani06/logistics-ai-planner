@@ -561,7 +561,7 @@ def predict_trips(test_df, model_data):
 # ==========================================
 def main():
     st.set_page_config(
-        page_title="ระบบจัดทริปส่งของ",
+        page_title="ระบบจัดเที่ยว",
         page_icon="🚚",
         layout="wide",
         initial_sidebar_state="collapsed"
@@ -570,8 +570,7 @@ def main():
     # Header
     col1, col2 = st.columns([3, 1])
     with col1:
-        st.title("🚚 ระบบจัดทริปส่งของอัจฉริยะ")
-        st.caption("Smart Logistics Planner")
+        st.title("🚚 ระบบจัดเที่ยว")
     with col2:
         st.image("https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/1f69a.svg", width=100)
     
