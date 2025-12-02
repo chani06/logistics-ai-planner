@@ -50,15 +50,29 @@ def can_fit_truck(total_weight, total_cube, truck_type):
     max_c = limits['max_c'] * BUFFER
     return total_weight <= max_w and total_cube <= max_c
 
-def suggest_truck(total_weight, total_cube):
-    """แนะนำรถที่เหมาะสม"""
+def suggest_truck(total_weight, total_cube, max_allowed='6W'):
+    """แนะนำรถที่เหมาะสม โดยคำนึงถึงข้อจำกัดของสาขา"""
+    vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
+    max_size = vehicle_sizes.get(max_allowed, 3)
+    
     for truck in ['4W', 'JB', '6W']:
+        truck_size = vehicle_sizes.get(truck, 0)
+        # ถ้ารถใหญ่กว่าที่อนุญาต ข้ามไป
+        if truck_size > max_size:
+            continue
         if can_fit_truck(total_weight, total_cube, truck):
             return truck
-    return '6W+'  # เกินกำลัง 6W
+    
+    # ถ้าไม่มีรถที่เหมาะสม ใช้รถใหญ่สุดที่อนุญาต
+    return max_allowed if max_allowed in LIMITS else '6W+'
 
 def can_branch_use_vehicle(code, vehicle_type, branch_vehicles):
-    """เช็คว่าสาขาเคยใช้รถประเภทนี้หรือไม่ ถ้าไม่เคยใช้ก็ให้ใช้ได้"""
+    """
+    เช็คว่าสาขาสามารถใช้รถประเภทนี้ได้หรือไม่
+    - ถ้าไม่มีประวัติ = ใช้ได้ทุกประเภท
+    - ถ้ามีประวัติใช้รถใหญ่ = ใช้รถเล็กกว่าได้
+    - ถ้ามีประวัติใช้แค่รถเล็ก (เช่น 4W) = ใช้รถใหญ่ไม่ได้ (รถใหญ่เข้าไม่ได้)
+    """
     if not branch_vehicles or code not in branch_vehicles:
         return True  # ไม่มีประวัติ = ใช้ได้ทุกประเภท
     
@@ -66,19 +80,33 @@ def can_branch_use_vehicle(code, vehicle_type, branch_vehicles):
     if not vehicle_history:
         return True  # ไม่มีข้อมูลรถ = ใช้ได้ทุกประเภท
     
-    # ถ้าเคยใช้รถประเภทนี้ หรือ รถใหญ่กว่า = ใช้ได้
+    # ถ้าเคยใช้รถประเภทนี้ = ใช้ได้
     if vehicle_type in vehicle_history:
         return True
     
-    # เช็คว่ารถใหญ่กว่าหรือไม่ (6W > JB > 4W)
+    # เช็คขนาดรถ (6W > JB > 4W)
     vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
     requested_size = vehicle_sizes.get(vehicle_type, 0)
     
-    for v in vehicle_history:
-        if vehicle_sizes.get(v, 0) >= requested_size:
-            return True
+    # หารถที่ใหญ่ที่สุดที่สาขาเคยใช้
+    max_used_size = max(vehicle_sizes.get(v, 0) for v in vehicle_history)
     
-    return False
+    # ถ้าขอใช้รถเล็กกว่าหรือเท่ากับที่เคยใช้ = ใช้ได้
+    # ถ้าขอใช้รถใหญ่กว่าที่เคยใช้ = ใช้ไม่ได้ (รถใหญ่อาจเข้าไม่ได้)
+    return requested_size <= max_used_size
+
+def get_max_vehicle_for_branch(code, branch_vehicles):
+    """ดึงประเภทรถที่ใหญ่ที่สุดที่สาขาเคยใช้ (จำกัดไม่ให้ใช้รถใหญ่กว่านี้)"""
+    if not branch_vehicles or code not in branch_vehicles:
+        return '6W'  # ไม่มีประวัติ = ใช้ได้ถึง 6W
+    
+    vehicle_history = branch_vehicles[code]
+    if not vehicle_history:
+        return '6W'
+    
+    vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
+    max_vehicle = max(vehicle_history.keys(), key=lambda v: vehicle_sizes.get(v, 0))
+    return max_vehicle
 
 def get_most_used_vehicle_for_branch(code, branch_vehicles):
     """ดึงประเภทรถที่สาขาใช้บ่อยที่สุด"""
@@ -485,12 +513,22 @@ def predict_trips(test_df, model_data):
         total_w = trip_data['Weight'].sum()
         total_c = trip_data['Cube'].sum()
         
+        # หารถที่ใหญ่สุดที่ทุกสาขาในทริปสามารถใช้ได้
+        trip_codes = trip_data['Code'].unique()
+        max_vehicles = [get_max_vehicle_for_branch(c, branch_vehicles) for c in trip_codes]
+        vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
+        min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles)
+        max_allowed_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(min_max_size, '6W')
+        
         # เลือกรถ: ถ้ามีในประวัติใช้ตามประวัติ ไม่มีก็ auto-suggest
         if trip_num in trip_recommended_vehicles:
             suggested = trip_recommended_vehicles[trip_num]
+            # ตรวจสอบว่ารถที่แนะนำไม่เกินข้อจำกัด
+            if vehicle_sizes.get(suggested, 0) > min_max_size:
+                suggested = max_allowed_vehicle
             source = "📜 ประวัติ"
         else:
-            suggested = suggest_truck(total_w, total_c)
+            suggested = suggest_truck(total_w, total_c, max_allowed_vehicle)
             source = "🤖 AI"
         
         # คำนวณ % การใช้รถ
@@ -536,21 +574,25 @@ def predict_trips(test_df, model_data):
         if not vehicle_history:
             return "✅ ใช้ได้ (ไม่มีประวัติ)"
         
+        vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
+        requested_size = vehicle_sizes.get(truck_type, 0)
+        
+        # หารถใหญ่สุดที่สาขาเคยใช้
+        max_used_size = max(vehicle_sizes.get(v, 0) for v in vehicle_history)
+        max_used_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(max_used_size, '6W')
+        
         # ถ้าเคยใช้รถประเภทนี้
         if truck_type in vehicle_history:
             count = vehicle_history[truck_type]
             return f"✅ เคยใช้ ({count} ครั้ง)"
         
-        # ถ้าเคยใช้รถใหญ่กว่า
-        vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
-        requested_size = vehicle_sizes.get(truck_type, 0)
-        for v, count in vehicle_history.items():
-            if vehicle_sizes.get(v, 0) >= requested_size:
-                return f"✅ เคยใช้รถใหญ่กว่า ({v}: {count} ครั้ง)"
+        # ถ้าขอใช้รถเล็กกว่าที่เคยใช้ = ใช้ได้
+        if requested_size < max_used_size:
+            return f"✅ ใช้ได้ (เคยใช้ {max_used_vehicle})"
         
-        # ถ้าไม่เคยใช้รถขนาดนี้
+        # ถ้าขอใช้รถใหญ่กว่าที่เคยใช้ = อาจเข้าไม่ได้
         history_str = ", ".join([f"{v}:{c}" for v, c in vehicle_history.items()])
-        return f"⚠️ ปกติใช้: {history_str}"
+        return f"🚫 จำกัด {max_used_vehicle} ({history_str})"
     
     test_df['VehicleCheck'] = test_df.apply(check_vehicle_history, axis=1)
     
