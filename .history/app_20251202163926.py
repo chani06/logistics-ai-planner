@@ -415,26 +415,12 @@ def predict_trips(test_df, model_data):
         remaining = all_codes[:]
         recommended_vehicle = None  # รถที่แนะนำสำหรับทริปนี้
         
-        # ฟังก์ชันดึงจังหวัดจากหลายแหล่ง (ไฟล์อัปโหลด หรือ branch_info จาก model)
-        def get_province(branch_code):
-            # ลองดึงจากไฟล์อัปโหลดก่อน
-            if 'Province' in test_df.columns:
-                prov = test_df[test_df['Code'] == branch_code]['Province'].iloc[0] if len(test_df[test_df['Code'] == branch_code]) > 0 else None
-                if prov and prov != 'UNKNOWN' and str(prov).strip():
-                    return prov
-            # ถ้าไม่มี ลองดึงจาก branch_info (ประวัติการเทรน)
-            if branch_code in branch_info:
-                prov = branch_info[branch_code].get('province', 'UNKNOWN')
-                if prov and prov != 'UNKNOWN' and str(prov).strip():
-                    return prov
-            return 'UNKNOWN'
-        
         # ข้อมูลจังหวัดของ seed
-        seed_province = get_province(seed_code)
+        seed_province = test_df[test_df['Code'] == seed_code]['Province'].iloc[0] if 'Province' in test_df.columns else 'UNKNOWN'
         
         for code in remaining:
             pair = tuple(sorted([seed_code, code]))
-            code_province = get_province(code)
+            code_province = test_df[test_df['Code'] == code]['Province'].iloc[0] if 'Province' in test_df.columns else 'UNKNOWN'
             
             # เช็คจำนวนสาขาก่อน - ถ้าเกิน MAX แล้วไม่เพิ่ม
             if len(current_trip) >= MAX_BRANCHES_PER_TRIP:

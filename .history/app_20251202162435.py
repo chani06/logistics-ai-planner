@@ -50,29 +50,15 @@ def can_fit_truck(total_weight, total_cube, truck_type):
     max_c = limits['max_c'] * BUFFER
     return total_weight <= max_w and total_cube <= max_c
 
-def suggest_truck(total_weight, total_cube, max_allowed='6W'):
-    """แนะนำรถที่เหมาะสม โดยคำนึงถึงข้อจำกัดของสาขา"""
-    vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
-    max_size = vehicle_sizes.get(max_allowed, 3)
-    
+def suggest_truck(total_weight, total_cube):
+    """แนะนำรถที่เหมาะสม"""
     for truck in ['4W', 'JB', '6W']:
-        truck_size = vehicle_sizes.get(truck, 0)
-        # ถ้ารถใหญ่กว่าที่อนุญาต ข้ามไป
-        if truck_size > max_size:
-            continue
         if can_fit_truck(total_weight, total_cube, truck):
             return truck
-    
-    # ถ้าไม่มีรถที่เหมาะสม ใช้รถใหญ่สุดที่อนุญาต
-    return max_allowed if max_allowed in LIMITS else '6W+'
+    return '6W+'  # เกินกำลัง 6W
 
 def can_branch_use_vehicle(code, vehicle_type, branch_vehicles):
-    """
-    เช็คว่าสาขาสามารถใช้รถประเภทนี้ได้หรือไม่
-    - ถ้าไม่มีประวัติ = ใช้ได้ทุกประเภท
-    - ถ้ามีประวัติใช้รถใหญ่ = ใช้รถเล็กกว่าได้
-    - ถ้ามีประวัติใช้แค่รถเล็ก (เช่น 4W) = ใช้รถใหญ่ไม่ได้ (รถใหญ่เข้าไม่ได้)
-    """
+    """เช็คว่าสาขาเคยใช้รถประเภทนี้หรือไม่ ถ้าไม่เคยใช้ก็ให้ใช้ได้"""
     if not branch_vehicles or code not in branch_vehicles:
         return True  # ไม่มีประวัติ = ใช้ได้ทุกประเภท
     
@@ -80,33 +66,19 @@ def can_branch_use_vehicle(code, vehicle_type, branch_vehicles):
     if not vehicle_history:
         return True  # ไม่มีข้อมูลรถ = ใช้ได้ทุกประเภท
     
-    # ถ้าเคยใช้รถประเภทนี้ = ใช้ได้
+    # ถ้าเคยใช้รถประเภทนี้ หรือ รถใหญ่กว่า = ใช้ได้
     if vehicle_type in vehicle_history:
         return True
     
-    # เช็คขนาดรถ (6W > JB > 4W)
+    # เช็คว่ารถใหญ่กว่าหรือไม่ (6W > JB > 4W)
     vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
     requested_size = vehicle_sizes.get(vehicle_type, 0)
     
-    # หารถที่ใหญ่ที่สุดที่สาขาเคยใช้
-    max_used_size = max(vehicle_sizes.get(v, 0) for v in vehicle_history)
+    for v in vehicle_history:
+        if vehicle_sizes.get(v, 0) >= requested_size:
+            return True
     
-    # ถ้าขอใช้รถเล็กกว่าหรือเท่ากับที่เคยใช้ = ใช้ได้
-    # ถ้าขอใช้รถใหญ่กว่าที่เคยใช้ = ใช้ไม่ได้ (รถใหญ่อาจเข้าไม่ได้)
-    return requested_size <= max_used_size
-
-def get_max_vehicle_for_branch(code, branch_vehicles):
-    """ดึงประเภทรถที่ใหญ่ที่สุดที่สาขาเคยใช้ (จำกัดไม่ให้ใช้รถใหญ่กว่านี้)"""
-    if not branch_vehicles or code not in branch_vehicles:
-        return '6W'  # ไม่มีประวัติ = ใช้ได้ถึง 6W
-    
-    vehicle_history = branch_vehicles[code]
-    if not vehicle_history:
-        return '6W'
-    
-    vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
-    max_vehicle = max(vehicle_history.keys(), key=lambda v: vehicle_sizes.get(v, 0))
-    return max_vehicle
+    return False
 
 def get_most_used_vehicle_for_branch(code, branch_vehicles):
     """ดึงประเภทรถที่สาขาใช้บ่อยที่สุด"""
@@ -415,39 +387,20 @@ def predict_trips(test_df, model_data):
         remaining = all_codes[:]
         recommended_vehicle = None  # รถที่แนะนำสำหรับทริปนี้
         
-        # ฟังก์ชันดึงจังหวัดจากหลายแหล่ง (ไฟล์อัปโหลด หรือ branch_info จาก model)
-        def get_province(branch_code):
-            # ลองดึงจากไฟล์อัปโหลดก่อน
-            if 'Province' in test_df.columns:
-                prov = test_df[test_df['Code'] == branch_code]['Province'].iloc[0] if len(test_df[test_df['Code'] == branch_code]) > 0 else None
-                if prov and prov != 'UNKNOWN' and str(prov).strip():
-                    return prov
-            # ถ้าไม่มี ลองดึงจาก branch_info (ประวัติการเทรน)
-            if branch_code in branch_info:
-                prov = branch_info[branch_code].get('province', 'UNKNOWN')
-                if prov and prov != 'UNKNOWN' and str(prov).strip():
-                    return prov
-            return 'UNKNOWN'
-        
         # ข้อมูลจังหวัดของ seed
-        seed_province = get_province(seed_code)
+        seed_province = test_df[test_df['Code'] == seed_code]['Province'].iloc[0] if 'Province' in test_df.columns else 'UNKNOWN'
         
         for code in remaining:
             pair = tuple(sorted([seed_code, code]))
-            code_province = get_province(code)
+            code_province = test_df[test_df['Code'] == code]['Province'].iloc[0] if 'Province' in test_df.columns else 'UNKNOWN'
             
             # เช็คจำนวนสาขาก่อน - ถ้าเกิน MAX แล้วไม่เพิ่ม
             if len(current_trip) >= MAX_BRANCHES_PER_TRIP:
                 continue  # เกินจำนวนสูงสุดแล้ว
             
             # กฎสำคัญที่สุด: เช็คจังหวัดก่อนเสมอ (แม้จะอยู่ในประวัติ)
-            # ต้องเป็นจังหวัดเดียวกันหรือใกล้เคียงกันเท่านั้น
-            # ถ้าไม่มีข้อมูลจังหวัด (UNKNOWN) ก็ไม่รวม เพื่อป้องกันการจับผิดโซน
-            if seed_province == 'UNKNOWN' or code_province == 'UNKNOWN':
-                # ถ้าไม่มีข้อมูลจังหวัด ให้เช็คจากประวัติเท่านั้น ไม่ใช้ AI
-                if pair not in trip_pairs:
-                    continue
-            elif not is_nearby_province(seed_province, code_province):
+            # ยกเว้นถ้าเป็นจังหวัดเดียวกันหรือใกล้เคียงกัน
+            if not is_nearby_province(seed_province, code_province):
                 continue  # จังหวัดไม่ใกล้เคียงกัน ข้ามไปเลย
             
             # ถ้าเกิน TARGET_BRANCHES แล้ว ต้องเข้มงวดมากขึ้น - ต้องเป็นจังหวัดเดียวกัน
@@ -532,22 +485,12 @@ def predict_trips(test_df, model_data):
         total_w = trip_data['Weight'].sum()
         total_c = trip_data['Cube'].sum()
         
-        # หารถที่ใหญ่สุดที่ทุกสาขาในทริปสามารถใช้ได้
-        trip_codes = trip_data['Code'].unique()
-        max_vehicles = [get_max_vehicle_for_branch(c, branch_vehicles) for c in trip_codes]
-        vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
-        min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles)
-        max_allowed_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(min_max_size, '6W')
-        
         # เลือกรถ: ถ้ามีในประวัติใช้ตามประวัติ ไม่มีก็ auto-suggest
         if trip_num in trip_recommended_vehicles:
             suggested = trip_recommended_vehicles[trip_num]
-            # ตรวจสอบว่ารถที่แนะนำไม่เกินข้อจำกัด
-            if vehicle_sizes.get(suggested, 0) > min_max_size:
-                suggested = max_allowed_vehicle
             source = "📜 ประวัติ"
         else:
-            suggested = suggest_truck(total_w, total_c, max_allowed_vehicle)
+            suggested = suggest_truck(total_w, total_c)
             source = "🤖 AI"
         
         # คำนวณ % การใช้รถ
@@ -593,25 +536,21 @@ def predict_trips(test_df, model_data):
         if not vehicle_history:
             return "✅ ใช้ได้ (ไม่มีประวัติ)"
         
-        vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
-        requested_size = vehicle_sizes.get(truck_type, 0)
-        
-        # หารถใหญ่สุดที่สาขาเคยใช้
-        max_used_size = max(vehicle_sizes.get(v, 0) for v in vehicle_history)
-        max_used_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(max_used_size, '6W')
-        
         # ถ้าเคยใช้รถประเภทนี้
         if truck_type in vehicle_history:
             count = vehicle_history[truck_type]
             return f"✅ เคยใช้ ({count} ครั้ง)"
         
-        # ถ้าขอใช้รถเล็กกว่าที่เคยใช้ = ใช้ได้
-        if requested_size < max_used_size:
-            return f"✅ ใช้ได้ (เคยใช้ {max_used_vehicle})"
+        # ถ้าเคยใช้รถใหญ่กว่า
+        vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
+        requested_size = vehicle_sizes.get(truck_type, 0)
+        for v, count in vehicle_history.items():
+            if vehicle_sizes.get(v, 0) >= requested_size:
+                return f"✅ เคยใช้รถใหญ่กว่า ({v}: {count} ครั้ง)"
         
-        # ถ้าขอใช้รถใหญ่กว่าที่เคยใช้ = อาจเข้าไม่ได้
+        # ถ้าไม่เคยใช้รถขนาดนี้
         history_str = ", ".join([f"{v}:{c}" for v, c in vehicle_history.items()])
-        return f"🚫 จำกัด {max_used_vehicle} ({history_str})"
+        return f"⚠️ ปกติใช้: {history_str}"
     
     test_df['VehicleCheck'] = test_df.apply(check_vehicle_history, axis=1)
     
@@ -622,7 +561,7 @@ def predict_trips(test_df, model_data):
 # ==========================================
 def main():
     st.set_page_config(
-        page_title="ระบบจัดเที่ยว",
+        page_title="ระบบจัดทริปส่งของ",
         page_icon="🚚",
         layout="wide",
         initial_sidebar_state="collapsed"
@@ -631,7 +570,8 @@ def main():
     # Header
     col1, col2 = st.columns([3, 1])
     with col1:
-        st.title("🚚 ระบบจัดเที่ยว")
+        st.title("🚚 ระบบจัดทริปส่งของอัจฉริยะ")
+        st.caption("Smart Logistics Planner")
     with col2:
         st.image("https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/1f69a.svg", width=100)
     
@@ -645,51 +585,51 @@ def main():
         st.info("💡 รันคำสั่ง: `python test_model.py`")
         st.stop()
     
-    # อัปโหลดไฟล์ครั้งเดียว
-    st.markdown("### 📂 อัปโหลดไฟล์รายการออเดอร์")
-    uploaded_file = st.file_uploader(
-        "เลือกไฟล์ Excel (.xlsx)", 
-        type=['xlsx'],
-        help="อัปโหลดไฟล์ Excel ที่มีรายการสาขาและออเดอร์"
-    )
+    # แท็บหลัก
+    tab1, tab2 = st.tabs(["📦 จัดทริปส่งของ", "🗺️ จัดกลุ่มสาขาตามภาค"])
     
-    if uploaded_file:
-        with st.spinner("⏳ กำลังอ่านข้อมูล..."):
-            df = load_excel(uploaded_file.read())
-            df = process_dataframe(df)
-            
-            if df is not None and 'Code' in df.columns:
-                st.success(f"✅ อ่านข้อมูลสำเร็จ: **{len(df):,}** รายการ")
+    # ==========================================
+    # แท็บ 1: จัดทริป
+    # ==========================================
+    with tab1:
+        st.markdown("### 📂 อัปโหลดไฟล์รายการออเดอร์")
+        
+        uploaded_file = st.file_uploader(
+            "เลือกไฟล์ Excel (.xlsx)", 
+            type=['xlsx'],
+            help="อัปโหลดไฟล์ Excel ที่มีรายการสาขาและออเดอร์"
+        )
+    
+        if uploaded_file:
+            with st.spinner("⏳ กำลังอ่านข้อมูล..."):
+                df = load_excel(uploaded_file.read())
+                df = process_dataframe(df)
                 
-                # แสดงข้อมูลพื้นฐาน
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("📍 จำนวนสาขา", f"{df['Code'].nunique():,}")
-                with col2:
-                    st.metric("⚖️ น้ำหนักรวม", f"{df['Weight'].sum():,.0f} kg")
-                with col3:
-                    st.metric("📦 คิวรวม", f"{df['Cube'].sum():.1f} m³")
-                with col4:
-                    provinces = df['Province'].nunique() if 'Province' in df.columns else 0
-                    st.metric("🗺️ จังหวัด", f"{provinces}")
-                
-                # แสดงตัวอย่างข้อมูล
-                with st.expander("🔍 ดูข้อมูลตัวอย่าง"):
-                    st.dataframe(df.head(10), use_container_width=True)
-                
-                st.markdown("---")
-                
-                # แท็บหลัก
-                tab1, tab2 = st.tabs(["📦 จัดเที่ยว (ตามน้ำหนัก)", "🗺️ จัดกลุ่มตามภาค (ไม่สนน้ำหนัก)"])
+                if df is not None and 'Code' in df.columns:
+                    st.success(f"✅ อ่านข้อมูลสำเร็จ: **{len(df):,}** รายการ")
                     
-                # ==========================================
-                # แท็บ 1: จัดเที่ยว (ตามน้ำหนัก)
-                # ==========================================
-                with tab1:
+                    # แสดงข้อมูลพื้นฐาน
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("📍 จำนวนสาขา", f"{df['Code'].nunique():,}")
+                    with col2:
+                        st.metric("⚖️ น้ำหนักรวม", f"{df['Weight'].sum():,.0f} kg")
+                    with col3:
+                        st.metric("📦 คิวรวม", f"{df['Cube'].sum():.1f} m³")
+                    with col4:
+                        provinces = df['Province'].nunique() if 'Province' in df.columns else 0
+                        st.metric("🗺️ จังหวัด", f"{provinces}")
+                    
+                    # แสดงตัวอย่างข้อมูล
+                    with st.expander("🔍 ดูข้อมูลตัวอย่าง"):
+                        st.dataframe(df.head(10), use_container_width=True)
+                    
+                    st.markdown("---")
+                    
                     # ปุ่มจัดทริป
-                    if st.button("🚀 เริ่มจัดเที่ยว", type="primary", use_container_width=True):
+                    if st.button("🚀 เริ่มจัดทริป", type="primary", use_container_width=True):
                         with st.spinner("⏳ กำลังประมวลผล..."):
-                            result_df, summary = predict_trips(df.copy(), model_data)
+                            result_df, summary = predict_trips(df, model_data)
                             
                             st.balloons()
                             st.success(f"✅ **จัดทริปเสร็จสมบูรณ์!** รวม **{len(summary)}** ทริป")
@@ -773,12 +713,28 @@ def main():
                                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                     use_container_width=True
                                 )
+    
+    # ==========================================
+    # แท็บ 2: จัดกลุ่มสาขาตามภาค (ไม่สนน้ำหนัก)
+    # ==========================================
+    with tab2:
+        st.markdown("### 🗺️ จัดกลุ่มสาขาตามภาค (ไม่พิจารณาน้ำหนัก)")
+        st.caption("จัดกลุ่มสาขาตามภาค/จังหวัด โดยไม่คำนึงถึงน้ำหนักและคิว")
+        
+        uploaded_file_region = st.file_uploader(
+            "เลือกไฟล์ Excel (.xlsx)", 
+            type=['xlsx'],
+            help="อัปโหลดไฟล์ Excel ที่มีรายการสาขา",
+            key="region_uploader"
+        )
+        
+        if uploaded_file_region:
+            with st.spinner("⏳ กำลังอ่านข้อมูล..."):
+                df_region = load_excel(uploaded_file_region.read())
+                df_region = process_dataframe(df_region)
                 
-                # ==========================================
-                # แท็บ 2: จัดกลุ่มสาขาตามภาค (ไม่สนน้ำหนัก)
-                # ==========================================
-                with tab2:
-                    df_region = df.copy()
+                if df_region is not None and 'Code' in df_region.columns:
+                    st.success(f"✅ อ่านข้อมูลสำเร็จ: **{len(df_region):,}** รายการ, **{df_region['Code'].nunique()}** สาขา")
                     
                     # จัดกลุ่มตามภาค
                     branch_info = model_data.get('branch_info', {})

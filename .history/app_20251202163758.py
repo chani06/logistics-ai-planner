@@ -156,16 +156,24 @@ def is_similar_name(name1, name2):
 
 def is_nearby_province(prov1, prov2):
     """เช็คว่าจังหวัดใกล้เคียงกันหรือไม่ (จากไฟล์ประวัติ)"""
-    if pd.isna(prov1) or pd.isna(prov2):
+    # ถ้าไม่มีข้อมูลจังหวัด ไม่อนุญาตให้จับคู่
+    if pd.isna(prov1) or pd.isna(prov2) or prov1 == 'UNKNOWN' or prov2 == 'UNKNOWN':
         return False
     
-    if prov1 == prov2:
+    prov1_str = str(prov1).strip()
+    prov2_str = str(prov2).strip()
+    
+    if not prov1_str or not prov2_str:
+        return False
+    
+    if prov1_str == prov2_str:
         return True
     
-    # จัดกลุ่มจังหวัดตามภาคย่อย (จากไฟล์ประวัติ)
+    # จัดกลุ่มจังหวัดตามภาคย่อย (จากไฟล์ประวัติ) - แยกชัดเจน
     province_groups = {
         'กรุงเทพ': ['กรุงเทพมหานคร', 'กรุงเทพ'],
-        'ปริมณฑล': ['นครปฐม', 'นนทบุรี', 'ปทุมธานี', 'สมุทรปราการ', 'สมุทรสาคร', 'ฉะเชิงเทรา'],
+        'ปริมณฑล': ['นครปฐม', 'นนทบุรี', 'ปทุมธานี', 'สมุทรปราการ', 'สมุทรสาคร'],
+        'ตะวันออก-ปริมณฑล': ['ฉะเชิงเทรา'],
         'กลางตอนบน': ['ชัยนาท', 'พระนครศรีอยุธยา', 'ลพบุรี', 'สระบุรี', 'สิงห์บุรี', 'อ่างทอง', 'อยุธยา'],
         'กลางตอนล่าง': ['สมุทรสงคราม', 'สุพรรณบุรี'],
         'ภาคตะวันตก': ['กาญจนบุรี', 'ประจวบคีรีขันธ์', 'ราชบุรี', 'เพชรบุรี'],
@@ -179,13 +187,19 @@ def is_nearby_province(prov1, prov2):
         'ใต้ฝั่งอ่าวไทย': ['ชุมพร', 'นครศรีธรรมราช', 'พัทลุง', 'ยะลา', 'สงขลา', 'สุราษฎร์ธานี', 'ปัตตานี', 'นราธิวาส']
     }
     
-    # หาว่าจังหวัดทั้ง 2 อยู่กลุ่มเดียวกันหรือไม่
+    # หากลุ่มของแต่ละจังหวัด
+    group1 = None
+    group2 = None
+    
     for group, provinces in province_groups.items():
-        in_group_1 = any(p in str(prov1) for p in provinces)
-        in_group_2 = any(p in str(prov2) for p in provinces)
-        
-        if in_group_1 and in_group_2:
-            return True
+        if any(p in prov1_str for p in provinces):
+            group1 = group
+        if any(p in prov2_str for p in provinces):
+            group2 = group
+    
+    # ต้องอยู่กลุ่มเดียวกันเท่านั้น
+    if group1 and group2 and group1 == group2:
+        return True
     
     return False
 
@@ -415,39 +429,20 @@ def predict_trips(test_df, model_data):
         remaining = all_codes[:]
         recommended_vehicle = None  # รถที่แนะนำสำหรับทริปนี้
         
-        # ฟังก์ชันดึงจังหวัดจากหลายแหล่ง (ไฟล์อัปโหลด หรือ branch_info จาก model)
-        def get_province(branch_code):
-            # ลองดึงจากไฟล์อัปโหลดก่อน
-            if 'Province' in test_df.columns:
-                prov = test_df[test_df['Code'] == branch_code]['Province'].iloc[0] if len(test_df[test_df['Code'] == branch_code]) > 0 else None
-                if prov and prov != 'UNKNOWN' and str(prov).strip():
-                    return prov
-            # ถ้าไม่มี ลองดึงจาก branch_info (ประวัติการเทรน)
-            if branch_code in branch_info:
-                prov = branch_info[branch_code].get('province', 'UNKNOWN')
-                if prov and prov != 'UNKNOWN' and str(prov).strip():
-                    return prov
-            return 'UNKNOWN'
-        
         # ข้อมูลจังหวัดของ seed
-        seed_province = get_province(seed_code)
+        seed_province = test_df[test_df['Code'] == seed_code]['Province'].iloc[0] if 'Province' in test_df.columns else 'UNKNOWN'
         
         for code in remaining:
             pair = tuple(sorted([seed_code, code]))
-            code_province = get_province(code)
+            code_province = test_df[test_df['Code'] == code]['Province'].iloc[0] if 'Province' in test_df.columns else 'UNKNOWN'
             
             # เช็คจำนวนสาขาก่อน - ถ้าเกิน MAX แล้วไม่เพิ่ม
             if len(current_trip) >= MAX_BRANCHES_PER_TRIP:
                 continue  # เกินจำนวนสูงสุดแล้ว
             
             # กฎสำคัญที่สุด: เช็คจังหวัดก่อนเสมอ (แม้จะอยู่ในประวัติ)
-            # ต้องเป็นจังหวัดเดียวกันหรือใกล้เคียงกันเท่านั้น
-            # ถ้าไม่มีข้อมูลจังหวัด (UNKNOWN) ก็ไม่รวม เพื่อป้องกันการจับผิดโซน
-            if seed_province == 'UNKNOWN' or code_province == 'UNKNOWN':
-                # ถ้าไม่มีข้อมูลจังหวัด ให้เช็คจากประวัติเท่านั้น ไม่ใช้ AI
-                if pair not in trip_pairs:
-                    continue
-            elif not is_nearby_province(seed_province, code_province):
+            # ยกเว้นถ้าเป็นจังหวัดเดียวกันหรือใกล้เคียงกัน
+            if not is_nearby_province(seed_province, code_province):
                 continue  # จังหวัดไม่ใกล้เคียงกัน ข้ามไปเลย
             
             # ถ้าเกิน TARGET_BRANCHES แล้ว ต้องเข้มงวดมากขึ้น - ต้องเป็นจังหวัดเดียวกัน
