@@ -488,17 +488,16 @@ def predict_trips(test_df, model_data):
                                 recommended_vehicle = code_most_used
             else:
                 # กฎ 2: เช็คชื่อสาขาคล้ายกัน (เช่น นครราชสีมา1, นครราชสีมา2)
-                # (ใช้ names_are_similar ที่คำนวณไว้ข้างบนแล้ว)
-                if names_are_similar:
+                seed_name = test_df[test_df['Code'] == seed_code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
+                code_name = test_df[test_df['Code'] == code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
+                
+                if is_similar_name(seed_name, code_name):
                     should_pair = True
                 else:
-                    # กฎ 3: ใช้โมเดล AI ทำนาย (เฉพาะกรณีที่มีข้อมูลจังหวัด)
-                    if seed_province != 'UNKNOWN' and code_province != 'UNKNOWN':
-                        features = create_pair_features(seed_code, code, branch_info)
-                        X = pd.DataFrame([features])
-                        should_pair = model.predict(X)[0] == 1
-                    else:
-                        should_pair = False  # ไม่ใช้ AI ถ้าไม่มีข้อมูลจังหวัด
+                    # กฎ 3: ใช้โมเดล AI ทำนาย
+                    features = create_pair_features(seed_code, code, branch_info)
+                    X = pd.DataFrame([features])
+                    should_pair = model.predict(X)[0] == 1
             
             if should_pair:
                 # คำนวณน้ำหนัก/คิวหลังเพิ่มสาขานี้
