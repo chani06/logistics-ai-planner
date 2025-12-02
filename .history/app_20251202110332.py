@@ -249,8 +249,7 @@ def select_truck(w, c, min_rank):
 # 5. NEW ALGORITHM: STICKY ROUTING
 # ==========================================
 def run_prediction(df_test, G, geo, constraints, region_map):
-    print("🚀 Sticky Routing: Nearest Neighbor + Same Name Priority")
-    print(f"📦 Drop Rules: 1-10 drops ✓ | 11-12 drops (if nearby/same name) ✓ | 13+ drops ✗")
+    print("🚀 Predicting with Strict Zone Filter (Geofence + Province/Region)...")
     print(f"⚙️  STRICT_ZONE_MODE: {STRICT_ZONE_MODE}, MAX_ZONE_DISTANCE: {MAX_ZONE_DISTANCE} km")
     
     df_test['Lat'] = df_test.apply(lambda r: geo.get(r['Code'],(0,0))[0] if r['Lat']==0 else r['Lat'], axis=1)
@@ -321,11 +320,10 @@ def run_prediction(df_test, G, geo, constraints, region_map):
             drops = 1
             max_req = constraints.get(seed['Code'], 1)
             
-            # 2. Find neighbors loop (Sticky Routing)
+            # 2. Find neighbors loop
             while True:
                 best_idx = -1
-                best_score = float('inf')  # Lower is better
-                best_is_same_name = False
+                best_score = float('inf') # Lower is better
                 
                 # Scan remaining pool
                 for i, cand in enumerate(pool):
@@ -348,38 +346,27 @@ def run_prediction(df_test, G, geo, constraints, region_map):
                     if new_w > 5800: continue
                     if new_c > 22.0 * BUFFER: continue
                     
-                    # Calculate distance and similarity
+                    # Check Drop Limit
+                    is_nearby = False
                     is_same_name = is_similar_name(last_name, cand['Name'])
                     dist = haversine(last_lat, last_lon, cand['Lat'], cand['Lon']) if last_lat!=0 and cand['Lat']!=0 else 999
-                    is_nearby = (dist <= NEARBY_RADIUS)
                     
-                    # Drop Limit Logic (1-10: Free | 11-12: Conditional | 13+: Block)
+                    if dist <= NEARBY_RADIUS: is_nearby = True
+                    
+                    # Logic 10-12 Drops
                     if drops >= TARGET_DROPS:
-                        # เกิน 10 จุด -> รับเฉพาะชื่อเหมือนหรือใกล้มาก (≤5km)
-                        if drops >= MAX_DROPS_FLEX: 
-                            continue  # เกิน 12 จุด ตัดทิ้งเลย
-                        if not (is_same_name or is_nearby): 
-                            continue  # Drop 11-12: ต้องเป็นชื่อเหมือนหรือใกล้เท่านั้น
+                        # เกิน 10 จุด -> รับเฉพาะ พวกชื่อเหมือน หรือ ใกล้มากๆ เท่านั้น
+                        if drops >= MAX_DROPS_FLEX: continue # เกิน 12 ตัดทิ้งเลย
+                        if not (is_same_name or is_nearby): continue
                     
-                    # Scoring System (Lower = Better)
-                    # Priority 1: Same Name (ชื่อเหมือนกัน -1000 คะแนน)
-                    # Priority 2: Distance (ระยะทางน้อย = คะแนนน้อย)
-                    score = dist
-                    if is_same_name:
-                        score -= 1000  # Huge bonus for same name
+                    # Score (ยิ่งน้อยยิ่งดี: ใกล้ 0)
+                    # ให้ Priority: ชื่อเหมือน > ใกล้ > ไกล
+                    score = dist 
+                    if is_same_name: score -= 1000 # Bonus ชื่อเหมือน
                     
-                    # Update best candidate
-                    # เลือกชื่อเหมือนก่อนเสมอ แล้วถึงเลือกใกล้สุด
-                    is_better = (score < best_score)
-                    if is_same_name and not best_is_same_name:
-                        is_better = True  # ชื่อเหมือนชนะเสมอ
-                    elif best_is_same_name and not is_same_name:
-                        is_better = False  # ถ้ามีชื่อเหมือนแล้ว ไม่เอาชื่อต่างมาแทน
-                    
-                    if is_better:
+                    if score < best_score:
                         best_score = score
                         best_idx = i
-                        best_is_same_name = is_same_name
                         
                 if best_idx != -1:
                     # Add Item
@@ -434,64 +421,27 @@ def export_styled_excel(df, filename):
 # 6. MAIN
 # ==========================================
 def main():
-    print("🤖 AI Logistics Planner: Sticky Routing Edition")
-    print("   ✨ Sticky Routing: ชื่อเหมือนกันไปก่อน + ใกล้กันไปก่อน")
-    print("   📦 Drop Rules: 1-10 ✓ | 11-12 (ชื่อเหมือน/ใกล้ ≤5km) ✓ | 13+ ✗")
-    print("   🌏 Zone Filter: Geofence 100km + Province/Region Aware")
-    print("")
+    print("🤖 AI Logistics: Strict Zone Filter + Nearest Neighbor")
+    print("   - Geofence: Max 100 km between branches")
+    print("   - Province/Region Aware: No cross-zone mixing")
+    print("   - Max 10 Drops (Soft Limit), Up to 12 if Nearby/Same Name")
     
-    # File Upload Widgets
-    up_hist = widgets.FileUpload(description='📁 ประวัติ', accept='.xlsx,.xls', multiple=False)
-    up_geo = widgets.FileUpload(description='📍 พิกัด', accept='.xlsx,.xls', multiple=False)
-    up_train = widgets.FileUpload(description='🎓 Train (DC)', accept='.xlsx,.xls', multiple=True)
-    up_test = widgets.FileUpload(description='🎯 Test', accept='.xlsx,.xls', multiple=False)
-    
-    btn = widgets.Button(description="🚀 Start Planning", button_style='success')
+    up_hist = widgets.FileUpload(description='1. ประวัติ')
+    up_geo = widgets.FileUpload(description='2. พิกัด')
+    up_train = widgets.FileUpload(description='3. Train')
+    up_test = widgets.FileUpload(description='4. Test')
+    btn = widgets.Button(description="Start", button_style='success')
     out = widgets.Output()
     
-    # Instructions
-    info = widgets.HTML(value="""
-        <div style='background:#f0f0f0; padding:10px; border-radius:5px; margin-bottom:10px;'>
-        <b>📋 คำแนะนำ:</b><br>
-        1. <b>ประวัติ</b>: ไฟล์ประวัติการจัดส่งเดิม (มีคอลัมน์ Trip/Booking)<br>
-        2. <b>พิกัด</b>: ไฟล์พิกัดสาขา (Lat/Lon)<br>
-        3. <b>Train (DC)</b>: ไฟล์เทรนจากโฟลเดอร์ DC (เลือกได้หลายไฟล์)<br>
-        4. <b>Test</b>: ไฟล์ออเดอร์ที่ต้องการวางแผน<br>
-        </div>
-    """)
-    
-    display(info, up_hist, up_geo, up_train, up_test, btn, out)
+    display(up_hist, up_geo, up_train, up_test, btn, out)
     
     def run(b):
         with out:
             clear_output()
-            print("⏳ กำลังประมวลผล...")
-            print("")
-            
-            # 1. Train - รองรับหลายไฟล์
+            # 1. Train
             tr_dfs = []
-            
-            # เพิ่มไฟล์ประวัติ
-            if up_hist.value:
-                hist_df = process_dataframe(load_excel(list(up_hist.value.values())[0]['content']))
-                if hist_df is not None:
-                    tr_dfs.append(hist_df)
-                    print(f"✅ โหลดไฟล์ประวัติสำเร็จ ({len(hist_df)} รายการ)")
-            
-            # เพิ่มไฟล์ Train (รองรับหลายไฟล์)
-            if up_train.value:
-                for filename, file_info in up_train.value.items():
-                    train_df = process_dataframe(load_excel(file_info['content']))
-                    if train_df is not None:
-                        tr_dfs.append(train_df)
-                        print(f"✅ โหลดไฟล์ Train: {filename} ({len(train_df)} รายการ)")
-            
-            if not tr_dfs:
-                print("⚠️  ไม่มีไฟล์เทรน กรุณาอัปโหลดไฟล์ประวัติหรือ Train")
-                return
-            
-            print(f"\n📚 รวมไฟล์เทรนทั้งหมด: {len(tr_dfs)} ไฟล์")
-            print("")
+            if up_hist.value: tr_dfs.append(process_dataframe(load_excel(list(up_hist.value.values())[0]['content'])))
+            if up_train.value: tr_dfs.append(process_dataframe(load_excel(list(up_train.value.values())[0]['content'])))
             
             G, const, regions = train_ai(tr_dfs)
             geo = {}
@@ -501,37 +451,13 @@ def main():
             if up_test.value:
                 df_test = process_dataframe(load_excel(list(up_test.value.values())[0]['content']))
                 if df_test is not None:
-                    print(f"📦 ออเดอร์ทั้งหมด: {len(df_test)} รายการ")
-                    print(f"🏪 สาขาที่ต้องส่ง: {df_test['Code'].nunique()} สาขา")
-                    print("")
-                    
                     res = run_prediction(df_test, G, geo, const, regions)
                     res = res.sort_values(by=['Booking No', 'Lat'])
-                    
-                    # สรุปผล
-                    total_trips = res['Booking No'].nunique()
-                    trip_summary = res.groupby('Booking No').agg({
-                        'รหัสสาขา': 'count',
-                        'TOTALWGT': 'sum',
-                        'TOTALCUBE': 'sum'
-                    }).rename(columns={'รหัสสาขา': 'Drops'})
-                    
-                    print("")
-                    print("=" * 60)
-                    print(f"✅ วางแผนเสร็จสิ้น: {total_trips} เที่ยว")
-                    print(f"📊 จุดส่งเฉลี่ย: {trip_summary['Drops'].mean():.1f} จุด/เที่ยว")
-                    print(f"📦 น้ำหนักเฉลี่ย: {trip_summary['TOTALWGT'].mean():.0f} kg/เที่ยว")
-                    print(f"📏 คิวเฉลี่ย: {trip_summary['TOTALCUBE'].mean():.2f} cbm/เที่ยว")
-                    print("=" * 60)
-                    print("")
-                    
-                    export_styled_excel(res, 'AI_Sticky_Routing_Plan.xlsx')
-                    print("💾 บันทึกไฟล์: AI_Sticky_Routing_Plan.xlsx")
-                    files.download('AI_Sticky_Routing_Plan.xlsx')
-                else: 
-                    print("❌ เกิดข้อผิดพลาดในการอ่านไฟล์ Test")
-            else: 
-                print("⚠️  กรุณาอัปโหลดไฟล์ Test")
+                    print(f"✅ Predicted {res['Booking No'].nunique()} Trips.")
+                    export_styled_excel(res, 'AI_Smart_Drops.xlsx')
+                    files.download('AI_Smart_Drops.xlsx')
+                else: print("❌ Test Error")
+            else: print("⚠️ No Test File")
             
     btn.on_click(run)
 

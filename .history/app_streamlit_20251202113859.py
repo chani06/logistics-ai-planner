@@ -1,24 +1,13 @@
-# Install xlsxwriter
-try:
-    import xlsxwriter
-except ImportError:
-    pass
-
+import streamlit as st
 import pandas as pd
 import numpy as np
 import io
 import os
 import glob
-import ipywidgets as widgets
-from IPython.display import display, clear_output
 import networkx as nx
 from sklearn.cluster import DBSCAN
 import math
 import warnings
-try:
-    from google.colab import files
-except ImportError:
-    pass
 
 warnings.filterwarnings('ignore')
 
@@ -27,17 +16,12 @@ warnings.filterwarnings('ignore')
 # ==========================================
 LIMITS = {'4W': {'max_w': 2500, 'max_c': 5.0}, 'JB': {'max_w': 3500, 'max_c': 8.0}, '6W': {'max_w': 5800, 'max_c': 22.0}}
 BUFFER = 1.05
-MAX_KM_CLUSTER = 30.0  # รัศมีจับกลุ่มก้อนใหญ่ (ลดลงจาก 50 เป็น 30 กม.)
-
-# กฎการจัดเส้นทาง (Routing Rules)
-TARGET_DROPS = 10      # เป้าหมายคือ 10 จุด
-MAX_DROPS_FLEX = 12    # อนุโลมได้ถึง 12 จุด
-NEARBY_RADIUS = 5.0    # ระยะ "ใกล้มาก" (5 กม.) ที่อนุญาตให้เกิน 10 จุดได้
-
-# Zone Filter (Strict Province/Region)
-MAX_ZONE_DISTANCE = 100.0  # ห้ามจับกลุ่มถ้าห่างเกิน 100 กม. (Geofence)
-STRICT_ZONE_MODE = True     # เปิดใช้งานโหมดแยกโซนเข้มงวด
-
+MAX_KM_CLUSTER = 30.0
+TARGET_DROPS = 10
+MAX_DROPS_FLEX = 12
+NEARBY_RADIUS = 5.0
+MAX_ZONE_DISTANCE = 100.0
+STRICT_ZONE_MODE = True
 EXCLUDE = ['PTDC', 'Distribution Center', 'DCวังน้อย', 'DC011']
 
 # ==========================================
@@ -47,7 +31,6 @@ def normalize(val):
     return str(val).strip().upper().replace(" ", "").replace(".0", "")
 
 def haversine(lat1, lon1, lat2, lon2):
-    """คำนวณระยะทางจริงบนโลก (กิโลเมตร)"""
     R = 6371
     dLat = math.radians(lat2 - lat1)
     dLon = math.radians(lon2 - lon1)
@@ -58,41 +41,33 @@ def haversine(lat1, lon1, lat2, lon2):
     return R * c
 
 def is_similar_name(name1, name2):
-    """เช็คว่าชื่อร้านคล้ายกันไหม (ตัดตัวเลขออกแล้วเทียบ)"""
     def clean(n):
-        return ''.join([c for c in str(n) if c.isalpha()]) # เอาเฉพาะตัวหนังสือ
+        return ''.join([c for c in str(n) if c.isalpha()])
     return clean(name1) == clean(name2) and len(clean(name1)) > 3
 
 def get_province_zone(province):
-    """แปลงจังหวัดเป็นโซน/ภูมิภาค"""
     if not province or pd.isna(province):
         return 'UNKNOWN'
     
     prov = str(province).strip()
     
-    # ภาคกลาง
     central = ['กรุงเทพ', 'นนทบุรี', 'ปทุมธานี', 'สมุทรปราการ', 'สมุทรสาคร', 'นครปฐม', 
                'สมุทรสงคราม', 'ราชบุรี', 'กาญจนบุรี', 'สุพรรณบุรี', 'ชัยนาท', 'สิงห์บุรี', 
                'อ่างทอง', 'ลพบุรี', 'สระบุรี', 'อยุธยา', 'พระนครศรีอยุธยา']
     
-    # ภาคตะวันออกเฉียงเหนือ (อีสาน)
     northeast = ['นครราชสีมา', 'โคราช', 'บุรีรัมย์', 'สุรินทร์', 'ศีขรภูมิ', 'ขอนแก่น', 
                  'อุดรธานี', 'เลย', 'หนองคาย', 'มหาสารคาม', 'ร้อยเอ็ด', 'กาฬสินธุ์', 
                  'สกลนคร', 'นครพนม', 'มุกดาหาร', 'ยโสธร', 'อำนาจเจริญ', 'อุบลราชธานี', 
                  'ชัยภูมิ', 'บึงกาฬ']
     
-    # ภาคเหนือ
     north = ['เชียงใหม่', 'เชียงราย', 'ลำพูน', 'ลำปาง', 'พะเยา', 'แพร่', 'น่าน', 
              'อุตรดิตถ์', 'ตาก', 'สุโขทัย', 'พิษณุโลก', 'พิจิตร', 'เพชรบูรณ์', 'กำแพงเพชร']
     
-    # ภาคใต้
     south = ['ชุมพร', 'สุราษฎร์ธานี', 'ระนอง', 'พังงา', 'ภูเก็ต', 'กระบี่', 'นครศรีธรรมราช', 
              'ตรัง', 'พัทลุง', 'สงขลา', 'สตูล', 'ปัตตานี', 'ยะลา', 'นราธิวาส']
     
-    # ภาคตะวันออก
     east = ['ฉะเชิงเทรา', 'ชลบุรี', 'ระยอง', 'จันทบุรี', 'ตราด', 'ปราจีนบุรี', 'สระแก้ว']
     
-    # ภาคตะวันตก
     west = ['กาญจนบุรี', 'ตาก', 'ประจวบคีรีขันธ์', 'เพชรบุรี']
     
     for p in central:
@@ -111,45 +86,46 @@ def get_province_zone(province):
     return 'UNKNOWN'
 
 def is_same_zone(code1, code2, zone_map, geo):
-    """เช็คว่า 2 สาขาอยู่โซนเดียวกันไหม (ใช้ทั้งจังหวัดและระยะทาง)"""
     if not STRICT_ZONE_MODE:
         return True
     
-    # 1. เช็คระยะทาง (Geofence 100 km)
     if code1 in geo and code2 in geo:
         lat1, lon1 = geo[code1]
         lat2, lon2 = geo[code2]
         if lat1 != 0 and lat2 != 0:
             dist = haversine(lat1, lon1, lat2, lon2)
             if dist > MAX_ZONE_DISTANCE:
-                return False  # ห่างเกิน 100 กม. ห้ามอยู่ด้วยกัน
+                return False
     
-    # 2. เช็คจังหวัด/ภูมิภาค
     zone1 = zone_map.get(code1, 'UNKNOWN')
     zone2 = zone_map.get(code2, 'UNKNOWN')
     
     if zone1 != 'UNKNOWN' and zone2 != 'UNKNOWN':
         if zone1 != zone2:
-            return False  # ต่างภูมิภาค ห้ามอยู่ด้วยกัน
+            return False
     
     return True
 
 # ==========================================
 # 3. LOADERS & PROCESSORS
 # ==========================================
-def load_excel(content, file_type='Order'):
+def load_excel(content):
     try:
         xls = pd.ExcelFile(io.BytesIO(content))
         target_sheet = None
-        priority = ['2.', 'punthai', 'order', 'history']
+        
+        # ลำดับความสำคัญในการเลือกชีต: 2.Punthai > 2. > punthai > order > history
+        priority = ['2.punthai', '2.', 'punthai', 'order', 'history']
+        
         for p in priority:
             for s in xls.sheet_names:
-                if p in s.lower(): target_sheet = s; break
+                if p in s.lower(): 
+                    target_sheet = s
+                    break
             if target_sheet: break
+        
         if not target_sheet: target_sheet = xls.sheet_names[0]
         
-        print(f"📖 Reading '{target_sheet}'...")
-        # Auto Scan Header
         df_tmp = pd.read_excel(xls, sheet_name=target_sheet, nrows=20, header=None)
         h_row = -1
         for i, r in df_tmp.iterrows():
@@ -206,14 +182,28 @@ def process_geo(df):
 def train_ai(df_list):
     G = nx.Graph()
     req = {}
-    zones = {}  # จังหวัด
-    regions = {}  # ภูมิภาค
-    print(f"🧠 Training from {len(df_list)} files...")
+    zones = {}
+    regions = {}
+    trip_distances = {}  # เก็บระยะทางของแต่ละทริป
+    trip_patterns = []   # เก็บรูปแบบการจัด
     
     for df in df_list:
         if df is None or 'Trip' not in df.columns: continue
-        if isinstance(df['Trip'], pd.DataFrame): df['Trip'] = df['Trip'].iloc[:,0]
-        df = df.dropna(subset=['Trip'])
+        
+        # สร้าง copy และลบคอลัมน์ซ้ำ
+        df = df.copy()
+        df = df.loc[:, ~df.columns.duplicated()]
+        
+        # แก้ไขปัญหา Trip เป็น DataFrame
+        if isinstance(df['Trip'], pd.DataFrame):
+            df['Trip'] = df['Trip'].iloc[:,0]
+        
+        # แปลง Trip เป็น string และกรองข้อมูล
+        df['Trip'] = df['Trip'].astype(str)
+        df = df[(df['Trip'].notna()) & (df['Trip'] != 'nan') & (df['Trip'] != '') & (df['Trip'] != 'None')]
+        
+        if len(df) == 0:
+            continue
         
         # เก็บข้อมูลจังหวัดและภูมิภาค
         for idx, r in df.iterrows():
@@ -221,22 +211,74 @@ def train_ai(df_list):
                 prov = str(r['Province']).strip()
                 zones[r['Code']] = prov
                 regions[r['Code']] = get_province_zone(prov)
-            
+        
+        # วิเคราะห์รูปแบบการจัดทริป
         for t, g in df.groupby('Trip'):
             codes = g['Code'].unique()
             veh = str(g['Vehicle'].iloc[0]).upper() if 'Vehicle' in g.columns else ''
             rank = 3 if '6' in veh else (2 if 'J' in veh else 1)
-            for c in codes: req[c] = max(req.get(c,1), rank)
             
+            # บันทึก requirement ของแต่ละสาขา
+            for c in codes: 
+                req[c] = max(req.get(c,1), rank)
+            
+            # คำนวณระยะทางรวมของทริป (ถ้ามีพิกัด)
+            if 'Lat' in g.columns and 'Lon' in g.columns:
+                total_dist = 0
+                coords = g[['Lat', 'Lon']].values
+                for i in range(len(coords)-1):
+                    if coords[i][0] != 0 and coords[i+1][0] != 0:
+                        total_dist += haversine(coords[i][0], coords[i][1], 
+                                               coords[i+1][0], coords[i+1][1])
+                
+                if total_dist > 0:
+                    trip_distances[t] = total_dist
+            
+            # บันทึกรูปแบบการจัดทริป
+            trip_info = {
+                'trip': t,
+                'branches': len(codes),
+                'vehicle': veh,
+                'weight': g['Wgt'].sum() if 'Wgt' in g.columns else 0,
+                'cube': g['Cube'].sum() if 'Cube' in g.columns else 0,
+                'codes': list(codes),
+                'region': regions.get(codes[0], 'UNKNOWN') if len(codes) > 0 else 'UNKNOWN'
+            }
+            trip_patterns.append(trip_info)
+            
+            # สร้างกราฟความสัมพันธ์ (สาขาที่เคยไปด้วยกัน)
             if len(codes)>1:
                 for i in range(len(codes)):
-                    for j in range(i+1, len(codes)): G.add_edge(codes[i], codes[j])
-            elif len(codes)==1: G.add_node(codes[0])
+                    for j in range(i+1, len(codes)): 
+                        G.add_edge(codes[i], codes[j])
+            elif len(codes)==1: 
+                G.add_node(codes[0])
     
-    print(f"📍 Loaded {len(zones)} branches with province data")
-    print(f"🌏 Mapped to regions: {dict(sorted({r: list(regions.values()).count(r) for r in set(regions.values())}.items()))}")
+    # สร้างสถิติการเรียนรู้
+    learning_stats = {
+        'total_trips': len(trip_patterns),
+        'total_branches': len(req),
+        'avg_drops': sum(p['branches'] for p in trip_patterns) / len(trip_patterns) if trip_patterns else 0,
+        'avg_distance': sum(trip_distances.values()) / len(trip_distances) if trip_distances else 0,
+        'region_distribution': {},
+        'vehicle_usage': {}
+    }
     
-    return G, req, regions
+    # นับการกระจายตามภูมิภาค
+    for pattern in trip_patterns:
+        region = pattern['region']
+        learning_stats['region_distribution'][region] = learning_stats['region_distribution'].get(region, 0) + 1
+        
+        veh = pattern['vehicle']
+        if '6' in veh:
+            veh_type = '6W'
+        elif 'J' in veh or 'จัมโบ' in veh:
+            veh_type = '4W-JB'
+        else:
+            veh_type = '4W'
+        learning_stats['vehicle_usage'][veh_type] = learning_stats['vehicle_usage'].get(veh_type, 0) + 1
+    
+    return G, req, regions, learning_stats
 
 def select_truck(w, c, min_rank):
     s = min_rank
@@ -245,25 +287,14 @@ def select_truck(w, c, min_rank):
     if s <= 2 and c <= LIMITS['JB']['max_c']*BUFFER and w <= LIMITS['JB']['max_w']: return '4 ล้อ จัมโบ้ ตู้ทึบ'
     return '6 ล้อ ตู้ทึบ'
 
-# ==========================================
-# 5. NEW ALGORITHM: STICKY ROUTING
-# ==========================================
 def run_prediction(df_test, G, geo, constraints, region_map):
-    print("🚀 Sticky Routing: Nearest Neighbor + Same Name Priority")
-    print(f"📦 Drop Rules: 1-10 drops ✓ | 11-12 drops (if nearby/same name) ✓ | 13+ drops ✗")
-    print(f"⚙️  STRICT_ZONE_MODE: {STRICT_ZONE_MODE}, MAX_ZONE_DISTANCE: {MAX_ZONE_DISTANCE} km")
-    
     df_test['Lat'] = df_test.apply(lambda r: geo.get(r['Code'],(0,0))[0] if r['Lat']==0 else r['Lat'], axis=1)
     df_test['Lon'] = df_test.apply(lambda r: geo.get(r['Code'],(0,0))[1] if r['Lon']==0 else r['Lon'], axis=1)
-    
-    # เพิ่มข้อมูลภูมิภาคให้กับ df_test
     df_test['Region'] = df_test['Code'].map(lambda x: region_map.get(x, 'UNKNOWN'))
     
-    # 1. Clustering with Zone Awareness
     hist_map = {n:i for i,c in enumerate(nx.connected_components(G)) for n in c}
     df_test['Cluster'] = df_test['Code'].map(lambda x: f"H-{hist_map[x]}" if x in hist_map else "UNK")
     
-    # แยก Cluster ตามภูมิภาค (ถ้าอยู่ต่างภูมิภาคให้แยกกัน)
     if STRICT_ZONE_MODE:
         new_clusters = []
         for idx, row in df_test.iterrows():
@@ -290,10 +321,7 @@ def run_prediction(df_test, G, geo, constraints, region_map):
     final_rows = []
     trip_cnt = 1
     
-    # 2. Optimization Per Cluster
     for cid, group in df_test.groupby('Cluster'):
-        
-        # Merge Duplicates First
         pool = []
         for code, sub in group.groupby('Code'):
             pool.append({
@@ -302,13 +330,9 @@ def run_prediction(df_test, G, geo, constraints, region_map):
                 'Lat': sub.iloc[0]['Lat'], 'Lon': sub.iloc[0]['Lon']
             })
             
-        # เริ่มจัดรถแบบ "หาเพื่อนใกล้ๆ"
         while pool:
-            # 1. Start with largest remaining item
             pool.sort(key=lambda x: x['Cube'], reverse=True)
             current_truck = []
-            
-            # ดึงชิ้นแรก
             seed = pool.pop(0)
             current_truck.append(seed)
             
@@ -317,64 +341,49 @@ def run_prediction(df_test, G, geo, constraints, region_map):
             last_lat = seed['Lat']
             last_lon = seed['Lon']
             last_name = seed['Name']
-            
             drops = 1
             max_req = constraints.get(seed['Code'], 1)
             
-            # 2. Find neighbors loop (Sticky Routing)
             while True:
                 best_idx = -1
-                best_score = float('inf')  # Lower is better
+                best_score = float('inf')
                 best_is_same_name = False
                 
-                # Scan remaining pool
                 for i, cand in enumerate(pool):
-                    # Check Zone Compatibility (Geofence + Region)
                     if STRICT_ZONE_MODE:
-                        # เช็คระยะทาง (Geofence)
                         if last_lat != 0 and cand['Lat'] != 0:
                             zone_dist = haversine(last_lat, last_lon, cand['Lat'], cand['Lon'])
                             if zone_dist > MAX_ZONE_DISTANCE:
-                                continue  # ห่างเกิน 100 กม. ข้ามไป
+                                continue
                         
-                        # เช็คภูมิภาค (ถ้ามีข้อมูล)
                         if not is_same_zone(seed['Code'], cand['Code'], region_map, geo):
-                            continue  # ต่างภูมิภาค ข้ามไป
+                            continue
                     
-                    # Check Capacity
                     new_w = curr_w + cand['Wgt']
                     new_c = curr_c + cand['Cube']
                     
                     if new_w > 5800: continue
                     if new_c > 22.0 * BUFFER: continue
                     
-                    # Calculate distance and similarity
                     is_same_name = is_similar_name(last_name, cand['Name'])
                     dist = haversine(last_lat, last_lon, cand['Lat'], cand['Lon']) if last_lat!=0 and cand['Lat']!=0 else 999
                     is_nearby = (dist <= NEARBY_RADIUS)
                     
-                    # Drop Limit Logic (1-10: Free | 11-12: Conditional | 13+: Block)
                     if drops >= TARGET_DROPS:
-                        # เกิน 10 จุด -> รับเฉพาะชื่อเหมือนหรือใกล้มาก (≤5km)
                         if drops >= MAX_DROPS_FLEX: 
-                            continue  # เกิน 12 จุด ตัดทิ้งเลย
+                            continue
                         if not (is_same_name or is_nearby): 
-                            continue  # Drop 11-12: ต้องเป็นชื่อเหมือนหรือใกล้เท่านั้น
+                            continue
                     
-                    # Scoring System (Lower = Better)
-                    # Priority 1: Same Name (ชื่อเหมือนกัน -1000 คะแนน)
-                    # Priority 2: Distance (ระยะทางน้อย = คะแนนน้อย)
                     score = dist
                     if is_same_name:
-                        score -= 1000  # Huge bonus for same name
+                        score -= 1000
                     
-                    # Update best candidate
-                    # เลือกชื่อเหมือนก่อนเสมอ แล้วถึงเลือกใกล้สุด
                     is_better = (score < best_score)
                     if is_same_name and not best_is_same_name:
-                        is_better = True  # ชื่อเหมือนชนะเสมอ
+                        is_better = True
                     elif best_is_same_name and not is_same_name:
-                        is_better = False  # ถ้ามีชื่อเหมือนแล้ว ไม่เอาชื่อต่างมาแทน
+                        is_better = False
                     
                     if is_better:
                         best_score = score
@@ -382,7 +391,6 @@ def run_prediction(df_test, G, geo, constraints, region_map):
                         best_is_same_name = is_same_name
                         
                 if best_idx != -1:
-                    # Add Item
                     sel = pool.pop(best_idx)
                     current_truck.append(sel)
                     
@@ -390,17 +398,13 @@ def run_prediction(df_test, G, geo, constraints, region_map):
                     curr_c += sel['Cube']
                     drops += 1
                     
-                    # Update Ref (ย้ายจุดอ้างอิงไปที่ล่าสุด เพื่อให้วิ่งเป็นเส้น)
                     if sel['Lat']!=0: 
                         last_lat = sel['Lat']; last_lon = sel['Lon']
                     last_name = sel['Name']
-                    
-                    # Update Constraint
                     max_req = max(max_req, constraints.get(sel['Code'], 1))
                 else:
-                    break # ไม่มีอะไรใส่เพิ่มได้แล้ว
+                    break
             
-            # Finalize Truck
             v_type = select_truck(curr_w, curr_c, max_req)
             tid = f"AI-{trip_cnt:03d}"
             
@@ -416,124 +420,166 @@ def run_prediction(df_test, G, geo, constraints, region_map):
     return pd.DataFrame(final_rows)
 
 def export_styled_excel(df, filename):
-    writer = pd.ExcelWriter(filename, engine='xlsxwriter')
-    df.to_excel(writer, index=False, sheet_name='Plan')
-    wb = writer.book; ws = writer.sheets['Plan']
-    fmt_h = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1})
-    fmt_1 = wb.add_format({'bg_color': '#FFFFFF', 'border': 1})
-    fmt_2 = wb.add_format({'bg_color': '#D9D9D9', 'border': 1})
-    for c, val in enumerate(df.columns): ws.write(0, c, val, fmt_h)
-    curr = None; toggle = False
-    for r, row in df.iterrows():
-        if row['Booking No'] != curr: toggle = not toggle; curr = row['Booking No']
-        fmt = fmt_1 if toggle else fmt_2
-        for c, val in enumerate(row): ws.write(r+1, c, val, fmt)
-    writer.close()
+    try:
+        import xlsxwriter
+        writer = pd.ExcelWriter(filename, engine='xlsxwriter')
+        df.to_excel(writer, index=False, sheet_name='Plan')
+        wb = writer.book; ws = writer.sheets['Plan']
+        fmt_h = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1})
+        fmt_1 = wb.add_format({'bg_color': '#FFFFFF', 'border': 1})
+        fmt_2 = wb.add_format({'bg_color': '#D9D9D9', 'border': 1})
+        for c, val in enumerate(df.columns): ws.write(0, c, val, fmt_h)
+        curr = None; toggle = False
+        for r, row in df.iterrows():
+            if row['Booking No'] != curr: toggle = not toggle; curr = row['Booking No']
+            fmt = fmt_1 if toggle else fmt_2
+            for c, val in enumerate(row): ws.write(r+1, c, val, fmt)
+        writer.close()
+    except:
+        df.to_excel(filename, index=False)
 
 # ==========================================
-# 6. MAIN
+# 5. STREAMLIT UI
 # ==========================================
 def main():
-    print("🤖 AI Logistics Planner: Sticky Routing Edition")
-    print("   ✨ Sticky Routing: ชื่อเหมือนกันไปก่อน + ใกล้กันไปก่อน")
-    print("   📦 Drop Rules: 1-10 ✓ | 11-12 (ชื่อเหมือน/ใกล้ ≤5km) ✓ | 13+ ✗")
-    print("   🌏 Zone Filter: Geofence 100km + Province/Region Aware")
-    print("")
+    st.set_page_config(page_title="AI Logistics Planner", page_icon="🚚", layout="wide")
     
-    # File Upload Widgets
-    up_hist = widgets.FileUpload(description='📁 ประวัติ', accept='.xlsx,.xls', multiple=False)
-    up_geo = widgets.FileUpload(description='📍 พิกัด', accept='.xlsx,.xls', multiple=False)
-    up_train = widgets.FileUpload(description='🎓 Train (DC)', accept='.xlsx,.xls', multiple=True)
-    up_test = widgets.FileUpload(description='🎯 Test', accept='.xlsx,.xls', multiple=False)
+    st.title("🚚 AI Logistics Planner: Sticky Routing Edition")
+    st.markdown("---")
     
-    btn = widgets.Button(description="🚀 Start Planning", button_style='success')
-    out = widgets.Output()
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.info("✨ **Sticky Routing**: ชื่อเหมือนกันไปก่อน + ใกล้กันไปก่อน")
+    with col2:
+        st.info("📦 **Drop Rules**: 1-10 ✓ | 11-12 (ชื่อเหมือน/ใกล้≤5km) ✓ | 13+ ✗")
+    with col3:
+        st.info("🌏 **Zone Filter**: Geofence 100km + Province/Region Aware")
     
-    # Instructions
-    info = widgets.HTML(value="""
-        <div style='background:#f0f0f0; padding:10px; border-radius:5px; margin-bottom:10px;'>
-        <b>📋 คำแนะนำ:</b><br>
-        1. <b>ประวัติ</b>: ไฟล์ประวัติการจัดส่งเดิม (มีคอลัมน์ Trip/Booking)<br>
-        2. <b>พิกัด</b>: ไฟล์พิกัดสาขา (Lat/Lon)<br>
-        3. <b>Train (DC)</b>: ไฟล์เทรนจากโฟลเดอร์ DC (เลือกได้หลายไฟล์)<br>
-        4. <b>Test</b>: ไฟล์ออเดอร์ที่ต้องการวางแผน<br>
-        </div>
-    """)
+    st.markdown("---")
     
-    display(info, up_hist, up_geo, up_train, up_test, btn, out)
+    # ตรวจสอบโฟลเดอร์ DC
+    dc_folder = os.path.join(os.getcwd(), 'DC')
+    dc_files_found = []
+    if os.path.exists(dc_folder):
+        dc_files_found = glob.glob(os.path.join(dc_folder, '*.xlsx')) + glob.glob(os.path.join(dc_folder, '*.xls'))
     
-    def run(b):
-        with out:
-            clear_output()
-            print("⏳ กำลังประมวลผล...")
-            print("")
-            
-            # 1. Train - รองรับหลายไฟล์
+    # แสดงข้อมูลไฟล์ที่พบในโฟลเดอร์ DC
+    if dc_files_found:
+        with st.expander(f"📂 พบไฟล์ใน DC/ : {len(dc_files_found)} ไฟล์", expanded=True):
+            for f in dc_files_found:
+                st.text(f"✓ {os.path.basename(f)}")
+    else:
+        st.warning("⚠️ ไม่พบโฟลเดอร์ 'DC/' หรือไม่มีไฟล์ Excel ในโฟลเดอร์")
+    
+    st.markdown("---")
+    
+    # File uploader - เฉพาะ Test
+    st.subheader("🎯 อัปโหลดไฟล์ออเดอร์ (Test)")
+    test_file = st.file_uploader("เลือกไฟล์ Test ที่ต้องการวางแผน", type=['xlsx', 'xls'], key='test')
+    
+    st.markdown("---")
+    
+    if st.button("🚀 เริ่มวางแผน", type="primary", use_container_width=True):
+        if not test_file:
+            st.error("❌ กรุณาอัปโหลดไฟล์ Test")
+            return
+        
+        if not dc_files_found:
+            st.error("❌ ไม่พบไฟล์ในโฟลเดอร์ DC/ กรุณาสร้างโฟลเดอร์ DC และวางไฟล์ประวัติไว้ในนั้น")
+            return
+        
+        with st.spinner("⏳ กำลังประมวลผล..."):
+            # Load training data จากโฟลเดอร์ DC
             tr_dfs = []
             
-            # เพิ่มไฟล์ประวัติ
-            if up_hist.value:
-                hist_df = process_dataframe(load_excel(list(up_hist.value.values())[0]['content']))
-                if hist_df is not None:
-                    tr_dfs.append(hist_df)
-                    print(f"✅ โหลดไฟล์ประวัติสำเร็จ ({len(hist_df)} รายการ)")
+            st.info(f"📂 กำลังโหลดไฟล์จากโฟลเดอร์ DC/ ({len(dc_files_found)} ไฟล์)")
             
-            # เพิ่มไฟล์ Train (รองรับหลายไฟล์)
-            if up_train.value:
-                for filename, file_info in up_train.value.items():
-                    train_df = process_dataframe(load_excel(file_info['content']))
-                    if train_df is not None:
-                        tr_dfs.append(train_df)
-                        print(f"✅ โหลดไฟล์ Train: {filename} ({len(train_df)} รายการ)")
+            for dc_file_path in dc_files_found:
+                try:
+                    with open(dc_file_path, 'rb') as f:
+                        file_content = f.read()
+                        train_df = process_dataframe(load_excel(file_content))
+                        if train_df is not None:
+                            tr_dfs.append(train_df)
+                            st.success(f"✅ {os.path.basename(dc_file_path)}: {len(train_df)} รายการ")
+                        else:
+                            st.warning(f"⚠️ {os.path.basename(dc_file_path)}: ไม่สามารถประมวลผลได้")
+                except Exception as e:
+                    st.error(f"❌ {os.path.basename(dc_file_path)}: {str(e)}")
             
             if not tr_dfs:
-                print("⚠️  ไม่มีไฟล์เทรน กรุณาอัปโหลดไฟล์ประวัติหรือ Train")
+                st.error("❌ ไม่สามารถโหลดไฟล์ใดๆ จากโฟลเดอร์ DC ได้")
                 return
             
-            print(f"\n📚 รวมไฟล์เทรนทั้งหมด: {len(tr_dfs)} ไฟล์")
-            print("")
+            st.info(f"📚 รวมไฟล์เทรนทั้งหมด: {len(tr_dfs)} ไฟล์")
             
+            # Train AI
             G, const, regions = train_ai(tr_dfs)
+            st.success(f"🧠 เทรน AI เสร็จสิ้น: {len(regions)} สาขามีข้อมูลภูมิภาค")
+            
+            # Load geo - ใช้ข้อมูลจาก training files
             geo = {}
-            if up_geo.value: geo = process_geo(load_excel(list(up_geo.value.values())[0]['content']))
+            for df in tr_dfs:
+                if df is not None:
+                    temp_geo = process_geo(df)
+                    geo.update(temp_geo)
             
-            # 2. Predict
-            if up_test.value:
-                df_test = process_dataframe(load_excel(list(up_test.value.values())[0]['content']))
-                if df_test is not None:
-                    print(f"📦 ออเดอร์ทั้งหมด: {len(df_test)} รายการ")
-                    print(f"🏪 สาขาที่ต้องส่ง: {df_test['Code'].nunique()} สาขา")
-                    print("")
-                    
-                    res = run_prediction(df_test, G, geo, const, regions)
-                    res = res.sort_values(by=['Booking No', 'Lat'])
-                    
-                    # สรุปผล
-                    total_trips = res['Booking No'].nunique()
-                    trip_summary = res.groupby('Booking No').agg({
-                        'รหัสสาขา': 'count',
-                        'TOTALWGT': 'sum',
-                        'TOTALCUBE': 'sum'
-                    }).rename(columns={'รหัสสาขา': 'Drops'})
-                    
-                    print("")
-                    print("=" * 60)
-                    print(f"✅ วางแผนเสร็จสิ้น: {total_trips} เที่ยว")
-                    print(f"📊 จุดส่งเฉลี่ย: {trip_summary['Drops'].mean():.1f} จุด/เที่ยว")
-                    print(f"📦 น้ำหนักเฉลี่ย: {trip_summary['TOTALWGT'].mean():.0f} kg/เที่ยว")
-                    print(f"📏 คิวเฉลี่ย: {trip_summary['TOTALCUBE'].mean():.2f} cbm/เที่ยว")
-                    print("=" * 60)
-                    print("")
-                    
-                    export_styled_excel(res, 'AI_Sticky_Routing_Plan.xlsx')
-                    print("💾 บันทึกไฟล์: AI_Sticky_Routing_Plan.xlsx")
-                    files.download('AI_Sticky_Routing_Plan.xlsx')
-                else: 
-                    print("❌ เกิดข้อผิดพลาดในการอ่านไฟล์ Test")
-            else: 
-                print("⚠️  กรุณาอัปโหลดไฟล์ Test")
+            if geo:
+                st.success(f"📍 ดึงพิกัดจากไฟล์เทรน: {len(geo)} สาขา")
+            else:
+                st.info("📍 ไม่พบข้อมูลพิกัดในไฟล์เทรน")
             
-    btn.on_click(run)
+            # Process test data
+            df_test = process_dataframe(load_excel(test_file.read()))
+            if df_test is None:
+                st.error("❌ เกิดข้อผิดพลาดในการอ่านไฟล์ Test")
+                return
+            
+            st.info(f"📦 ออเดอร์ทั้งหมด: {len(df_test)} รายการ | สาขาที่ต้องส่ง: {df_test['Code'].nunique()} สาขา")
+            
+            # Run prediction
+            res = run_prediction(df_test, G, geo, const, regions)
+            res = res.sort_values(by=['Booking No', 'Lat'])
+            
+            # Display results
+            total_trips = res['Booking No'].nunique()
+            trip_summary = res.groupby('Booking No').agg({
+                'รหัสสาขา': 'count',
+                'TOTALWGT': 'sum',
+                'TOTALCUBE': 'sum'
+            }).rename(columns={'รหัสสาขา': 'Drops'})
+            
+            st.markdown("---")
+            st.success("### ✅ วางแผนเสร็จสิ้น!")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("🚚 จำนวนเที่ยว", f"{total_trips} เที่ยว")
+            with col2:
+                st.metric("📍 จุดส่งเฉลี่ย", f"{trip_summary['Drops'].mean():.1f} จุด/เที่ยว")
+            with col3:
+                st.metric("⚖️ น้ำหนักเฉลี่ย", f"{trip_summary['TOTALWGT'].mean():.0f} kg/เที่ยว")
+            with col4:
+                st.metric("📦 คิวเฉลี่ย", f"{trip_summary['TOTALCUBE'].mean():.2f} cbm/เที่ยว")
+            
+            # Display dataframe
+            st.subheader("📋 ผลลัพธ์")
+            st.dataframe(res, use_container_width=True, height=400)
+            
+            # Export
+            output_filename = 'AI_Sticky_Routing_Plan.xlsx'
+            export_styled_excel(res, output_filename)
+            
+            with open(output_filename, 'rb') as f:
+                st.download_button(
+                    label="💾 ดาวน์โหลดไฟล์ Excel",
+                    data=f,
+                    file_name=output_filename,
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    use_container_width=True
+                )
+            
+            st.balloons()
 
 if __name__ == "__main__":
     main()
