@@ -772,21 +772,11 @@ def main():
     
     st.markdown("---")
     
-    # ตรวจสอบโฟลเดอร์ DC
+    # ตรวจสอบโฟลเดอร์ DC (ซ่อนไว้)
     dc_folder = os.path.join(os.getcwd(), 'DC')
     dc_files_found = []
     if os.path.exists(dc_folder):
         dc_files_found = glob.glob(os.path.join(dc_folder, '*.xlsx')) + glob.glob(os.path.join(dc_folder, '*.xls'))
-    
-    # แสดงข้อมูลไฟล์ที่พบในโฟลเดอร์ DC
-    if dc_files_found:
-        with st.expander(f"📂 พบไฟล์ใน DC/ : {len(dc_files_found)} ไฟล์", expanded=True):
-            for f in dc_files_found:
-                st.text(f"✓ {os.path.basename(f)}")
-    else:
-        st.warning("⚠️ ไม่พบโฟลเดอร์ 'DC/' หรือไม่มีไฟล์ Excel ในโฟลเดอร์")
-    
-    st.markdown("---")
     
     # File uploader - เฉพาะ Test
     st.subheader("🎯 อัปโหลดไฟล์ออเดอร์ (Test)")
@@ -824,42 +814,26 @@ def main():
             st.error("❌ กรุณาอัปโหลดไฟล์ Test")
             return
         
-        if not dc_files_found:
-            st.error("❌ ไม่พบไฟล์ในโฟลเดอร์ DC/ กรุณาสร้างโฟลเดอร์ DC และวางไฟล์ประวัติไว้ในนั้น")
-            return
-        
         with st.spinner("⏳ กำลังประมวลผล..."):
-            # Load training data จากโฟลเดอร์ DC
+            # Load training data จากโฟลเดอร์ DC (เงียบๆ)
             tr_dfs = []
             
-            st.info(f"📂 กำลังโหลดไฟล์จากโฟลเดอร์ DC/ ({len(dc_files_found)} ไฟล์)")
-            
-            for dc_file_path in dc_files_found:
-                try:
-                    with open(dc_file_path, 'rb') as f:
-                        file_content = f.read()
-                        train_df = process_dataframe(load_excel(file_content))
-                        if train_df is not None:
-                            tr_dfs.append(train_df)
-                            st.success(f"✅ {os.path.basename(dc_file_path)}: {len(train_df)} รายการ")
-                        else:
-                            st.warning(f"⚠️ {os.path.basename(dc_file_path)}: ไม่สามารถประมวลผลได้")
-                except Exception as e:
-                    st.error(f"❌ {os.path.basename(dc_file_path)}: {str(e)}")
-            
-            if not tr_dfs:
-                st.error("❌ ไม่สามารถโหลดไฟล์ใดๆ จากโฟลเดอร์ DC ได้")
-                return
-            
-            st.info(f"📚 รวมไฟล์เทรนทั้งหมด: {len(tr_dfs)} ไฟล์")
+            if dc_files_found:
+                for dc_file_path in dc_files_found:
+                    try:
+                        with open(dc_file_path, 'rb') as f:
+                            file_content = f.read()
+                            train_df = process_dataframe(load_excel(file_content))
+                            if train_df is not None:
+                                tr_dfs.append(train_df)
+                    except:
+                        pass
             
             # Train AI
             G, const, regions, learning_stats = train_ai(tr_dfs)
             
-            # แสดงสถิติการเรียนรู้
-            st.success(f"🧠 เทรน AI เสร็จสิ้น!")
-            
-            with st.expander("📊 ข้อมูลที่เรียนรู้จากประวัติ", expanded=True):
+            # แสดงสถิติการเรียนรู้ (ซ่อนไว้)
+            with st.expander("📊 ข้อมูลที่เรียนรู้จากประวัติ", expanded=False):
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     st.metric("🚚 จำนวนทริปที่เรียนรู้", f"{learning_stats['total_trips']}")
@@ -893,19 +867,12 @@ def main():
                     temp_geo = process_geo(df)
                     geo.update(temp_geo)
             
-            if geo:
-                st.success(f"📍 ดึงพิกัดจากไฟล์เทรน: {len(geo)} สาขา")
-            else:
-                st.info("📍 ไม่พบข้อมูลพิกัดในไฟล์เทรน")
-            
             # Process test data
             test_content = test_file.read()
             df_test = process_dataframe(load_excel(test_content))
             if df_test is None:
                 st.error("❌ เกิดข้อผิดพลาดในการอ่านไฟล์ Test")
                 return
-            
-            st.info(f"📦 ออเดอร์ทั้งหมด: {len(df_test)} รายการ | สาขาที่ต้องส่ง: {df_test['Code'].nunique()} สาขา")
             
             # ดึงพิกัดจากชีต Location ในไฟล์ Test (ถ้ามี)
             test_file.seek(0)  # reset file pointer
@@ -916,16 +883,11 @@ def main():
                     location_geo = process_geo(df_location_processed)
                     if location_geo:
                         geo.update(location_geo)
-                        st.success(f"📍 ดึงพิกัดเพิ่มจากชีต Location: {len(location_geo)} สาขา")
-            
-            st.info(f"📍 พิกัดรวมทั้งหมด: {len(geo)} สาขา")
             
             # Run prediction
-            st.info("🚀 กำลังวางแผนเส้นทาง...")
             res = run_prediction(df_test, G, geo, const, regions)
             
             # Post-processing: รวมทริปเล็กๆ
-            st.info("🔄 กำลังรวมทริปเล็กๆ ที่สามารถรวมกันได้...")
             res = merge_small_trips(res, geo, regions)
             
             res = res.sort_values(by=['Booking No', 'Lat'])
