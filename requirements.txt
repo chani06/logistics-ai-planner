@@ -189,3 +189,4 @@ wheel==0.45.1
 xlrd==2.0.2
 yarl==1.20.1
 zstandard==0.23.0
+xlsxwriter
