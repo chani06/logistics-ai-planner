@@ -405,12 +405,8 @@ def predict_trips(test_df, model_data):
     # ★ ถ้าไฟล์อัปโหลดมีคอลัมน์ Trip ให้ใช้เป็นข้อมูลอ้างอิงหลัก
     # เพราะเป็นแผนงานที่ใช้จริงมาแล้ว
     file_trip_vehicles = {}  # เก็บประเภทรถจากไฟล์แผนงาน
-    use_file_trips = False  # ใช้ทริปจากไฟล์โดยตรง
-    
-    if 'Trip' in test_df.columns and test_df['Trip'].notna().any():
-        use_file_trips = True
-        st.info(f"📋 พบคอลัมน์ทริปในไฟล์ - ใช้การจัดทริปจากไฟล์โดยตรง")
-        
+    if 'Trip' in test_df.columns:
+        st.info(f"📋 พบคอลัมน์ทริปในไฟล์ - ใช้แผนงานจริงเป็นข้อมูลอ้างอิง")
         # สร้าง trip_pairs จากไฟล์แผนงาน
         for trip_id, group in test_df.groupby('Trip'):
             if pd.isna(trip_id):
@@ -461,72 +457,6 @@ def predict_trips(test_df, model_data):
                 'longitude': 0.0
             }
     
-    # ★★★ ถ้ามีคอลัมน์ Trip ในไฟล์ ใช้โดยตรงเลย ★★★
-    if use_file_trips:
-        # ใช้ Trip จากไฟล์โดยตรง
-        test_df_result = test_df.copy()
-        
-        # ดึงประเภทรถจาก TripNo
-        trip_truck_map_file = {}
-        if 'TripNo' in test_df.columns:
-            for trip_id in test_df['Trip'].dropna().unique():
-                trip_data = test_df[test_df['Trip'] == trip_id]
-                if 'TripNo' in trip_data.columns and len(trip_data) > 0:
-                    trip_no = trip_data['TripNo'].iloc[0]
-                    if pd.notna(trip_no):
-                        trip_no_str = str(trip_no).strip()
-                        if trip_no_str.startswith('4W'):
-                            trip_truck_map_file[trip_id] = '4W'
-                        elif trip_no_str.startswith('JB'):
-                            trip_truck_map_file[trip_id] = 'JB'
-                        elif trip_no_str.startswith('6W'):
-                            trip_truck_map_file[trip_id] = '6W'
-        
-        # สร้าง summary
-        summary_data = []
-        for trip_num in sorted(test_df_result['Trip'].dropna().unique()):
-            trip_data = test_df_result[test_df_result['Trip'] == trip_num]
-            total_w = trip_data['Weight'].sum()
-            total_c = trip_data['Cube'].sum()
-            
-            # ใช้รถจากไฟล์
-            if trip_num in trip_truck_map_file:
-                suggested = trip_truck_map_file[trip_num]
-                source = "📋 ไฟล์"
-            else:
-                suggested = suggest_truck(total_w, total_c)
-                source = "🤖 AI"
-            
-            # คำนวณ % การใช้รถ
-            if suggested in LIMITS:
-                w_util = (total_w / LIMITS[suggested]['max_w']) * 100
-                c_util = (total_c / LIMITS[suggested]['max_c']) * 100
-            else:
-                w_util = c_util = 0
-            
-            summary_data.append({
-                'Trip': int(trip_num),
-                'Branches': len(trip_data['Code'].unique()),
-                'Weight': total_w,
-                'Cube': total_c,
-                'Truck': f"{suggested} {source}",
-                'Weight_Use%': w_util,
-                'Cube_Use%': c_util
-            })
-        
-        summary_df = pd.DataFrame(summary_data)
-        
-        # เพิ่มคอลัมน์รถ
-        trip_truck_display = {}
-        for _, row in summary_df.iterrows():
-            trip_truck_display[row['Trip']] = row['Truck']
-        
-        test_df_result['Truck'] = test_df_result['Trip'].map(trip_truck_display)
-        test_df_result['VehicleCheck'] = "✅ ใช้ตามไฟล์"
-        
-        return test_df_result, summary_df
-    
-    # ถ้าไม่มีคอลัมน์ Trip ให้จัดทริปใหม่
     all_codes = test_df['Code'].unique().tolist()
     assigned_trips = {}
     trip_counter = 1
