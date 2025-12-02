@@ -463,14 +463,22 @@ def predict_trips(test_df, model_data):
     
     # ★★★ ถ้ามีคอลัมน์ Trip ในไฟล์ ใช้โดยตรงเลย ★★★
     if use_file_trips:
-        # ใช้ Trip จากไฟล์โดยตรง
-        test_df_result = test_df.copy()
+        # รวม row ที่ซ้ำกันก่อน (aggregate by Code + Trip)
+        agg_dict = {'Weight': 'sum', 'Cube': 'sum'}
+        if 'Name' in test_df.columns:
+            agg_dict['Name'] = 'first'
+        if 'TripNo' in test_df.columns:
+            agg_dict['TripNo'] = 'first'
+        if 'Province' in test_df.columns:
+            agg_dict['Province'] = 'first'
+        
+        test_df_agg = test_df.groupby(['Trip', 'Code']).agg(agg_dict).reset_index()
         
         # ดึงประเภทรถจาก TripNo
         trip_truck_map_file = {}
-        if 'TripNo' in test_df.columns:
-            for trip_id in test_df['Trip'].dropna().unique():
-                trip_data = test_df[test_df['Trip'] == trip_id]
+        if 'TripNo' in test_df_agg.columns:
+            for trip_id in test_df_agg['Trip'].dropna().unique():
+                trip_data = test_df_agg[test_df_agg['Trip'] == trip_id]
                 if 'TripNo' in trip_data.columns and len(trip_data) > 0:
                     trip_no = trip_data['TripNo'].iloc[0]
                     if pd.notna(trip_no):
@@ -566,21 +574,8 @@ def predict_trips(test_df, model_data):
         
         # ข้อมูลจังหวัดของ seed
         seed_province = get_province(seed_code)
-        seed_name = test_df[test_df['Code'] == seed_code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
         
-        # จัดเรียง remaining โดยให้ชื่อคล้ายกันมาก่อน
-        def get_priority(code):
-            code_name = test_df[test_df['Code'] == code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
-            if is_similar_name(seed_name, code_name):
-                return 0  # ลำดับแรก - ชื่อคล้ายกัน
-            pair = tuple(sorted([seed_code, code]))
-            if pair in trip_pairs:
-                return 1  # ลำดับสอง - เคยไปด้วยกัน
-            return 2  # ลำดับสุดท้าย - อื่นๆ
-        
-        remaining_sorted = sorted(remaining, key=get_priority)
-        
-        for code in remaining_sorted:
+        for code in remaining:
             pair = tuple(sorted([seed_code, code]))
             code_province = get_province(code)
             
@@ -972,27 +967,14 @@ def main():
                     else:
                         df_region['Region'] = 'ไม่ระบุ'
                     
-                    # หากลุ่มสาขา (จากประวัติ + ชื่อคล้ายกัน)
-                    def find_paired_branches(code, code_name, all_codes, df_data):
+                    # หากลุ่มสาขาที่เคยไปด้วยกัน
+                    def find_paired_branches(code, all_codes):
                         paired = set()
-                        
-                        # 1. หาจากประวัติ trip_pairs
                         for pair in trip_pairs:
                             if code in pair:
                                 other = pair[0] if pair[1] == code else pair[1]
                                 if other in all_codes:
                                     paired.add(other)
-                        
-                        # 2. หาจากชื่อสาขาคล้ายกัน (สำคัญ!)
-                        for other_code in all_codes:
-                            if other_code == code or other_code in paired:
-                                continue
-                            other_row = df_data[df_data['Code'] == other_code]
-                            if len(other_row) > 0 and 'Name' in other_row.columns:
-                                other_name = other_row['Name'].iloc[0]
-                                if is_similar_name(code_name, other_name):
-                                    paired.add(other_code)
-                        
                         return paired
                     
                     all_codes_set = set(df_region['Code'].unique())
@@ -1006,10 +988,8 @@ def main():
                         if code in assigned:
                             continue
                         
-                        code_name = row.get('Name', '')
-                        
-                        # หาสาขาที่เคยไปด้วยกัน หรือ ชื่อคล้ายกัน
-                        paired = find_paired_branches(code, code_name, all_codes_set, df_region)
+                        # หาสาขาที่เคยไปด้วยกัน
+                        paired = find_paired_branches(code, all_codes_set)
                         group_codes = {code} | (paired - assigned)
                         
                         for c in group_codes:

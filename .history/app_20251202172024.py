@@ -566,21 +566,8 @@ def predict_trips(test_df, model_data):
         
         # ข้อมูลจังหวัดของ seed
         seed_province = get_province(seed_code)
-        seed_name = test_df[test_df['Code'] == seed_code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
         
-        # จัดเรียง remaining โดยให้ชื่อคล้ายกันมาก่อน
-        def get_priority(code):
-            code_name = test_df[test_df['Code'] == code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
-            if is_similar_name(seed_name, code_name):
-                return 0  # ลำดับแรก - ชื่อคล้ายกัน
-            pair = tuple(sorted([seed_code, code]))
-            if pair in trip_pairs:
-                return 1  # ลำดับสอง - เคยไปด้วยกัน
-            return 2  # ลำดับสุดท้าย - อื่นๆ
-        
-        remaining_sorted = sorted(remaining, key=get_priority)
-        
-        for code in remaining_sorted:
+        for code in remaining:
             pair = tuple(sorted([seed_code, code]))
             code_province = get_province(code)
             
