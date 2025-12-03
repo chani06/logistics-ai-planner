@@ -1324,10 +1324,64 @@ def predict_trips(test_df, model_data):
                     
                     return False
                 
+                # ฟังก์ชันคำนวณระยะทางจากจุดสุดท้ายในทริปไปยังสาขาใหม่
+                def get_distance_from_last_branch(current_trip_codes, new_code):
+                    """คำนวณระยะทางจากสาขาสุดท้ายในทริปไปยังสาขาใหม่"""
+                    if not current_trip_codes or MASTER_DATA.empty:
+                        return 0
+                    
+                    # เอาสาขาสุดท้าย
+                    last_code = current_trip_codes[-1]
+                    
+                    # ดึง lat/lon
+                    last_branch = MASTER_DATA[MASTER_DATA['Plan Code'] == last_code]
+                    new_branch = MASTER_DATA[MASTER_DATA['Plan Code'] == new_code]
+                    
+                    if len(last_branch) > 0 and len(new_branch) > 0:
+                        last_lat = last_branch.iloc[0].get('ละติจูด')
+                        last_lon = last_branch.iloc[0].get('ลองติจูด')
+                        new_lat = new_branch.iloc[0].get('ละติจูด')
+                        new_lon = new_branch.iloc[0].get('ลองติจูด')
+                        
+                        if all(pd.notna([last_lat, last_lon, new_lat, new_lon])):
+                            return haversine_distance(last_lat, last_lon, new_lat, new_lon)
+                    
+                    return 0
+                
                 # เช็คว่าเกินขีดจำกัดหรือไม่
                 can_fit = trip_weight <= max_w and trip_cube <= max_c
                 
-                # ถ้าเกิน → เช็คว่าเกินนิดหน่อยและอยู่ใกล้กันไหม
+                # 🚨 กรณีพิเศษ: ถ้ารถไม่เต็ม ให้พิจารณารับสาขาใกล้เคียงเพิ่ม
+                if not can_fit:
+                    # คำนวณ % การใช้รถปัจจุบัน (ก่อนเพิ่มสาขาใหม่)
+                    current_weight = test_df[test_df['Code'].isin(current_trip)]['Weight'].sum()
+                    current_cube = test_df[test_df['Code'].isin(current_trip)]['Cube'].sum()
+                    
+                    # คำนวณ utilization ของรถที่จะใช้
+                    if recommended_vehicle and recommended_vehicle in LIMITS:
+                        vehicle_for_calc = recommended_vehicle
+                    else:
+                        vehicle_for_calc = vehicle_type
+                    
+                    w_util = (current_weight / LIMITS[vehicle_for_calc]['max_w']) * 100
+                    c_util = (current_cube / LIMITS[vehicle_for_calc]['max_c']) * 100
+                    current_util = max(w_util, c_util)
+                    
+                    # ถ้ารถไม่เต็ม (< 70%) ให้พิจารณาเพิ่มสาขาใกล้เคียง
+                    if current_util < 70:
+                        # เช็คระยะทางจากสาขาสุดท้าย
+                        distance_from_last = get_distance_from_last_branch(current_trip, code)
+                        
+                        # ถ้าระยะทาง ≤ 30km จากจุดสุดท้าย → รวมได้
+                        if distance_from_last > 0 and distance_from_last <= 30:
+                            # เช็คว่าเกินมากเกินไปไหม (ไม่เกิน 15%)
+                            weight_exceed = (trip_weight - max_w) / max_w if max_w > 0 else 0
+                            cube_exceed = (trip_cube - max_c) / max_c if max_c > 0 else 0
+                            
+                            if weight_exceed <= 0.15 and cube_exceed <= 0.15:
+                                can_fit = True  # รับสาขานี้เพื่อประหยัดรถ
+                
+                # ถ้ายังเกิน → เช็คว่าเกินนิดหน่อยและอยู่ใกล้กันไหม
                 if not can_fit:
                     # เกินเล็กน้อย = เกินไม่เกิน 10%
                     weight_exceed = (trip_weight - max_w) / max_w if max_w > 0 else 0
