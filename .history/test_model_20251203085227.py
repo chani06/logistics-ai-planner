@@ -59,8 +59,8 @@ def load_historical_data(folder='Dc', separate_test=True):
             if not target_sheet:
                 target_sheet = xls.sheet_names[0]
             
-            # หา header row ที่ถูกต้อง - อ่านแค่ 20 แถวแรก
-            df_temp = pd.read_excel(file_path, sheet_name=target_sheet, header=None, nrows=20)
+            # หา header row ที่ถูกต้อง
+            df_temp = pd.read_excel(file_path, sheet_name=target_sheet, header=None)
             header_row = -1
             
             for i in range(min(10, len(df_temp))):
@@ -78,8 +78,7 @@ def load_historical_data(folder='Dc', separate_test=True):
             if header_row == -1:
                 header_row = 0
             
-            # โหลดไฟล์จริง
-            print(f"   กำลังโหลด {os.path.basename(file_path)}...")
+            # ใช้ openpyxl engine และปิด read_only mode เพื่อไม่ให้ค้าง
             df = pd.read_excel(file_path, sheet_name=target_sheet, header=header_row, engine='openpyxl')
             
             # ลบคอลัมน์ซ้ำ
@@ -298,11 +297,7 @@ def create_training_data(df):
         lat = group['Latitude'].iloc[0] if 'Latitude' in group.columns else 0.0
         lon = group['Longitude'].iloc[0] if 'Longitude' in group.columns else 0.0
         
-        # ดึงชื่อสาขา
-        name = group['Name'].iloc[0] if 'Name' in group.columns and group['Name'].notna().any() else ''
-        
         branch_info[code] = {
-            'name': name,
             'avg_weight': group['Weight'].mean(),
             'avg_cube': group['Cube'].mean(),
             'total_trips': len(group),
@@ -336,10 +331,7 @@ def create_training_data(df):
     # จัดกลุ่มตาม Trip
     cross_province_pairs = 0
     if 'Trip' in df.columns:
-        print(f"  กำลังประมวลผล {df['Trip'].nunique()} ทริป...")
-        for idx, (group_key, group) in enumerate(df.groupby('Trip'), 1):
-            if idx % 500 == 0:
-                print(f"    ประมวลผลแล้ว {idx} ทริป...")
+        for group_key, group in df.groupby('Trip'):
             codes = sorted(group['Code'].unique())
             
             # ดึงประเภทรถของกลุ่มนี้
@@ -469,16 +461,14 @@ def create_pair_features(code1, code2, branch_info):
     # จังหวัดเดียวกันหรือไม่
     same_province = 1 if info1['province'] == info2['province'] else 0
     
-    # ความคล้ายของชื่อสาขา (แบบเร็ว - เช็คคำร่วมกัน)
-    name1 = info1.get('name', '').upper().replace(' ', '')
-    name2 = info2.get('name', '').upper().replace(' ', '')
+    # ความคล้ายของชื่อสาขา (Jaccard similarity)
+    from difflib import SequenceMatcher
+    name1 = info1.get('name', '').upper()
+    name2 = info2.get('name', '').upper()
     name_similarity = 0.0
     if name1 and name2:
-        # เช็คว่าชื่อสั้นๆ อยู่ในชื่อยาวหรือไม่
-        if len(name1) <= len(name2):
-            name_similarity = 1.0 if name1 in name2 else (len(set(name1) & set(name2)) / len(set(name1 + name2)))
-        else:
-            name_similarity = 1.0 if name2 in name1 else (len(set(name1) & set(name2)) / len(set(name1 + name2)))
+        # ใช้ SequenceMatcher สำหรับความคล้ายของ string
+        name_similarity = SequenceMatcher(None, name1, name2).ratio()
     
     # คำนวณระยะทางจากพิกัด (ถ้ามี)
     import math

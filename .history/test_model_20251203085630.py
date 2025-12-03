@@ -336,10 +336,7 @@ def create_training_data(df):
     # จัดกลุ่มตาม Trip
     cross_province_pairs = 0
     if 'Trip' in df.columns:
-        print(f"  กำลังประมวลผล {df['Trip'].nunique()} ทริป...")
-        for idx, (group_key, group) in enumerate(df.groupby('Trip'), 1):
-            if idx % 500 == 0:
-                print(f"    ประมวลผลแล้ว {idx} ทริป...")
+        for group_key, group in df.groupby('Trip'):
             codes = sorted(group['Code'].unique())
             
             # ดึงประเภทรถของกลุ่มนี้
@@ -469,16 +466,14 @@ def create_pair_features(code1, code2, branch_info):
     # จังหวัดเดียวกันหรือไม่
     same_province = 1 if info1['province'] == info2['province'] else 0
     
-    # ความคล้ายของชื่อสาขา (แบบเร็ว - เช็คคำร่วมกัน)
-    name1 = info1.get('name', '').upper().replace(' ', '')
-    name2 = info2.get('name', '').upper().replace(' ', '')
+    # ความคล้ายของชื่อสาขา (Jaccard similarity)
+    from difflib import SequenceMatcher
+    name1 = info1.get('name', '').upper()
+    name2 = info2.get('name', '').upper()
     name_similarity = 0.0
     if name1 and name2:
-        # เช็คว่าชื่อสั้นๆ อยู่ในชื่อยาวหรือไม่
-        if len(name1) <= len(name2):
-            name_similarity = 1.0 if name1 in name2 else (len(set(name1) & set(name2)) / len(set(name1 + name2)))
-        else:
-            name_similarity = 1.0 if name2 in name1 else (len(set(name1) & set(name2)) / len(set(name1 + name2)))
+        # ใช้ SequenceMatcher สำหรับความคล้ายของ string
+        name_similarity = SequenceMatcher(None, name1, name2).ratio()
     
     # คำนวณระยะทางจากพิกัด (ถ้ามี)
     import math

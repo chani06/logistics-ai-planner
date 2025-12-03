@@ -336,10 +336,7 @@ def create_training_data(df):
     # จัดกลุ่มตาม Trip
     cross_province_pairs = 0
     if 'Trip' in df.columns:
-        print(f"  กำลังประมวลผล {df['Trip'].nunique()} ทริป...")
-        for idx, (group_key, group) in enumerate(df.groupby('Trip'), 1):
-            if idx % 500 == 0:
-                print(f"    ประมวลผลแล้ว {idx} ทริป...")
+        for group_key, group in df.groupby('Trip'):
             codes = sorted(group['Code'].unique())
             
             # ดึงประเภทรถของกลุ่มนี้
