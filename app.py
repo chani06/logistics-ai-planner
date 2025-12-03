@@ -1491,33 +1491,32 @@ def predict_trips(test_df, model_data):
         total_w = trip_data['Weight'].sum()
         total_c = trip_data['Cube'].sum()
         
-        # หารถที่ใหญ่สุดที่ทุกสาขาในทริปสามารถใช้ได้
+        # หารถที่ใหญ่สุดที่ทุกสาขาในทริปสามารถใช้ได้ (ใช้ get_max_vehicle_for_branch โดยตรง)
         trip_codes = trip_data['Code'].unique()
-        # ใช้ข้อมูลจาก Punthai (ถ้ามี) หรือ branch_vehicles (ถ้าไม่มี)
         max_vehicles = []
         for c in trip_codes:
-            # ลองใช้ Punthai ก่อน
-            punthai_max = get_max_vehicle_for_branch(c)
-            if punthai_max != '6W':  # มีข้อจำกัดจาก Punthai
-                max_vehicles.append(punthai_max)
-            else:  # ไม่มีใน Punthai ใช้ branch_vehicles
-                max_vehicles.append(get_max_vehicle_for_branch_old(c, branch_vehicles))
+            # ใช้ฟังก์ชันหลักที่รวม Booking + Punthai แล้ว
+            branch_max = get_max_vehicle_for_branch(c)
+            max_vehicles.append(branch_max)
         
         vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
         min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles)
         max_allowed_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(min_max_size, '6W')
         
-        # เลือกรถ: ลำดับความสำคัญ 1) ประวัติ (Booking/Punthai) 2) ข้อจำกัดสาขา 3) AI
+        # เลือกรถ: เช็คข้อจำกัดสาขาก่อน แล้วค่อยใช้ประวัติ/AI
         if trip_num in trip_recommended_vehicles:
-            # มีประวัติ - ใช้ตามประวัติเป็นหลัก
-            suggested = trip_recommended_vehicles[trip_num]
-            source = "📜 ประวัติ"
+            # มีประวัติ
+            suggested_from_history = trip_recommended_vehicles[trip_num]
             
             # เช็คว่ารถจากประวัติขัดกับข้อจำกัดสาขาหรือไม่
-            if vehicle_sizes.get(suggested, 0) > min_max_size:
-                # ถ้าขัด - ลดลงตามข้อจำกัด
+            if vehicle_sizes.get(suggested_from_history, 0) > min_max_size:
+                # ถ้าขัด - ต้องลดลงตามข้อจำกัดสาขา
                 suggested = max_allowed_vehicle
                 source = f"📜 ประวัติ → {max_allowed_vehicle} (จำกัดสาขา)"
+            else:
+                # ไม่ขัด - ใช้ตามประวัติ
+                suggested = suggested_from_history
+                source = "📜 ประวัติ"
         else:
             # ไม่มีประวัติ - ใช้ AI พร้อมเคารพข้อจำกัดสาขา
             suggested = suggest_truck(total_w, total_c, max_allowed_vehicle, trip_codes)
