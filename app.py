@@ -517,8 +517,37 @@ def process_dataframe(df):
                 if code and province:
                     province_map[code] = province
             
+            # ฟังก์ชันค้นหาจังหวัดจากชื่อสาขา
+            def find_province_by_name(code, name):
+                # ลองหาจาก code ก่อน
+                if code in province_map:
+                    return province_map[code]
+                
+                # ถ้าไม่เจอ ลองค้นหาจากชื่อสาขา
+                if not name or pd.isna(name):
+                    return None
+                
+                # แยกคำสำคัญจากชื่อ (เอาคำแรกที่ไม่ใช่ prefix)
+                keywords = str(name).replace('MAX MART-', '').replace('PUNTHAI-', '').replace('LUBE', '').strip()
+                if not keywords:
+                    return None
+                
+                # ค้นหาในชื่อสาขาของ Master
+                for _, master_row in MASTER_DATA.iterrows():
+                    master_name = str(master_row.get('สาขา', ''))
+                    # ถ้าชื่อคล้ายกัน (มีคำสำคัญเหมือนกัน)
+                    if keywords[:10] in master_name or master_name[:10] in keywords:
+                        province = master_row.get('จังหวัด', '')
+                        if province:
+                            return province
+                
+                return None
+            
             # ใส่จังหวัดให้แต่ละสาขา
-            df['Province'] = df['Code'].map(province_map)
+            if 'Name' in df.columns:
+                df['Province'] = df.apply(lambda row: find_province_by_name(row['Code'], row.get('Name', '')), axis=1)
+            else:
+                df['Province'] = df['Code'].map(province_map)
     
     return df.reset_index(drop=True)
 
