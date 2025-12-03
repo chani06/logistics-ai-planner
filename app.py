@@ -2236,8 +2236,91 @@ def main():
                             # ดาวน์โหลด
                             output = io.BytesIO()
                             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                                result_df.to_excel(writer, sheet_name='รายละเอียดทริป', index=False)
+                                # เพิ่มคอลัมน์ Trip no และประเภทรถ
+                                export_df = result_df.copy()
+                                
+                                # สร้างคอลัมน์ Trip no (เช่น 4W001, JB002, 6W003)
+                                trip_no_map = {}
+                                vehicle_counts = {'4W': 0, 'JB': 0, '6W': 0}
+                                
+                                for trip_num in sorted(export_df['Trip'].unique()):
+                                    # ดึงประเภทรถจาก summary
+                                    trip_summary = summary[summary['Trip'] == trip_num]
+                                    if len(trip_summary) > 0:
+                                        truck_info = trip_summary.iloc[0]['Truck']
+                                        # แยกประเภทรถ (4W, JB, 6W)
+                                        vehicle_type = truck_info.split()[0] if truck_info else '6W'
+                                        
+                                        # นับรถแต่ละประเภท
+                                        vehicle_counts[vehicle_type] += 1
+                                        trip_no = f"{vehicle_type}{vehicle_counts[vehicle_type]:03d}"
+                                        trip_no_map[trip_num] = {'trip_no': trip_no, 'vehicle': vehicle_type}
+                                
+                                # เพิ่มคอลัมน์ใหม่
+                                export_df['Trip_No'] = export_df['Trip'].map(lambda x: trip_no_map.get(x, {}).get('trip_no', ''))
+                                export_df['Vehicle_Type'] = export_df['Trip'].map(lambda x: trip_no_map.get(x, {}).get('vehicle', ''))
+                                
+                                # เรียงคอลัมน์ใหม่
+                                cols = ['Trip_No', 'Vehicle_Type', 'Trip'] + [c for c in export_df.columns if c not in ['Trip_No', 'Vehicle_Type', 'Trip']]
+                                export_df = export_df[cols]
+                                
+                                # เขียน Excel
+                                export_df.to_excel(writer, sheet_name='รายละเอียดทริป', index=False)
                                 summary.to_excel(writer, sheet_name='สรุปทริป', index=False)
+                                
+                                # จัดรูปแบบ - แยกสีตามทริป
+                                workbook = writer.book
+                                worksheet = writer.sheets['รายละเอียดทริป']
+                                
+                                # สีสำหรับแต่ละทริป (สลับสี)
+                                colors = [
+                                    '#E3F2FD', '#FFEBEE', '#F3E5F5', '#E8F5E9', '#FFF3E0',
+                                    '#E0F2F1', '#FFF9C4', '#F1F8E9', '#FCE4EC', '#E1F5FE'
+                                ]
+                                
+                                # Format header
+                                header_format = workbook.add_format({
+                                    'bold': True,
+                                    'bg_color': '#1976D2',
+                                    'font_color': 'white',
+                                    'border': 1,
+                                    'align': 'center',
+                                    'valign': 'vcenter'
+                                })
+                                
+                                # เขียน header
+                                for col_num, value in enumerate(export_df.columns.values):
+                                    worksheet.write(0, col_num, value, header_format)
+                                
+                                # จัดรูปแบบแต่ละแถว (แยกสีตามทริป)
+                                current_trip = None
+                                color_index = 0
+                                
+                                for row_num in range(len(export_df)):
+                                    trip = export_df.iloc[row_num]['Trip']
+                                    
+                                    # เปลี่ยนสีเมื่อเปลี่ยนทริป
+                                    if trip != current_trip:
+                                        current_trip = trip
+                                        color_index = (color_index + 1) % len(colors)
+                                    
+                                    # สร้าง format สำหรับแถวนี้
+                                    cell_format = workbook.add_format({
+                                        'bg_color': colors[color_index],
+                                        'border': 1
+                                    })
+                                    
+                                    # ใส่สีทุก cell ในแถว
+                                    for col_num in range(len(export_df.columns)):
+                                        value = export_df.iloc[row_num, col_num]
+                                        worksheet.write(row_num + 1, col_num, value, cell_format)
+                                
+                                # ปรับความกว้างคอลัมน์
+                                worksheet.set_column('A:A', 12)  # Trip_No
+                                worksheet.set_column('B:B', 15)  # Vehicle_Type
+                                worksheet.set_column('C:C', 8)   # Trip
+                                worksheet.set_column('D:D', 12)  # Code
+                                worksheet.set_column('E:E', 35)  # Name
                             
                             col1, col2, col3 = st.columns([1, 2, 1])
                             with col2:
