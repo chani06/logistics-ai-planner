@@ -1202,47 +1202,41 @@ def main():
                     
                     all_codes_set = set(df_region['Code'].unique())
                     
-                    # สร้างกลุ่มสาขาแบบ Union-Find (ตามลำดับ: Booking → ตำบล → อำเภอ → จังหวัด)
-                    # Step 1: สร้างกลุ่มจาก Booking ก่อน
-                    booking_groups = {}
-                    for _, row in df_region.iterrows():
-                        code = row['Code']
-                        code_province = row.get('Province', 'UNKNOWN')
+                    # สร้างกลุ่มสาขาแบบ Union-Find (ตามลำดับ: ตำบล → อำเภอ → จังหวัด)
+                    # Step 1: เริ่มจากแต่ละสาขาเป็นกลุ่มๆ พร้อมข้อมูล Master
+                    initial_groups = {}
+                    for code in all_codes_set:
+                        # ดึงข้อมูลจาก Master
+                        location = {}
+                        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                            master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                            if len(master_row) > 0:
+                                master_row = master_row.iloc[0]
+                                location = {
+                                    'subdistrict': master_row.get('ตำบล', ''),
+                                    'district': master_row.get('อำเภอ', ''),
+                                    'province': master_row.get('จังหวัด', 'UNKNOWN'),
+                                    'lat': master_row.get('ละติจูด', 0),
+                                    'lon': master_row.get('ลองติจูด', 0)
+                                }
                         
-                        # หาสาขาที่อยู่ Booking เดียวกัน
-                        paired = find_paired_branches(code, code_province, df_region)
+                        # ถ้าไม่มีใน Master ลองดึงจากไฟล์อัปโหลด
+                        if not location or location.get('province', 'UNKNOWN') == 'UNKNOWN':
+                            c_row = df_region[df_region['Code'] == code].iloc[0] if len(df_region[df_region['Code'] == code]) > 0 else None
+                            if c_row is not None:
+                                location = {
+                                    'subdistrict': '',
+                                    'district': '',
+                                    'province': c_row.get('Province', 'UNKNOWN'),
+                                    'lat': 0,
+                                    'lon': 0
+                                }
                         
-                        # เก็บกลุ่มพร้อมข้อมูลจาก Master
-                        group_key = tuple(sorted({code} | paired))
-                        if group_key not in booking_groups:
-                            # ดึงข้อมูลจาก Master Data
-                            locations = {}
-                            for c in group_key:
-                                # เช็คว่ามี Master Data หรือไม่
-                                master_row = pd.DataFrame()
-                                if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
-                                    master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == c]
-                                if len(master_row) > 0:
-                                    master_row = master_row.iloc[0]
-                                    locations[c] = {
-                                        'subdistrict': master_row.get('ตำบล', ''),
-                                        'district': master_row.get('อำเภอ', ''),
-                                        'province': master_row.get('จังหวัด', 'UNKNOWN'),
-                                        'lat': master_row.get('ละติจูด', 0),
-                                        'lon': master_row.get('ลองติจูด', 0)
-                                    }
-                                else:
-                                    # ถ้าไม่มีใน Master ใช้จากไฟล์เดิม
-                                    c_row = df_region[df_region['Code'] == c].iloc[0] if len(df_region[df_region['Code'] == c]) > 0 else None
-                                    if c_row is not None:
-                                        locations[c] = {
-                                            'subdistrict': '',
-                                            'district': '',
-                                            'province': c_row.get('Province', 'UNKNOWN'),
-                                            'lat': 0,
-                                            'lon': 0
-                                        }
-                            booking_groups[group_key] = locations
+                        if location:
+                            initial_groups[(code,)] = {code: location}
+                    
+                    # ใช้ initial_groups แทน booking_groups
+                    booking_groups = initial_groups
                     
                     # Step 2: รวมกลุ่มตามลำดับ ตำบล → อำเภอ → จังหวัด
                     def groups_can_merge(locs1, locs2):
