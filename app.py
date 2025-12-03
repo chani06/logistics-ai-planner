@@ -1179,6 +1179,21 @@ def predict_trips(test_df, model_data):
             
             return 'UNKNOWN'
         
+        # ฟังก์ชันดึงพิกัด (lat, lon) จาก Master Data
+        def get_lat_lon(branch_code):
+            if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == branch_code]
+                if len(master_row) > 0:
+                    lat = master_row.iloc[0].get('ละติจูด', None)
+                    lon = master_row.iloc[0].get('ลองติจูด', None)
+                    # เช็คว่าเป็นตัวเลขและไม่ใช่ 0
+                    if pd.notna(lat) and pd.notna(lon) and lat != 0 and lon != 0:
+                        try:
+                            return float(lat), float(lon)
+                        except (ValueError, TypeError):
+                            pass
+            return None, None
+        
         # ข้อมูลจังหวัดของ seed
         seed_province = get_province(seed_code)
         seed_name = test_df[test_df['Code'] == seed_code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
