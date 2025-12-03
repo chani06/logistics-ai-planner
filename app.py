@@ -1979,8 +1979,17 @@ def predict_trips(test_df, model_data):
                 if all_nearby:
                     recommended = 'JB'  # บังคับใช้ JB แม้เกิน 120%
                     region_changes['nearby_6w_to_jb'] += 1
-                # พื้นที่ไกล → ลองใช้ JB ก่อน ถ้าไม่ได้ค่อยใช้ 6W
-                elif cube_util_jb <= 130 and weight_util_jb <= 130:
+                # พื้นที่ไกล/ต่างจังหวัด → ใช้หลักเดิม ยัด 6W ให้เต็ม
+                # ถ้า 6W เต็มดี (Cube ≥80%) → ใช้ 6W
+                elif cube_util_6w >= 80 and weight_util_6w <= 130:
+                    recommended = '6W'
+                    region_changes['far_keep_6w'] += 1
+                # ถ้า 6W เกิน 120% Cube → จะถูกแยกใน Phase 2.5
+                elif cube_util_6w > 120:
+                    recommended = '6W'  # ใช้ 6W ก่อน Phase 2.5 จะแยกเป็น JB
+                    region_changes['far_keep_6w'] += 1
+                # ถ้า 6W ไม่เต็ม (<80%) → ลอง JB
+                elif cube_util_jb <= 120 and weight_util_jb <= 130:
                     recommended = 'JB'
                     region_changes['nearby_6w_to_jb'] += 1
                 else:
