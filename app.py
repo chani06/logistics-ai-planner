@@ -1061,92 +1061,121 @@ def predict_trips(test_df, model_data):
     test_df['Trip'] = test_df['Code'].map(assigned_trips)
     
     # ===============================================
-    # Post-processing: รวมทริปที่มีสาขาน้อยและใช้รถต่ำ
+    # Post-processing: รวมทริปในจังหวัดเดียวกันที่ควรรวม
     # ===============================================
     st.text("กำลังปรับปรุงการจัดทริป...")
     
-    # หาทริปที่มีปัญหา (1-2 สาขา หรือ ใช้รถต่ำกว่า 50%)
-    problem_trips = []
+    # สร้างรายการทริปทั้งหมดพร้อมข้อมูล
+    all_trips = []
     for trip_num in test_df['Trip'].unique():
         trip_data = test_df[test_df['Trip'] == trip_num]
         branch_count = len(trip_data)
         total_w = trip_data['Weight'].sum()
         total_c = trip_data['Cube'].sum()
+        trip_codes = set(trip_data['Code'].values)
+        
+        # หาจังหวัดของทริป
+        provinces = set()
+        for code in trip_codes:
+            prov = get_province(code)
+            if prov != 'UNKNOWN':
+                provinces.add(prov)
         
         # คำนวณ % การใช้รถ 4W
         w_util = (total_w / LIMITS['4W']['max_w']) * 100
         c_util = (total_c / LIMITS['4W']['max_c']) * 100
         max_util = max(w_util, c_util)
         
-        # ถ้ามี 1-2 สาขา หรือ ใช้รถต่ำกว่า 40% → ต้องพยายามรวม
-        if branch_count <= 2 or max_util < 40:
-            problem_trips.append({
-                'trip': trip_num,
-                'count': branch_count,
-                'util': max_util,
-                'weight': total_w,
-                'cube': total_c,
-                'codes': set(trip_data['Code'].values)
-            })
+        all_trips.append({
+            'trip': trip_num,
+            'count': branch_count,
+            'util': max_util,
+            'weight': total_w,
+            'cube': total_c,
+            'codes': trip_codes,
+            'provinces': provinces
+        })
     
-    # พยายามรวมทริปที่มีปัญหา
+    # เรียงทริปตาม utilization (น้อยไปมาก) เพื่อรวมทริปเล็กก่อน
+    all_trips.sort(key=lambda x: x['util'])
+    
+    # พยายามรวมทริปที่อยู่ในจังหวัดเดียวกัน
     merged = True
-    while merged and len(problem_trips) > 0:
+    merge_count = 0
+    while merged and len(all_trips) > 1:
         merged = False
-        for i, prob1 in enumerate(problem_trips):
-            if prob1 is None:
+        for i in range(len(all_trips)):
+            if all_trips[i] is None:
                 continue
             
-            # หาทริปอื่นที่จังหวัดเดียวกัน
-            prob1_provinces = set()
-            for code in prob1['codes']:
-                prov = get_province(code)
-                if prov != 'UNKNOWN':
-                    prob1_provinces.add(prov)
+            trip1 = all_trips[i]
             
-            # ลองรวมกับทริปอื่น
-            for j, prob2 in enumerate(problem_trips[i+1:], start=i+1):
-                if prob2 is None:
+            # ลองรวมกับทริปอื่นที่อยู่ในจังหวัดเดียวกัน
+            for j in range(i + 1, len(all_trips)):
+                if all_trips[j] is None:
                     continue
                 
-                # เช็คจังหวัด
-                prob2_provinces = set()
-                for code in prob2['codes']:
-                    prov = get_province(code)
-                    if prov != 'UNKNOWN':
-                        prob2_provinces.add(prov)
+                trip2 = all_trips[j]
                 
-                # ถ้าจังหวัดเดียวกัน → ลองรวม
-                if prob1_provinces & prob2_provinces:
-                    combined_w = prob1['weight'] + prob2['weight']
-                    combined_c = prob1['cube'] + prob2['cube']
-                    combined_count = prob1['count'] + prob2['count']
+                # เช็คว่าอยู่ในจังหวัดเดียวกันหรือไม่
+                if not (trip1['provinces'] & trip2['provinces']):
+                    continue  # ต่างจังหวัด ข้าม
+                
+                # ลองรวมกัน
+                combined_w = trip1['weight'] + trip2['weight']
+                combined_c = trip1['cube'] + trip2['cube']
+                combined_count = trip1['count'] + trip2['count']
+                
+                # เช็คว่ารวมแล้วใส่รถ 6W ได้หรือไม่
+                if (combined_w <= LIMITS['6W']['max_w'] * BUFFER and 
+                    combined_c <= LIMITS['6W']['max_c'] * BUFFER and
+                    combined_count <= MAX_BRANCHES_PER_TRIP):
                     
-                    # เช็คว่ารวมแล้วใส่รถได้ไหม (ใช้ 6W)
-                    if (combined_w <= LIMITS['6W']['max_w'] * BUFFER and 
-                        combined_c <= LIMITS['6W']['max_c'] * BUFFER and
-                        combined_count <= MAX_BRANCHES_PER_TRIP):
-                        
+                    # คำนวณว่ารวมแล้วคุ้มหรือไม่
+                    should_merge = False
+                    
+                    # เงื่อนไข 1: ทริปใดทริปหนึ่งมี ≤3 สาขา
+                    if trip1['count'] <= 3 or trip2['count'] <= 3:
+                        should_merge = True
+                    
+                    # เงื่อนไข 2: ทั้ง 2 ทริปใช้รถต่ำกว่า 50%
+                    elif trip1['util'] < 50 and trip2['util'] < 50:
+                        should_merge = True
+                    
+                    # เงื่อนไข 3: รวมแล้วได้สาขา ≤10 และทั้ง 2 ทริปใช้รถต่ำกว่า 60%
+                    elif combined_count <= 10 and trip1['util'] < 60 and trip2['util'] < 60:
+                        should_merge = True
+                    
+                    if should_merge:
                         # รวมทริป
-                        for code in prob2['codes']:
-                            test_df.loc[test_df['Code'] == code, 'Trip'] = prob1['trip']
+                        for code in trip2['codes']:
+                            test_df.loc[test_df['Code'] == code, 'Trip'] = trip1['trip']
                         
-                        # อัปเดตข้อมูล prob1
-                        prob1['weight'] = combined_w
-                        prob1['cube'] = combined_c
-                        prob1['count'] = combined_count
-                        prob1['codes'] |= prob2['codes']
+                        # อัปเดตข้อมูล trip1
+                        trip1['weight'] = combined_w
+                        trip1['cube'] = combined_c
+                        trip1['count'] = combined_count
+                        trip1['codes'] |= trip2['codes']
+                        trip1['provinces'] |= trip2['provinces']
+                        trip1['util'] = max(
+                            (combined_w / LIMITS['6W']['max_w']) * 100,
+                            (combined_c / LIMITS['6W']['max_c']) * 100
+                        )
                         
-                        # ลบ prob2 ออก
-                        problem_trips[j] = None
+                        # ลบ trip2 ออก
+                        all_trips[j] = None
                         merged = True
+                        merge_count += 1
                         break
             
             if merged:
                 break
         
         # ลบ None ออก
-        problem_trips = [p for p in problem_trips if p is not None]
+        all_trips = [t for t in all_trips if t is not None]
+    
+    if merge_count > 0:
+        st.text(f"รวมทริปสำเร็จ {merge_count} ครั้ง")
     
     # สรุปผลและแนะนำรถ
     summary_data = []
