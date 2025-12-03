@@ -2390,56 +2390,117 @@ def predict_trips(test_df, model_data):
                 trip_recommended_vehicles[trip_num] = max_allowed
                 fix_count += 1
             else:
-                # ใส่ไม่ได้ → แยกเป็นหลายทริปเล็ก
-                # จัดกลุ่มสาขาให้เต็มรถเล็กหลายคัน
-                new_trips = []
-                current_group = []
-                current_group_w = 0
-                current_group_c = 0
+                # ใส่ไม่ได้ → ลองรวมเป็นรถใหญ่ขึ้น หรือแยกทริป
+                # 🎯 กลยุทธ์: ถ้า 4W เต็ม → ลอง JB ก่อน
+                #           ถ้า JB เต็ม → แยกเป็น JB หลายคัน (ไม่ใช้ 6W)
                 
-                # เรียงตามน้ำหนัก (มาก→น้อย)
-                sorted_data = trip_data.sort_values('Weight', ascending=False)
-                
-                for _, row in sorted_data.iterrows():
-                    code = row['Code']
-                    w = row['Weight']
-                    c = row['Cube']
+                if max_allowed == '4W':
+                    # 4W เต็ม → ลอง JB
+                    jb_w = LIMITS['JB']['max_w']
+                    jb_c = LIMITS['JB']['max_c']
+                    jb_util = max((total_w / jb_w) * 100, (total_c / jb_c) * 100)
                     
-                    # เช็คว่าถ้าเพิ่มสาขานี้ จะเกินรถที่อนุญาตไหม
-                    test_w = current_group_w + w
-                    test_c = current_group_c + c
-                    test_util = max((test_w / allowed_w) * 100, (test_c / allowed_c) * 100)
-                    
-                    if test_util <= 120 or len(current_group) == 0:
-                        # ใส่ได้
-                        current_group.append(code)
-                        current_group_w += w
-                        current_group_c += c
+                    if jb_util <= 140:  # JB เกินนิดหน่อย (≤140%) → ยอมได้
+                        trip_recommended_vehicles[trip_num] = 'JB'
+                        fix_count += 1
                     else:
-                        # เต็มแล้ว → สร้างทริปใหม่
-                        new_trips.append(current_group.copy())
-                        current_group = [code]
-                        current_group_w = w
-                        current_group_c = c
+                        # JB ก็เต็ม → แยกเป็น JB หลายคัน
+                        target_vehicle = 'JB'
+                        target_w = jb_w
+                        target_c = jb_c
+                        split_needed = True
+                elif max_allowed == 'JB':
+                    # JB เต็ม → แยกเป็น JB หลายคัน
+                    target_vehicle = 'JB'
+                    target_w = LIMITS['JB']['max_w']
+                    target_c = LIMITS['JB']['max_c']
+                    split_needed = True
+                else:
+                    # 6W หรืออื่นๆ
+                    target_vehicle = max_allowed
+                    target_w = LIMITS[max_allowed]['max_w']
+                    target_c = LIMITS[max_allowed]['max_c']
+                    split_needed = True
                 
-                # เพิ่มกลุ่มสุดท้าย
-                if current_group:
-                    new_trips.append(current_group)
-                
-                # อัพเดททริป
-                if len(new_trips) > 1:
-                    # ทริปแรกใช้เลขเดิม
-                    for code in new_trips[0]:
-                        test_df.loc[test_df['Code'] == code, 'Trip'] = trip_num
-                    trip_recommended_vehicles[trip_num] = max_allowed
+                # แยกทริปถ้าจำเป็น
+                if split_needed:
+                    new_trips = []
+                    current_group = []
+                    current_group_w = 0
+                    current_group_c = 0
                     
-                    # ทริปถัดไปสร้างใหม่
-                    for group in new_trips[1:]:
-                        new_trip_num = test_df['Trip'].max() + 1
-                        for code in group:
-                            test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip_num
-                        trip_recommended_vehicles[new_trip_num] = max_allowed
-                        split_count += 1
+                    # เรียงตามน้ำหนัก (มาก→น้อย)
+                    sorted_data = trip_data.sort_values('Weight', ascending=False)
+                    
+                    for _, row in sorted_data.iterrows():
+                        code = row['Code']
+                        w = row['Weight']
+                        c = row['Cube']
+                        
+                        # เช็คว่าถ้าเพิ่มสาขานี้ จะเกินรถเป้าหมายไหม
+                        test_w = current_group_w + w
+                        test_c = current_group_c + c
+                        test_util = max((test_w / target_w) * 100, (test_c / target_c) * 100)
+                        
+                        # เป้าหมาย: 95-120% (ไม่แยกถ้ายัง <95%)
+                        if test_util <= 120 or len(current_group) == 0:
+                            # ใส่ได้
+                            current_group.append(code)
+                            current_group_w += w
+                            current_group_c += c
+                        else:
+                            # เต็มแล้ว → ตรวจสอบก่อนสร้างทริปใหม่
+                            current_util = max((current_group_w / target_w) * 100, (current_group_c / target_c) * 100)
+                            
+                            if current_util >= 95:  # ถ้าเต็มพอสมควร → สร้างทริปใหม่
+                                new_trips.append(current_group.copy())
+                                current_group = [code]
+                                current_group_w = w
+                                current_group_c = c
+                            else:
+                                # ยังไม่เต็มพอ → ใส่ต่อ (ยอมเกิน 120% เล็กน้อย)
+                                current_group.append(code)
+                                current_group_w += w
+                                current_group_c += c
+                    
+                    # เพิ่มกลุ่มสุดท้าย
+                    if current_group:
+                        # ถ้ากลุ่มสุดท้ายน้อยเกินไป (<95%) → พยายามรวมกับกลุ่มก่อนหน้า
+                        final_util = max((current_group_w / target_w) * 100, (current_group_c / target_c) * 100)
+                        
+                        if final_util < 95 and len(new_trips) > 0:
+                            # รวมกับทริปก่อนหน้า
+                            last_group = new_trips[-1]
+                            combined_w = current_group_w + sum(test_df[test_df['Code'] == c]['Weight'].sum() for c in last_group)
+                            combined_c = current_group_c + sum(test_df[test_df['Code'] == c]['Cube'].sum() for c in last_group)
+                            combined_util = max((combined_w / target_w) * 100, (combined_c / target_c) * 100)
+                            
+                            if combined_util <= 140:  # รวมได้ (≤140%)
+                                new_trips[-1].extend(current_group)
+                            else:
+                                # รวมไม่ได้ → สร้างทริปใหม่
+                                new_trips.append(current_group)
+                        else:
+                            new_trips.append(current_group)
+                    
+                    # อัพเดททริป
+                    if len(new_trips) > 1:
+                        # ทริปแรกใช้เลขเดิม
+                        for code in new_trips[0]:
+                            test_df.loc[test_df['Code'] == code, 'Trip'] = trip_num
+                        trip_recommended_vehicles[trip_num] = target_vehicle
+                        
+                        # ทริปถัดไปสร้างใหม่
+                        for group in new_trips[1:]:
+                            new_trip_num = test_df['Trip'].max() + 1
+                            for code in group:
+                                test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip_num
+                            trip_recommended_vehicles[new_trip_num] = target_vehicle
+                            split_count += 1
+                    elif len(new_trips) == 1:
+                        # ไม่ต้องแยก → ใช้รถเดิม
+                        trip_recommended_vehicles[trip_num] = target_vehicle
+                        fix_count += 1
     
     if fix_count > 0:
         st.success(f"✅ Phase 2.1: ปรับรถสำเร็จ {fix_count} ทริป (ตามข้อจำกัดสาขา)")
