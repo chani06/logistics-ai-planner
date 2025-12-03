@@ -45,10 +45,14 @@ def load_master_data():
     try:
         df_master = pd.read_excel('Dc/Master สถานที่ส่ง.xlsx')
         # ทำความสะอาด Plan Code
-        df_master['Plan Code'] = df_master['Plan Code'].apply(lambda x: str(x).strip().upper() if pd.notna(x) else '')
+        if 'Plan Code' in df_master.columns:
+            df_master['Plan Code'] = df_master['Plan Code'].apply(lambda x: str(x).strip().upper() if pd.notna(x) else '')
         return df_master
+    except FileNotFoundError:
+        # ไม่มีไฟล์ Master - ใช้งานได้ปกติแต่ไม่มีข้อมูลตำบล/อำเภอ
+        return pd.DataFrame()
     except Exception as e:
-        st.error(f"ไม่สามารถโหลดไฟล์ Master: {e}")
+        st.warning(f"ไม่สามารถโหลดไฟล์ Master: {e} (จะใช้ข้อมูลจากไฟล์อัปโหลดแทน)")
         return pd.DataFrame()
 
 # โหลด Master Data
@@ -784,6 +788,10 @@ def predict_trips(test_df, model_data):
                 # ฟังก์ชันเช็คว่าสาขาอยู่ใกล้กันหรือไม่ (ตำบล/อำเภอเดียวกัน)
                 def branches_are_close(code1, code2):
                     """เช็คว่าสาขาอยู่ใกล้กันหรือไม่ (ตำบล/อำเภอเดียวกัน)"""
+                    # ถ้าไม่มี Master Data ให้ถือว่าใกล้กัน (ใช้จังหวัดเดียวกันแทน)
+                    if MASTER_DATA.empty or 'Plan Code' not in MASTER_DATA.columns:
+                        return True
+                    
                     # ดึงข้อมูลจาก Master
                     master1 = MASTER_DATA[MASTER_DATA['Plan Code'] == code1]
                     master2 = MASTER_DATA[MASTER_DATA['Plan Code'] == code2]
@@ -1200,7 +1208,10 @@ def main():
                             # ดึงข้อมูลจาก Master Data
                             locations = {}
                             for c in group_key:
-                                master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == c]
+                                # เช็คว่ามี Master Data หรือไม่
+                                master_row = pd.DataFrame()
+                                if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                                    master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == c]
                                 if len(master_row) > 0:
                                     master_row = master_row.iloc[0]
                                     locations[c] = {
