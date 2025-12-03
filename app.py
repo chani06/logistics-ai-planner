@@ -774,13 +774,72 @@ def predict_trips(test_df, model_data):
                 if recommended_vehicle and recommended_vehicle in LIMITS:
                     max_w = LIMITS[recommended_vehicle]['max_w'] * BUFFER
                     max_c = LIMITS[recommended_vehicle]['max_c'] * BUFFER
+                    vehicle_type = recommended_vehicle
                 else:
                     # ถ้าไม่มี ใช้รถ 6W เป็นค่าเริ่มต้น
                     max_w = LIMITS['6W']['max_w'] * BUFFER
                     max_c = LIMITS['6W']['max_c'] * BUFFER
+                    vehicle_type = '6W'
+                
+                # ฟังก์ชันเช็คว่าสาขาอยู่ใกล้กันหรือไม่ (ตำบล/อำเภอเดียวกัน)
+                def branches_are_close(code1, code2):
+                    """เช็คว่าสาขาอยู่ใกล้กันหรือไม่ (ตำบล/อำเภอเดียวกัน)"""
+                    # ดึงข้อมูลจาก Master
+                    master1 = MASTER_DATA[MASTER_DATA['Plan Code'] == code1]
+                    master2 = MASTER_DATA[MASTER_DATA['Plan Code'] == code2]
+                    
+                    if len(master1) > 0 and len(master2) > 0:
+                        m1 = master1.iloc[0]
+                        m2 = master2.iloc[0]
+                        
+                        # เช็คตำบลก่อน
+                        if m1.get('ตำบล', '') and m2.get('ตำบล', '') and m1.get('ตำบล', '') == m2.get('ตำบล', ''):
+                            return True
+                        
+                        # เช็คอำเภอ
+                        if (m1.get('อำเภอ', '') and m2.get('อำเภอ', '') and 
+                            m1.get('อำเภอ', '') == m2.get('อำเภอ', '') and
+                            m1.get('จังหวัด', '') == m2.get('จังหวัด', '')):
+                            return True
+                    
+                    return False
                 
                 # เช็คว่าเกินขีดจำกัดหรือไม่
-                if trip_weight <= max_w and trip_cube <= max_c:
+                can_fit = trip_weight <= max_w and trip_cube <= max_c
+                
+                # ถ้าเกิน → เช็คว่าเกินนิดหน่อยและอยู่ใกล้กันไหม
+                if not can_fit:
+                    # เกินเล็กน้อย = เกินไม่เกิน 10%
+                    weight_exceed = (trip_weight - max_w) / max_w if max_w > 0 else 0
+                    cube_exceed = (trip_cube - max_c) / max_c if max_c > 0 else 0
+                    
+                    slightly_exceed = weight_exceed <= 0.10 or cube_exceed <= 0.10
+                    
+                    if slightly_exceed:
+                        # เช็คว่าสาขาอยู่ใกล้กันหรือไม่
+                        all_branches_close = True
+                        for existing_code in current_trip:
+                            if not branches_are_close(existing_code, code):
+                                all_branches_close = False
+                                break
+                        
+                        if all_branches_close:
+                            # คำนวณว่าถ้าแยก สาขาที่แยกออกไปจะใช้รถเล็กหรือไม่เต็ม
+                            code_weight = test_df[test_df['Code'] == code]['Weight'].sum()
+                            code_cube = test_df[test_df['Code'] == code]['Cube'].sum()
+                            
+                            # ลองดูว่าถ้าแยกออกไป รถเล็กจะไม่เต็มหรือไม่
+                            # ใช้รถเล็กสุด (4W) เป็นตัวอ้างอิง
+                            small_vehicle_fill = max(
+                                code_weight / LIMITS['4W']['max_w'],
+                                code_cube / LIMITS['4W']['max_c']
+                            ) if vehicle_type != '4W' else 0
+                            
+                            # ถ้ารถเล็กไม่เต็ม 50% = สิ้นเปลือง → ยอมรับให้รวมกันแม้เกิน
+                            if small_vehicle_fill < 0.5:
+                                can_fit = True  # ยอมรับเกินเพื่อประหยัดรถ
+                
+                if can_fit:
                     current_trip.append(code)
                     assigned_trips[code] = trip_counter
                     all_codes.remove(code)
