@@ -559,6 +559,33 @@ def is_similar_name(name1, name2):
     
     return False
 
+def haversine_distance(lat1, lon1, lat2, lon2):
+    """
+    คำนวณระยะทางระหว่างจุดสองจุดบนพื้นโลก (km)
+    ใช้สูตร Haversine
+    """
+    from math import radians, sin, cos, sqrt, atan2
+    
+    # แปลงองศาเป็น radians
+    lat1_rad = radians(lat1)
+    lon1_rad = radians(lon1)
+    lat2_rad = radians(lat2)
+    lon2_rad = radians(lon2)
+    
+    # ความต่างของพิกัด
+    dlat = lat2_rad - lat1_rad
+    dlon = lon2_rad - lon1_rad
+    
+    # สูตร Haversine
+    a = sin(dlat/2)**2 + cos(lat1_rad) * cos(lat2_rad) * sin(dlon/2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1-a))
+    
+    # รัศมีโลก (km)
+    R = 6371.0
+    distance = R * c
+    
+    return distance
+
 def is_nearby_province(prov1, prov2):
     """เช็คว่าจังหวัดใกล้เคียงกันหรือไม่ (จากไฟล์ประวัติ)"""
     if pd.isna(prov1) or pd.isna(prov2):
