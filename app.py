@@ -801,11 +801,30 @@ def predict_trips(test_df, model_data):
                             seed_m.get('จังหวัด', '') == code_m.get('จังหวัด', '')):
                             can_pair = True
             
-            # 4. ถ้ายังไม่ผ่าน → เช็คระยะทาง (ภายใน 20 กม.)
+            # 4. ถ้ายังไม่ผ่าน → เช็คระยะทาง (ภายใน 20 กม.) - ใช้พิกัดจาก Master
             if not can_pair:
-                if 'Latitude' in test_df.columns and 'Longitude' in test_df.columns:
+                # ดึงพิกัดจาก Master
+                seed_lat, seed_lon = 0, 0
+                code_lat, code_lon = 0, 0
+                
+                if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                    seed_master = MASTER_DATA[MASTER_DATA['Plan Code'] == seed_code]
+                    code_master = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                    
+                    if len(seed_master) > 0:
+                        seed_lat = seed_master.iloc[0].get('ละติจูด', 0)
+                        seed_lon = seed_master.iloc[0].get('ลองติจูด', 0)
+                    
+                    if len(code_master) > 0:
+                        code_lat = code_master.iloc[0].get('ละติจูด', 0)
+                        code_lon = code_master.iloc[0].get('ลองติจูด', 0)
+                
+                # ถ้าไม่มีใน Master ลองดึงจากไฟล์อัปโหลด
+                if seed_lat == 0 and seed_lon == 0 and 'Latitude' in test_df.columns:
                     seed_lat = test_df[test_df['Code'] == seed_code]['Latitude'].iloc[0] if len(test_df[test_df['Code'] == seed_code]) > 0 else 0
                     seed_lon = test_df[test_df['Code'] == seed_code]['Longitude'].iloc[0] if len(test_df[test_df['Code'] == seed_code]) > 0 else 0
+                
+                if code_lat == 0 and code_lon == 0 and 'Latitude' in test_df.columns:
                     code_lat = test_df[test_df['Code'] == code]['Latitude'].iloc[0] if len(test_df[test_df['Code'] == code]) > 0 else 0
                     code_lon = test_df[test_df['Code'] == code]['Longitude'].iloc[0] if len(test_df[test_df['Code'] == code]) > 0 else 0
                     
