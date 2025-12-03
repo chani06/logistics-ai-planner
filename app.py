@@ -1608,9 +1608,26 @@ def predict_trips(test_df, model_data):
             trip['centroid_lon'] = DC_WANG_NOI_LON
             trip['distance_from_dc'] = 0
     
-    # เรียงทริปตาม: 1) ระยะทางจาก DC (ใกล้ไปไกล) 2) จำนวนสาขา (น้อยไปมาก) 3) utilization (น้อยไปมาก)
-    # เพื่อจัดกลุ่มทริปที่อยู่ใกล้กันก่อน
-    all_trips.sort(key=lambda x: (x['distance_from_dc'], x['count'], x['util']))
+    # เรียงทริปตาม: 1) จังหวัดหลัก 2) ระยะทางจาก DC (ใกล้ไปไกล) 3) จำนวนสาขา 4) utilization
+    # เพื่อจัดกลุ่มทริปในจังหวัดเดียวกันก่อน ค่อยข้ามจังหวัด
+    def get_primary_province(trip):
+        """หาจังหวัดหลักของทริป (จังหวัดที่มีสาขามากที่สุด)"""
+        if not trip['provinces']:
+            return 'UNKNOWN'
+        # นับจำนวนสาขาในแต่ละจังหวัด
+        province_counts = {}
+        for code in trip['codes']:
+            prov = get_province(code)
+            province_counts[prov] = province_counts.get(prov, 0) + 1
+        # คืนค่าจังหวัดที่มีสาขามากที่สุด
+        return max(province_counts.items(), key=lambda x: x[1])[0] if province_counts else 'UNKNOWN'
+    
+    # เพิ่มข้อมูลจังหวัดหลักให้แต่ละทริป
+    for trip in all_trips:
+        trip['primary_province'] = get_primary_province(trip)
+    
+    # เรียงตามจังหวัดหลัก → ระยะทาง → จำนวนสาขา → utilization
+    all_trips.sort(key=lambda x: (x['primary_province'], x['distance_from_dc'], x['count'], x['util']))
     
     # 🎯 Phase 1: รวมทริปเล็ก (≤3 สาขา) กับทริปใกล้เคียง
     st.text("Phase 1: จัดการทริปเล็ก...")
@@ -1635,9 +1652,24 @@ def predict_trips(test_df, model_data):
                 # เช็คว่าสาขาในทั้ง 2 ทริปอยู่ใกล้กันหรือไม่
                 can_merge = False
                 
-                # 🚪 อนุญาตข้ามจังหวัดได้ ถ้าเส้นทางผ่านกัน
-                # ไม่จำเป็นต้องจังหวัดเดียวกัน → สามารถรวมได้
-                can_merge = True  # อนุญาตข้ามจังหวัด
+                # 🎯 เน้นรวมจังหวัดเดียวกันก่อน ค่อยข้ามจังหวัด
+                # เช็คว่ามีจังหวัดเดียวกันหรือไม่
+                same_province = bool(trip1['provinces'] & trip2['provinces'])
+                
+                # ถ้าจังหวัดเดียวกัน → รวมได้ง่าย
+                if same_province:
+                    can_merge = True
+                # ถ้าต่างจังหวัด → ต้องอยู่ใกล้กันมาก (centroid distance)
+                else:
+                    if 'centroid_lat' in trip1 and 'centroid_lat' in trip2:
+                        centroid_distance = haversine_distance(
+                            trip1['centroid_lat'], trip1['centroid_lon'],
+                            trip2['centroid_lat'], trip2['centroid_lon']
+                        )
+                        # ต่างจังหวัดต้องใกล้กันมาก (<40km) จึงจะรวมได้
+                        can_merge = centroid_distance <= 40
+                    else:
+                        can_merge = False
                 
                 # เช็คระยะทางระหว่าง centroid ของ 2 ทริป (เร็วกว่าการเช็คทุกสาขา)
                 if can_merge:
@@ -1663,6 +1695,13 @@ def predict_trips(test_df, model_data):
                 
                 if not can_merge:
                     continue  # ไม่สามารถรวมได้
+                
+                # 🚨 เช็คข้อจำกัดรถก่อนรวม
+                combined_codes = trip1['codes'] | trip2['codes']
+                max_allowed_combined = get_max_vehicle_for_trip(combined_codes)
+                
+                # ถ้ารวมแล้วมีสาขาจำกัด 4W → ห้ามรวมถ้าจะใช้ 6W
+                # (เพราะอาจจะใส่ 4W/JB ไม่ได้)
                 
                 # ลองรวมกัน
                 combined_w = trip1['weight'] + trip2['weight']
@@ -1754,9 +1793,44 @@ def predict_trips(test_df, model_data):
                             should_merge = True
                     
                     if should_merge:
-                        # รวมทริป
-                        for code in trip2['codes']:
-                            test_df.loc[test_df['Code'] == code, 'Trip'] = trip1['trip']
+                        # 🚨 เช็คอีกครั้งว่ารวมแล้วใส่รถที่อนุญาตได้หรือไม่
+                        vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
+                        
+                        # เช็คว่ารวมแล้วต้องใช้รถอะไร
+                        if combined_6w_util <= 105:
+                            needed_vehicle = '6W'
+                        else:
+                            # เกิน 6W → ไม่ควรรวม (ปล่อยให้แยก)
+                            needed_vehicle = None
+                        
+                        # ถ้ารถที่ต้องการใหญ่กว่าที่อนุญาต → ห้ามรวม
+                        if needed_vehicle:
+                            needed_priority = vehicle_priority.get(needed_vehicle, 3)
+                            allowed_priority = vehicle_priority.get(max_allowed_combined, 3)
+                            
+                            if needed_priority > allowed_priority:
+                                # รถที่ต้องการใหญ่เกินไป → ลองใช้ JB/4W แทน
+                                if max_allowed_combined == 'JB':
+                                    # ตรวจสอบว่าใส่ JB ได้ไหม
+                                    if combined_c <= LIMITS['JB']['max_c'] * BUFFER:
+                                        # ใส่ JB ได้ → รวมได้
+                                        pass
+                                    else:
+                                        # ใส่ JB ไม่ได้ → ไม่รวม
+                                        should_merge = False
+                                elif max_allowed_combined == '4W':
+                                    # ตรวจสอบว่าใส่ 4W ได้ไหม
+                                    if combined_c <= LIMITS['4W']['max_c'] * BUFFER:
+                                        # ใส่ 4W ได้ → รวมได้
+                                        pass
+                                    else:
+                                        # ใส่ 4W ไม่ได้ → ไม่รวม
+                                        should_merge = False
+                        
+                        if should_merge:
+                            # รวมทริป
+                            for code in trip2['codes']:
+                                test_df.loc[test_df['Code'] == code, 'Trip'] = trip1['trip']
                         
                         # อัปเดตข้อมูล trip1
                         trip1['weight'] = combined_w
@@ -2080,14 +2154,19 @@ def predict_trips(test_df, model_data):
             elif max_allowed == 'JB':
                 recommended = 'JB'
             
-            # 2. กรุงเทพ+ปริมณฑล (พื้นที่ใกล้มาก) → ลอง 4W/JB ก่อน
+            # 2. กรุงเทพ+ปริมณฑล (พื้นที่ใกล้มาก) → ลอง 4W/JB ก่อน (ห้าม 6W)
             elif all_nearby:
                 # ลอง 4W ก่อน
                 if cube_util_4w <= 120 and weight_util_4w <= 130:
                     recommended = '4W'
-                # ถ้า 4W ไม่พอ → ใช้ JB
+                # ถ้า 4W ไม่พอ → ลอง JB
+                elif cube_util_jb <= 130 and weight_util_jb <= 130:
+                    recommended = 'JB'
+                    region_changes['nearby_6w_to_jb'] += 1
+                # ถ้า JB ก็ไม่พอ → บังคับใช้ JB แต่เตือน (ห้ามใช้ 6W)
                 else:
                     recommended = 'JB'
+                    st.warning(f"⚠️ Trip {trip_num}: กรุงเทพ/ปริมณฑล ของเกิน JB ({cube_util_jb:.1f}%) แต่บังคับใช้ JB (ห้าม 6W)")
                     region_changes['nearby_6w_to_jb'] += 1
             
             # 3. พื้นที่ไกล/ต่างจังหวัด → ใช้ 6W ให้เต็มก่อน
@@ -2119,10 +2198,40 @@ def predict_trips(test_df, model_data):
         if region_changes['far_keep_6w'] > 0:
             st.info(f"   🚛 คง 6W ในพื้นที่ไกล: {region_changes['far_keep_6w']} ทริป")
     
+    # 🚨 ตรวจสอบอีกครั้ง: ห้ามกรุงเทพ+ปริมณฑลใช้ 6W
+    bangkok_6w_count = 0
+    for trip_num in test_df['Trip'].unique():
+        if trip_num == 0:
+            continue
+        
+        trip_data = test_df[test_df['Trip'] == trip_num]
+        trip_codes = set(trip_data['Code'].values)
+        
+        # เช็คว่าทุกจังหวัดเป็นพื้นที่ใกล้หรือไม่
+        provinces = set()
+        for code in trip_codes:
+            prov = get_province(code)
+            if prov != 'UNKNOWN':
+                provinces.add(prov)
+        
+        all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
+        current_vehicle = trip_recommended_vehicles.get(trip_num, '6W')
+        
+        if all_nearby and current_vehicle == '6W':
+            # บังคับเปลี่ยนเป็น JB
+            trip_recommended_vehicles[trip_num] = 'JB'
+            bangkok_6w_count += 1
+            st.warning(f"⚠️ Trip {trip_num}: บังคับเปลี่ยนจาก 6W → JB (กรุงเทพ/ปริมณฑล ห้ามใช้ 6W)")
+    
+    if bangkok_6w_count > 0:
+        st.error(f"❌ พบ {bangkok_6w_count} ทริปในกรุงเทพ/ปริมณฑลใช้ 6W → บังคับเปลี่ยนเป็น JB")
+    
     # 🚨 Phase 2.1: ตรวจสอบและแก้ไขทริปที่ใช้รถใหญ่เกินข้อจำกัด
     st.text("Phase 2.1: ตรวจสอบข้อจำกัดรถ...")
     fix_count = 0
-    for trip_num in test_df['Trip'].unique():
+    split_count = 0
+    
+    for trip_num in sorted(test_df['Trip'].unique()):
         if trip_num == 0:
             continue
         
@@ -2131,18 +2240,61 @@ def predict_trips(test_df, model_data):
         current_vehicle = trip_recommended_vehicles.get(trip_num, '6W')
         max_allowed = get_max_vehicle_for_trip(trip_codes)
         
+        total_w = trip_data['Weight'].sum()
+        total_c = trip_data['Cube'].sum()
+        
         # เช็คว่ารถที่ใช้อยู่ใหญ่กว่าที่อนุญาตหรือไม่
         vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
         current_priority = vehicle_priority.get(current_vehicle, 3)
         allowed_priority = vehicle_priority.get(max_allowed, 3)
         
         if current_priority > allowed_priority:
-            # บังคับปรับลงตาม max_allowed
-            trip_recommended_vehicles[trip_num] = max_allowed
-            fix_count += 1
+            # เช็คว่าถ้าใช้รถที่อนุญาต จะใส่ได้ไหม
+            allowed_w = LIMITS[max_allowed]['max_w']
+            allowed_c = LIMITS[max_allowed]['max_c']
+            
+            if total_w <= allowed_w * 1.3 and total_c <= allowed_c * 1.3:
+                # ใส่รถที่อนุญาตได้ → ปรับรถ
+                trip_recommended_vehicles[trip_num] = max_allowed
+                fix_count += 1
+            else:
+                # ใส่ไม่ได้ → ต้องแยกทริป
+                st.warning(f"⚠️ Trip {trip_num}: มีสาขาจำกัด {max_allowed} แต่ของเยอะเกินไป → แยกทริป")
+                
+                # แยกสาขาที่จำกัดออกมาเป็นทริปใหม่
+                restricted_codes = []
+                unrestricted_codes = []
+                
+                for code in trip_codes:
+                    branch_max = get_max_vehicle_for_branch(code)
+                    if vehicle_priority.get(branch_max, 3) < vehicle_priority.get('6W', 3):
+                        restricted_codes.append(code)
+                    else:
+                        unrestricted_codes.append(code)
+                
+                # สร้างทริปใหม่สำหรับสาขาที่จำกัด
+                if restricted_codes and unrestricted_codes:
+                    new_trip_num = test_df['Trip'].max() + 1
+                    for code in restricted_codes:
+                        test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip_num
+                    
+                    # กำหนดรถใหม่
+                    restricted_data = test_df[test_df['Trip'] == new_trip_num]
+                    restricted_w = restricted_data['Weight'].sum()
+                    restricted_c = restricted_data['Cube'].sum()
+                    
+                    # หารถที่เหมาะสม
+                    if restricted_c <= LIMITS['4W']['max_c'] * 1.3:
+                        trip_recommended_vehicles[new_trip_num] = '4W'
+                    else:
+                        trip_recommended_vehicles[new_trip_num] = 'JB'
+                    
+                    split_count += 1
     
     if fix_count > 0:
-        st.warning(f"⚠️ Phase 2.1: พบ {fix_count} ทริปใช้รถเกินข้อจำกัด → ปรับเป็น 4W/JB ตามข้อจำกัดสาขา")
+        st.success(f"✅ Phase 2.1: ปรับรถสำเร็จ {fix_count} ทริป (ตามข้อจำกัดสาขา)")
+    if split_count > 0:
+        st.success(f"✅ Phase 2.1: แยกทริปสำเร็จ {split_count} ทริป (เพราะใส่รถที่อนุญาตไม่ได้)")
     
     # 🎯 Phase 2.5: แยกทริปที่ Cube เกินไปมาก (น้ำหนักเบา แต่เต็ม Cube)
     st.text("Phase 2.5: แยกทริปที่ Cube เต็มเกิน...")
