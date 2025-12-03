@@ -26,9 +26,9 @@ LIMITS = {
 # เผื่อการใช้รถได้เกิน 5%
 BUFFER = 1.05
 
-# จำกัดจำนวนสาขาต่อทริป
+# จำกัดจำนวนสาขาต่อทริป (เรียนรู้จากไฟล์ Punthai: เฉลี่ย 8.5 สาขา/ทริป)
 MAX_BRANCHES_PER_TRIP = 12  # สูงสุด 12 สาขาต่อทริป
-TARGET_BRANCHES_PER_TRIP = 10  # เป้าหมาย 10 สาขาต่อทริป
+TARGET_BRANCHES_PER_TRIP = 9  # เป้าหมาย 9 สาขาต่อทริป (ใกล้เคียง 8.5)
 
 # รายการสาขาที่ไม่ต้องการจัดส่ง (ตัดออก)
 EXCLUDE_BRANCHES = ['DC011', 'PTDC', 'PTG DISTRIBUTION CENTER']
@@ -64,6 +64,34 @@ def load_master_data():
 
 # โหลด Master Data
 MASTER_DATA = load_master_data()
+
+@st.cache_data
+def load_punthai_reference():
+    """โหลดไฟล์ Punthai Maxmart เพื่อเรียนรู้หลักการจัดทริป"""
+    try:
+        file_path = 'Dc/แผนงาน Punthai Maxmart รอบสั่ง 24หยิบ 25พฤศจิกายน 2568 To.เฟิ(1) - สำเนา.xlsx'
+        df = pd.read_excel(file_path, sheet_name='2.Punthai', header=1)
+        
+        # กรองเฉพาะแถวที่มี Trip
+        df_clean = df[df['Trip'].notna()].copy()
+        
+        # สร้าง dictionary: Trip → ข้อมูล
+        trip_patterns = {}
+        for trip_num in df_clean['Trip'].unique():
+            trip_data = df_clean[df_clean['Trip'] == trip_num]
+            trip_patterns[int(trip_num)] = {
+                'branches': len(trip_data),
+                'codes': trip_data['BranchCode'].tolist(),
+                'weight': trip_data['TOTALWGT'].sum() if 'TOTALWGT' in trip_data.columns else 0,
+                'cube': trip_data['TOTALCUBE'].sum() if 'TOTALCUBE' in trip_data.columns else 0
+            }
+        
+        return trip_patterns
+    except:
+        return {}
+
+# โหลด Punthai Reference
+PUNTHAI_PATTERNS = load_punthai_reference()
 
 # ==========================================
 # HELPER FUNCTIONS
