@@ -1795,6 +1795,74 @@ def predict_trips(test_df, model_data):
         if region_changes['far_keep_6w'] > 0:
             st.info(f"   🚛 คง 6W ในพื้นที่ไกล: {region_changes['far_keep_6w']} ทริป")
     
+    # 🎯 Phase 3: แยก 6W ที่ไม่เต็มเป็น 2xJB
+    st.text("Phase 3: ตรวจสอบ 6W ที่ไม่คุ้มค่า...")
+    split_count = 0
+    
+    # ตรวจสอบทริปที่ใช้ 6W
+    trips_to_split = []
+    for trip_num in test_df['Trip'].unique():
+        if trip_recommended_vehicles.get(trip_num) != '6W':
+            continue
+        
+        trip_data = test_df[test_df['Trip'] == trip_num]
+        total_w = trip_data['Weight'].sum()
+        total_c = trip_data['Cube'].sum()
+        branch_count = len(trip_data)
+        
+        # คำนวณ % การใช้ 6W
+        util_6w = max((total_w / LIMITS['6W']['max_w']) * 100,
+                      (total_c / LIMITS['6W']['max_c']) * 100)
+        
+        # 🚨 ถ้าใช้ 6W แต่เหลือมาก (<60%) และมีสาขา ≥6
+        if util_6w < 60 and branch_count >= 6:
+            # ลองคำนวณว่าถ้าแยกเป็น 2 ทริป JB จะเต็มกว่าหรือไม่
+            # แบ่งครึ่ง (โดยประมาณ)
+            half_w = total_w / 2
+            half_c = total_c / 2
+            
+            util_jb_1 = max((half_w / LIMITS['JB']['max_w']) * 100,
+                           (half_c / LIMITS['JB']['max_c']) * 100)
+            
+            # ถ้าแยกเป็น JB แล้วเต็มกว่า 70% → คุ้มกว่า
+            if util_jb_1 >= 70:
+                trips_to_split.append({
+                    'trip': trip_num,
+                    'codes': list(trip_data['Code'].values),
+                    'util_6w': util_6w,
+                    'util_jb_expected': util_jb_1
+                })
+    
+    # แยกทริป
+    if trips_to_split:
+        max_trip_num = test_df['Trip'].max()
+        
+        for split_info in trips_to_split:
+            trip_num = split_info['trip']
+            codes = split_info['codes']
+            
+            # แบ่งสาขาครึ่ง (แบบสลับ เพื่อกระจายน้ำหนัก)
+            mid = len(codes) // 2
+            codes_trip_a = codes[:mid]
+            codes_trip_b = codes[mid:]
+            
+            # สร้างทริปใหม่
+            max_trip_num += 1
+            new_trip_num = max_trip_num
+            
+            # อัปเดต DataFrame
+            for code in codes_trip_b:
+                test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip_num
+            
+            # กำหนดรถเป็น JB
+            trip_recommended_vehicles[trip_num] = 'JB'
+            trip_recommended_vehicles[new_trip_num] = 'JB'
+            
+            split_count += 1
+    
+    if split_count > 0:
+        st.success(f"✅ Phase 3: แยก 6W → 2xJB สำเร็จ {split_count} ทริป (เพิ่มประสิทธิภาพ)")
+    
     # สรุปผลและแนะนำรถ
     summary_data = []
     for trip_num in sorted(test_df['Trip'].unique()):
