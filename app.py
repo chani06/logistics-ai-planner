@@ -2328,6 +2328,14 @@ def main():
                                     # ใส่สีทุก cell ในแถว
                                     for col_num in range(len(export_df.columns)):
                                         value = export_df.iloc[row_num, col_num]
+                                        
+                                        # จัดการค่า NaN/None
+                                        if pd.isna(value):
+                                            value = ''
+                                        elif isinstance(value, float):
+                                            # ถ้าเป็นทศนิยม ปัดเศษ 2 ตำแหน่ง
+                                            value = round(value, 2)
+                                        
                                         worksheet.write(row_num + 1, col_num, value, cell_format)
                                 
                                 # ปรับความกว้างคอลัมน์
