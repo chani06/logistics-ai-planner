@@ -72,18 +72,22 @@ def normalize(val):
     """ทำให้รหัสสาขาเป็นมาตรฐาน"""
     return str(val).strip().upper().replace(" ", "").replace(".0", "")
 
-def calculate_distance_from_dc(lat, lon):
-    """คำนวณระยะทางจาก DC วังน้อย (กม.)"""
-    if lat == 0 or lon == 0:
+def calculate_distance(lat1, lon1, lat2, lon2):
+    """คำนวณระยะทางระหว่างสองจุด (กม.) - Haversine formula"""
+    if lat1 == 0 or lon1 == 0 or lat2 == 0 or lon2 == 0:
         return 0
     import math
-    lat1, lon1 = math.radians(DC_WANG_NOI_LAT), math.radians(DC_WANG_NOI_LON)
-    lat2, lon2 = math.radians(lat), math.radians(lon)
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+    lat1_rad, lon1_rad = math.radians(lat1), math.radians(lon1)
+    lat2_rad, lon2_rad = math.radians(lat2), math.radians(lon2)
+    dlat = lat2_rad - lat1_rad
+    dlon = lon2_rad - lon1_rad
+    a = math.sin(dlat/2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon/2)**2
     c = 2 * math.asin(math.sqrt(a))
     return 6371 * c
+
+def calculate_distance_from_dc(lat, lon):
+    """คำนวณระยะทางจาก DC วังน้อย (กม.)"""
+    return calculate_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
 
 def get_required_vehicle_by_distance(branch_code):
     """ตรวจสอบว่าสาขาต้องใช้รถอะไรตามระยะทางจาก DC"""
@@ -111,16 +115,10 @@ def can_fit_truck(total_weight, total_cube, truck_type):
 def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None):
     """
     แนะนำรถที่เหมาะสม โดยเลือกรถที่:
-    1. เช็คระยะทางจาก DC - ถ้าไกล → บังคับ 6W
-    2. ใส่ของได้พอดี (ไม่เกินขีดจำกัด)
-    3. ใช้งานได้มากที่สุด (ใกล้ 100% ที่สุด)
+    1. ใส่ของได้พอดี (ไม่เกินขีดจำกัด)
+    2. ใช้งานได้มากที่สุด (ใกล้ 100% ที่สุด)
+    หมายเหตุ: ไม่บังคับ 6W ที่นี่ - ให้ predict_trips จัดการระยะทาง
     """
-    # เช็คว่ามีสาขาที่ต้องใช้ 6W เพราะอยู่ไกลหรือไม่
-    if trip_codes is not None and len(trip_codes) > 0:
-        for code in trip_codes:
-            required_vehicle, distance = get_required_vehicle_by_distance(code)
-            if required_vehicle == '6W':
-                return '6W'  # บังคับ 6W เพราะมีสาขาที่อยู่ไกล
     vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
     max_size = vehicle_sizes.get(max_allowed, 3)
     
@@ -669,12 +667,62 @@ def predict_trips(test_df, model_data):
                 suggested = suggest_truck(total_w, total_c, '6W', trip_codes)
                 source = "🤖 AI"
             
-            # คำนวณ % การใช้รถ
+            # ตรวจสอบว่ารถที่เลือกใส่ของได้จริงหรือไม่ (ห้ามเกิน 105%)
             if suggested in LIMITS:
                 w_util = (total_w / LIMITS[suggested]['max_w']) * 100
                 c_util = (total_c / LIMITS[suggested]['max_c']) * 100
+                max_util = max(w_util, c_util)
+                
+                # ถ้าเกิน 105% ต้องเพิ่มขนาดรถ
+                if max_util > 105:
+                    if suggested == '4W' and 'JB' in LIMITS:
+                        # ลองเปลี่ยนเป็น JB
+                        jb_w_util = (total_w / LIMITS['JB']['max_w']) * 100
+                        jb_c_util = (total_c / LIMITS['JB']['max_c']) * 100
+                        if max(jb_w_util, jb_c_util) <= 105:
+                            suggested = 'JB'
+                            source = source + " → JB"
+                            w_util, c_util = jb_w_util, jb_c_util
+                        else:
+                            suggested = '6W'
+                            source = source + " → 6W"
+                            w_util = (total_w / LIMITS['6W']['max_w']) * 100
+                            c_util = (total_c / LIMITS['6W']['max_c']) * 100
+                    elif suggested == 'JB' or suggested == '4W':
+                        suggested = '6W'
+                        source = source + " → 6W"
+                        w_util = (total_w / LIMITS['6W']['max_w']) * 100
+                        c_util = (total_c / LIMITS['6W']['max_c']) * 100
             else:
                 w_util = c_util = 0
+            
+            # คำนวณระยะทางรวมของทริป (เส้นทาง: DC → สาขา1 → สาขา2 → ... → DC)
+            trip_codes = trip_data['Code'].unique()
+            total_distance = 0
+            if len(trip_codes) > 0:
+                # ดึงพิกัดของแต่ละสาขาจาก Master
+                branch_coords = []
+                for code in trip_codes:
+                    if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                        master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                        if len(master_row) > 0:
+                            lat = master_row.iloc[0].get('ละติจูด', 0)
+                            lon = master_row.iloc[0].get('ลองติจูด', 0)
+                            if lat != 0 and lon != 0:
+                                branch_coords.append((lat, lon))
+                
+                # คำนวณระยะทางตามเส้นทาง
+                if len(branch_coords) > 0:
+                    # DC → สาขาแรก
+                    total_distance += calculate_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, 
+                                                        branch_coords[0][0], branch_coords[0][1])
+                    # สาขา → สาขา
+                    for i in range(len(branch_coords) - 1):
+                        total_distance += calculate_distance(branch_coords[i][0], branch_coords[i][1],
+                                                            branch_coords[i+1][0], branch_coords[i+1][1])
+                    # สาขาสุดท้าย → DC
+                    total_distance += calculate_distance(branch_coords[-1][0], branch_coords[-1][1],
+                                                        DC_WANG_NOI_LAT, DC_WANG_NOI_LON)
             
             summary_data.append({
                 'Trip': int(trip_num),
@@ -683,7 +731,8 @@ def predict_trips(test_df, model_data):
                 'Cube': total_c,
                 'Truck': f"{suggested} {source}",
                 'Weight_Use%': w_util,
-                'Cube_Use%': c_util
+                'Cube_Use%': c_util,
+                'Total_Distance': total_distance
             })
         
         summary_df = pd.DataFrame(summary_data)
@@ -1138,18 +1187,61 @@ def predict_trips(test_df, model_data):
             suggested = suggest_truck(total_w, total_c, max_allowed_vehicle, trip_codes)
             source = "🤖 AI"
         
-        # คำนวณ % การใช้รถ
+        # ตรวจสอบว่ารถที่เลือกใส่ของได้จริงหรือไม่ (ห้ามเกิน 105%)
         if suggested in LIMITS:
             w_util = (total_w / LIMITS[suggested]['max_w']) * 100
             c_util = (total_c / LIMITS[suggested]['max_c']) * 100
+            max_util = max(w_util, c_util)
+            
+            # ถ้าเกิน 105% ต้องเพิ่มขนาดรถ
+            if max_util > 105:
+                if suggested == '4W' and 'JB' in LIMITS:
+                    # ลองเปลี่ยนเป็น JB
+                    jb_w_util = (total_w / LIMITS['JB']['max_w']) * 100
+                    jb_c_util = (total_c / LIMITS['JB']['max_c']) * 100
+                    if max(jb_w_util, jb_c_util) <= 105:
+                        suggested = 'JB'
+                        source = source + " → JB"
+                        w_util, c_util = jb_w_util, jb_c_util
+                    else:
+                        suggested = '6W'
+                        source = source + " → 6W"
+                        w_util = (total_w / LIMITS['6W']['max_w']) * 100
+                        c_util = (total_c / LIMITS['6W']['max_c']) * 100
+                elif suggested == 'JB' or suggested == '4W':
+                    suggested = '6W'
+                    source = source + " → 6W"
+                    w_util = (total_w / LIMITS['6W']['max_w']) * 100
+                    c_util = (total_c / LIMITS['6W']['max_c']) * 100
         else:
             w_util = c_util = 0
         
-        # คำนวณระยะทางรวมของทริป
+        # คำนวณระยะทางรวมของทริป (เส้นทาง: DC → สาขา1 → สาขา2 → ... → DC)
         total_distance = 0
-        for code in trip_codes:
-            _, distance = get_required_vehicle_by_distance(code)
-            total_distance += distance
+        if len(trip_codes) > 0:
+            # ดึงพิกัดของแต่ละสาขาจาก Master
+            branch_coords = []
+            for code in trip_codes:
+                if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                    master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                    if len(master_row) > 0:
+                        lat = master_row.iloc[0].get('ละติจูด', 0)
+                        lon = master_row.iloc[0].get('ลองติจูด', 0)
+                        if lat != 0 and lon != 0:
+                            branch_coords.append((lat, lon))
+            
+            # คำนวณระยะทางตามเส้นทาง
+            if len(branch_coords) > 0:
+                # DC → สาขาแรก
+                total_distance += calculate_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, 
+                                                    branch_coords[0][0], branch_coords[0][1])
+                # สาขา → สาขา
+                for i in range(len(branch_coords) - 1):
+                    total_distance += calculate_distance(branch_coords[i][0], branch_coords[i][1],
+                                                        branch_coords[i+1][0], branch_coords[i+1][1])
+                # สาขาสุดท้าย → DC
+                total_distance += calculate_distance(branch_coords[-1][0], branch_coords[-1][1],
+                                                    DC_WANG_NOI_LAT, DC_WANG_NOI_LON)
         
         summary_data.append({
             'Trip': trip_num,
