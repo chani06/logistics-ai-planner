@@ -1523,12 +1523,20 @@ def main():
                     for mg in merged_groups:
                         rep_code = list(mg['codes'])[0]
                         rep_row = df_region[df_region['Code'] == rep_code].iloc[0]
-                        provinces = set(loc['province'] for loc in mg['locations'].values())
+                        # กรองเฉพาะจังหวัดที่ไม่ใช่ UNKNOWN และไม่เป็น NaN
+                        provinces = set(
+                            str(loc.get('province', '')).strip() 
+                            for loc in mg['locations'].values() 
+                            if loc.get('province') and str(loc.get('province', '')).strip() not in ['UNKNOWN', 'nan', '']
+                        )
+                        
+                        # ถ้าไม่มีจังหวัดเลย ใส่ "ไม่ระบุ"
+                        province_str = ', '.join(sorted(provinces)) if provinces else 'ไม่ระบุ'
                         
                         groups.append({
                             'codes': mg['codes'],
                             'region': rep_row.get('Region', 'ไม่ระบุ'),
-                            'province': ', '.join(sorted(provinces))
+                            'province': province_str
                         })
                     
                     # แสดงสถิติ
