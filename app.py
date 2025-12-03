@@ -1729,14 +1729,24 @@ def predict_trips(test_df, model_data):
         
         # เช็คว่าทริปนี้อยู่พื้นที่ใกล้หรือไกล
         provinces = set()
+        max_distance_from_dc = 0
+        
         for code in trip_codes:
             prov = get_province(code)
             if prov != 'UNKNOWN':
                 provinces.add(prov)
+            
+            # เช็คระยะทางจาก DC
+            _, distance = get_required_vehicle_by_distance(code)
+            if distance > max_distance_from_dc:
+                max_distance_from_dc = distance
         
         # ถ้าทุกจังหวัดในทริปเป็นพื้นที่ใกล้ → ไม่ควรใช้ 6W
         all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
         has_far = any(get_region_type(p) == 'far' for p in provinces) if provinces else True
+        
+        # 🚛 เช็คระยะทาง - ไกลมาก (>200km) ต้องใช้ 6W
+        very_far = max_distance_from_dc > 200
         
         # คำนวณ % การใช้รถแต่ละประเภท
         util_4w = max((total_w / LIMITS['4W']['max_w']) * 100, 
@@ -1749,37 +1759,42 @@ def predict_trips(test_df, model_data):
         # ตรวจสอบข้อจำกัดสาขา
         max_allowed = get_max_vehicle_for_trip(trip_codes)
         
-        # 🎯 กลยุทธ์เลือกรถ (ปรับตามพื้นที่)
+        # 🎯 กลยุทธ์เลือกรถ (ปรับตามพื้นที่ + ระยะทาง)
         recommended = None
         
-        # 1. เช็ค 4W ก่อน (ถ้าเหมาะสม)
-        if max_allowed == '4W' or (util_4w <= 105 and total_w <= LIMITS['4W']['max_w'] * BUFFER and 
-                                    total_c <= LIMITS['4W']['max_c'] * BUFFER):
-            if util_4w >= 50:  # ใช้ 4W ถ้าเต็มกว่า 50%
-                recommended = '4W'
-        
-        # 2. เช็ค JB
-        if not recommended and max_allowed in ['4W', 'JB']:
-            if (util_jb <= 105 and total_w <= LIMITS['JB']['max_w'] * BUFFER and
-                total_c <= LIMITS['JB']['max_c'] * BUFFER):
-                # 🎯 พื้นที่ใกล้ → ใช้ JB ถ้าเต็ม ≥40% (ยืดหยุ่นกว่า)
-                # พื้นที่ไกล → ใช้ JB ถ้าเต็ม ≥50%
-                min_util = 40 if all_nearby else 50
-                if util_jb >= min_util:
+        # 🚛 ระยะทางไกลมาก (>200km) → ต้องใช้ 6W
+        if very_far:
+            recommended = '6W'
+            region_changes['far_keep_6w'] += 1
+        else:
+            # 1. เช็ค 4W ก่อน (ถ้าเหมาะสม)
+            if max_allowed == '4W' or (util_4w <= 105 and total_w <= LIMITS['4W']['max_w'] * BUFFER and 
+                                        total_c <= LIMITS['4W']['max_c'] * BUFFER):
+                if util_4w >= 50:  # ใช้ 4W ถ้าเต็มกว่า 50%
+                    recommended = '4W'
+            
+            # 2. เช็ค JB (ระยะทาง 100-200km ยังใช้ได้)
+            if not recommended and max_allowed in ['4W', 'JB']:
+                if (util_jb <= 105 and total_w <= LIMITS['JB']['max_w'] * BUFFER and
+                    total_c <= LIMITS['JB']['max_c'] * BUFFER):
+                    # 🎯 พื้นที่ใกล้ → ใช้ JB ถ้าเต็ม ≥40% (ยืดหยุ่นกว่า)
+                    # พื้นที่ไกล → ใช้ JB ถ้าเต็ม ≥50%
+                    min_util = 40 if all_nearby else 50
+                    if util_jb >= min_util:
+                        recommended = 'JB'
+            
+            # 3. เช็ค 6W
+            if not recommended:
+                # 🚨 กรุงเทพ+ปริมณฑล+กลาง → พยายามหลีกเลี่ยง 6W
+                if all_nearby and util_jb <= 110:  # ถ้า JB เกินนิดหน่อย ยอมใช้แทน 6W
                     recommended = 'JB'
-        
-        # 3. เช็ค 6W
-        if not recommended:
-            # 🚨 กรุงเทพ+ปริมณฑล+กลาง → พยายามหลีกเลี่ยง 6W
-            if all_nearby and util_jb <= 110:  # ถ้า JB เกินนิดหน่อย ยอมใช้แทน 6W
-                recommended = 'JB'
-                region_changes['nearby_6w_to_jb'] += 1
-            else:
-                recommended = '6W'
-                if has_far:
-                    region_changes['far_keep_6w'] += 1
+                    region_changes['nearby_6w_to_jb'] += 1
                 else:
-                    region_changes['other'] += 1
+                    recommended = '6W'
+                    if has_far:
+                        region_changes['far_keep_6w'] += 1
+                    else:
+                        region_changes['other'] += 1
         
         # บันทึกการปรับขนาด
         original_vehicle = trip_recommended_vehicles.get(trip_num, '6W')
