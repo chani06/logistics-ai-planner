@@ -1457,7 +1457,7 @@ def predict_trips(test_df, model_data):
     test_df['Trip'] = test_df['Code'].map(assigned_trips)
     
     # ===============================================
-    # Post-processing: รวมทริปในจังหวัดเดียวกันที่ควรรวม
+    # Post-processing: รวมทริปเล็กและปรับขนาดรถ
     # ===============================================
     st.text("กำลังปรับปรุงการจัดทริป...")
     
@@ -1492,10 +1492,12 @@ def predict_trips(test_df, model_data):
             'provinces': provinces
         })
     
-    # เรียงทริปตาม utilization (น้อยไปมาก) เพื่อรวมทริปเล็กก่อน
-    all_trips.sort(key=lambda x: x['util'])
+    # เรียงทริปตาม: 1) จำนวนสาขา (น้อยไปมาก) 2) utilization (น้อยไปมาก)
+    # เพื่อให้ทริปเล็ก (1-3 สาขา) ถูกจัดการก่อน
+    all_trips.sort(key=lambda x: (x['count'], x['util']))
     
-    # พยายามรวมทริปที่อยู่ในจังหวัดเดียวกัน
+    # 🎯 Phase 1: รวมทริปเล็ก (≤3 สาขา) กับทริปใกล้เคียง
+    st.text("Phase 1: จัดการทริปเล็ก...")
     merged = True
     merge_count = 0
     while merged and len(all_trips) > 1:
@@ -1584,9 +1586,20 @@ def predict_trips(test_df, model_data):
                     # คำนวณว่ารวมแล้วคุ้มหรือไม่ (เป้าหมาย: ใกล้ 100%)
                     should_merge = False
                     
-                    # เงื่อนไข 1: ทริปใดทริปหนึ่งมี ≤3 สาขา และรวมแล้วไม่เกิน 105%
-                    if (trip1['count'] <= 3 or trip2['count'] <= 3) and combined_6w_util <= 105:
-                        should_merge = True
+                    # 🚨 Priority: ทริปเล็ก (≤3 สาขา) ต้องรวมก่อน
+                    if trip1['count'] <= 3 or trip2['count'] <= 3:
+                        # ถ้ามีทริปเล็ก → พยายามรวม (ยืดหยุ่นกว่า)
+                        if combined_6w_util <= 110:  # ยอมให้เกิน 10%
+                            should_merge = True
+                        # หรือ ถ้ารวมแล้วได้ 4W ที่เต็มกว่า 70%
+                        elif (combined_w <= LIMITS['4W']['max_w'] * BUFFER and 
+                              combined_c <= LIMITS['4W']['max_c'] * BUFFER):
+                            combined_4w_util = max(
+                                (combined_w / LIMITS['4W']['max_w']) * 100,
+                                (combined_c / LIMITS['4W']['max_c']) * 100
+                            )
+                            if combined_4w_util >= 70:
+                                should_merge = True
                     
                     # เงื่อนไข 2: ทั้ง 2 ทริปใช้รถต่ำกว่า 50% และรวมแล้ว 60-105%
                     elif trip1['util'] < 50 and trip2['util'] < 50 and 60 <= combined_6w_util <= 105:
@@ -1629,7 +1642,57 @@ def predict_trips(test_df, model_data):
         all_trips = [t for t in all_trips if t is not None]
     
     if merge_count > 0:
-        st.success(f"✅ รวมทริปสำเร็จ {merge_count} ครั้ง เพื่อเพิ่มประสิทธิภาพการใช้รถ")
+        st.success(f"✅ Phase 1: รวมทริปสำเร็จ {merge_count} ครั้ง")
+    
+    # 🎯 Phase 2: ปรับขนาดรถสำหรับทริปเล็กที่เหลือ
+    st.text("Phase 2: ปรับขนาดรถ...")
+    downsize_count = 0
+    
+    # เก็บข้อมูลทริปที่เหลือ
+    remaining_trips = []
+    for trip_num in test_df['Trip'].unique():
+        trip_data = test_df[test_df['Trip'] == trip_num]
+        branch_count = len(trip_data)
+        total_w = trip_data['Weight'].sum()
+        total_c = trip_data['Cube'].sum()
+        
+        # คำนวณ % การใช้รถแต่ละประเภท
+        util_4w = max((total_w / LIMITS['4W']['max_w']) * 100, 
+                      (total_c / LIMITS['4W']['max_c']) * 100)
+        util_jb = max((total_w / LIMITS['JB']['max_w']) * 100,
+                      (total_c / LIMITS['JB']['max_c']) * 100)
+        util_6w = max((total_w / LIMITS['6W']['max_w']) * 100,
+                      (total_c / LIMITS['6W']['max_c']) * 100)
+        
+        # ตรวจสอบข้อจำกัดสาขา
+        trip_codes = set(trip_data['Code'].values)
+        max_allowed = get_max_vehicle_for_trip(trip_codes, branch_restrictions)
+        
+        # เลือกรถที่เหมาะสม
+        recommended = None
+        if max_allowed == '4W' or (util_4w <= 105 and total_w <= LIMITS['4W']['max_w'] * BUFFER and 
+                                    total_c <= LIMITS['4W']['max_c'] * BUFFER):
+            if util_4w >= 50:  # ใช้ 4W ถ้าเต็มกว่า 50%
+                recommended = '4W'
+        
+        if not recommended:
+            if max_allowed in ['4W', 'JB'] and (util_jb <= 105 and 
+                                                  total_w <= LIMITS['JB']['max_w'] * BUFFER and
+                                                  total_c <= LIMITS['JB']['max_c'] * BUFFER):
+                if util_jb >= 50:  # ใช้ JB ถ้าเต็มกว่า 50%
+                    recommended = 'JB'
+        
+        if not recommended:
+            recommended = '6W'  # Default
+        
+        # บันทึกการปรับขนาด
+        original_vehicle = trip_recommended_vehicles.get(trip_num, '6W')
+        if recommended != original_vehicle:
+            trip_recommended_vehicles[trip_num] = recommended
+            downsize_count += 1
+    
+    if downsize_count > 0:
+        st.success(f"✅ Phase 2: ปรับขนาดรถสำเร็จ {downsize_count} ทริป")
     
     # สรุปผลและแนะนำรถ
     summary_data = []
