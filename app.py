@@ -662,15 +662,21 @@ def predict_trips(test_df, model_data):
             code_name = test_df[test_df['Code'] == code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
             names_are_similar = is_similar_name(seed_name, code_name)
             
-            # กฎสำคัญที่สุด: บังคับห้ามข้ามจังหวัด 100%
-            # ข้อยกเว้น: ถ้าชื่อคล้ายกันมาก (เช่น Future Rangsit ทั้งหมด) → อนุญาต
-            if seed_province == 'UNKNOWN' or code_province == 'UNKNOWN':
-                # ไม่มีข้อมูลจังหวัด - อนุญาตเฉพาะชื่อคล้ายกันหรือมีประวัติร่วมกัน
-                if not names_are_similar and pair not in trip_pairs:
+            # กฎการเช็คจังหวัด - มีลำดับความสำคัญ:
+            # 1. ถ้ามีประวัติร่วมกัน → อนุญาตเสมอ (ไว้ใจประวัติ)
+            # 2. ถ้าชื่อคล้ายกัน → อนุญาตเสมอ (แม้ต่างจังหวัดหรือไม่รู้จังหวัด)
+            # 3. ถ้าไม่มีทั้ง 2 → ใช้จังหวัดตัดสิน (ต้องเป็นจังหวัดเดียวกัน)
+            
+            has_history = pair in trip_pairs
+            
+            # ถ้าไม่มีประวัติและชื่อไม่คล้าย → ใช้จังหวัดตัดสิน
+            if not has_history and not names_are_similar:
+                if seed_province == 'UNKNOWN' or code_province == 'UNKNOWN':
+                    # ไม่มีข้อมูลจังหวัด = ข้าม (เพื่อความปลอดภัย)
                     continue
-            elif seed_province != code_province:
-                # ต่างจังหวัด = ห้ามจับคู่เด็ดขาด (ไม่มีข้อยกเว้น)
-                continue
+                elif seed_province != code_province:
+                    # ต่างจังหวัด = ห้ามจับคู่
+                    continue
             
             # กฎ 1: ถ้าเคยไปด้วยกันในประวัติ = จัดเข้าทริปเดียวกัน + ใช้รถแบบเดิม
             if pair in trip_pairs:
