@@ -1683,6 +1683,11 @@ def predict_trips(test_df, model_data):
                     elif combined_count <= 10 and 70 <= combined_6w_util <= 105:
                         should_merge = True
                     
+                    # เงื่อนไข 5: ทริปเล็กมาก (≤3 สาขา) ให้รวมกับทริปใหญ่ในจังหวัดเดียวกัน
+                    # แม้รวมแล้วจะเกิน 105% นิดหน่อย (≤115%)
+                    elif (trip1['count'] <= 3 or trip2['count'] <= 3) and combined_6w_util <= 115:
+                        should_merge = True
+                    
                     if should_merge:
                         # รวมทริป
                         for code in trip2['codes']:
@@ -1830,8 +1835,9 @@ def predict_trips(test_df, model_data):
         util_6w = max((total_w / LIMITS['6W']['max_w']) * 100,
                       (total_c / LIMITS['6W']['max_c']) * 100)
         
-        # ถ้า utilization < 60% และมีมากกว่า 4 สาขา → ลองแยก
-        if util_6w < 60 and len(trip_data) >= 4:
+        # ถ้า utilization < 65% และมีมากกว่า 6 สาขา → ลองแยก
+        # (ปรับเป็น 65% และ 6 สาขา เพื่อไม่ให้แยกบ่อยเกินไป)
+        if util_6w < 65 and len(trip_data) >= 6:
             # เช็คว่าแยกเป็น 2 ทริป JB ได้ไหม
             # แยกครึ่งหนึ่ง
             half = len(trip_data) // 2
