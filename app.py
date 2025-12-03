@@ -1730,6 +1730,13 @@ def predict_trips(test_df, model_data):
                         elif 60 <= combined_6w_util <= 105:
                             should_merge = True
                     
+                    # เงื่อนไข 2.5: ทริปใช้รถต่ำกว่า 30% (ไม่คุ้มมาก) รวมกันก่อน
+                    elif trip1['util'] < 30 or trip2['util'] < 30:
+                        if allow_exceed_buffer and combined_6w_util <= 130:
+                            should_merge = True
+                        elif combined_6w_util <= 115:  # ยืดหยุ่นกว่าเดิม (เพิ่มจาก 105%)
+                            should_merge = True
+                    
                     # เงื่อนไข 3: รวมแล้วใช้รถ 80-105% (ใกล้ 100% มาก)
                     elif combined_count <= 13 and 80 <= combined_6w_util <= 105:
                         should_merge = True
@@ -1778,6 +1785,115 @@ def predict_trips(test_df, model_data):
     if merge_count > 0:
         st.success(f"✅ Phase 1: รวมทริปสำเร็จ {merge_count} ครั้ง ({iteration} รอบ)")
     
+    # 🎯 Phase 1.25: ย้ายสาขาเดียวที่ใช้รถเล็กไปยังทริปใกล้เคียงที่ใหญ่กว่า
+    st.text("Phase 1.25: ย้ายสาขาเดียวไปรวมกับทริปใกล้เคียง...")
+    reassign_count = 0
+    
+    # หาทริปที่มีเพียง 1 สาขา และ utilization ต่ำ (<40%)
+    single_branch_trips = []
+    for trip_num in test_df['Trip'].unique():
+        if trip_num == 0:
+            continue
+        trip_data = test_df[test_df['Trip'] == trip_num]
+        if len(trip_data) == 1:
+            branch_code = trip_data['Code'].values[0]
+            branch_w = trip_data['Weight'].values[0]
+            branch_c = trip_data['Cube'].values[0]
+            
+            # คำนวณ utilization (ใช้รถที่เล็กที่สุดที่พอดี)
+            util_4w = max((branch_w / LIMITS['4W']['max_w']) * 100, 
+                         (branch_c / LIMITS['4W']['max_c']) * 100)
+            util_jb = max((branch_w / LIMITS['JB']['max_w']) * 100,
+                         (branch_c / LIMITS['JB']['max_c']) * 100)
+            
+            # ถ้าใช้รถน้อยกว่า 40% → พิจารณาย้าย
+            if util_4w < 40 or util_jb < 40:
+                lat, lon = get_lat_lon(branch_code)
+                if lat and lon:
+                    single_branch_trips.append({
+                        'trip': trip_num,
+                        'code': branch_code,
+                        'weight': branch_w,
+                        'cube': branch_c,
+                        'lat': lat,
+                        'lon': lon,
+                        'util': util_4w
+                    })
+    
+    # พยายามย้ายสาขาเดียวไปรวมกับทริปอื่นที่ใกล้เคียง
+    for single_trip in single_branch_trips:
+        branch_code = single_trip['code']
+        branch_w = single_trip['weight']
+        branch_c = single_trip['cube']
+        branch_lat = single_trip['lat']
+        branch_lon = single_trip['lon']
+        
+        # หาทริปที่ใกล้ที่สุด (ไม่รวมทริปของตัวเอง)
+        best_trip = None
+        min_distance = float('inf')
+        
+        for trip_num in test_df['Trip'].unique():
+            if trip_num == 0 or trip_num == single_trip['trip']:
+                continue
+            
+            trip_data = test_df[test_df['Trip'] == trip_num]
+            
+            # ถ้าทริปมีมากกว่า 2 สาขา → พิจารณา
+            if len(trip_data) < 2:
+                continue
+            
+            # คำนวณระยะทางจาก centroid ของทริป
+            trip_lats = []
+            trip_lons = []
+            for code in trip_data['Code'].values:
+                lat, lon = get_lat_lon(code)
+                if lat and lon:
+                    trip_lats.append(lat)
+                    trip_lons.append(lon)
+            
+            if not trip_lats:
+                continue
+            
+            centroid_lat = sum(trip_lats) / len(trip_lats)
+            centroid_lon = sum(trip_lons) / len(trip_lons)
+            
+            distance = haversine_distance(branch_lat, branch_lon, centroid_lat, centroid_lon)
+            
+            # ถ้าไกลเกิน 30km → ข้าม
+            if distance > 30:
+                continue
+            
+            # เช็คว่าเพิ่มแล้วเกินไหม
+            trip_w = trip_data['Weight'].sum()
+            trip_c = trip_data['Cube'].sum()
+            new_w = trip_w + branch_w
+            new_c = trip_c + branch_c
+            new_count = len(trip_data) + 1
+            
+            # เช็คว่าใส่ได้ไหม (ยอมให้เกิน 120%)
+            new_util = max(
+                (new_w / LIMITS['6W']['max_w']) * 100,
+                (new_c / LIMITS['6W']['max_c']) * 100
+            )
+            
+            if new_util <= 120 and new_count <= MAX_BRANCHES_PER_TRIP:
+                # เช็คข้อจำกัดสาขา
+                trip_codes = set(trip_data['Code'].values) | {branch_code}
+                max_allowed = get_max_vehicle_for_trip(trip_codes)
+                
+                # บันทึกทริปที่ใกล้ที่สุด
+                if distance < min_distance:
+                    min_distance = distance
+                    best_trip = trip_num
+        
+        # ถ้าเจอทริปที่เหมาะสม → ย้าย
+        if best_trip is not None:
+            test_df.loc[test_df['Code'] == branch_code, 'Trip'] = best_trip
+            reassign_count += 1
+    
+    if reassign_count > 0:
+        st.success(f"✅ Phase 1.25: ย้ายสาขาเดียวสำเร็จ {reassign_count} สาขา")
+    
     # 🎯 Phase 1.5: เก็บสาขาที่อยู่ในเส้นทาง (Route Pickup Optimization)
     st.text("Phase 1.5: เก็บสาขาที่อยู่ในเส้นทาง...")
     pickup_count = 0
@@ -1796,8 +1912,9 @@ def predict_trips(test_df, model_data):
             (current_c / LIMITS['6W']['max_c']) * 100
         )
         
-        # ถ้าเต็ม ≥95% หรือมีสาขาเยอะแล้ว → ข้าม
-        if current_util >= 95 or current_count >= MAX_BRANCHES_PER_TRIP:
+        # ถ้าเต็ม ≥120% หรือมีสาขาเยอะแล้ว → ข้าม
+        # เปลี่ยนจาก 95% เป็น 120% เพื่อให้สามารถเก็บสาขาได้มากขึ้น
+        if current_util >= 120 or current_count >= MAX_BRANCHES_PER_TRIP:
             continue
         
         # หาจังหวัดของทริปปัจจุบัน
