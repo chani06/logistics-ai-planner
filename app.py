@@ -1422,9 +1422,57 @@ def predict_trips(test_df, model_data):
                 
                 trip2 = all_trips[j]
                 
-                # เช็คว่าอยู่ในจังหวัดเดียวกันหรือไม่
-                if not (trip1['provinces'] & trip2['provinces']):
-                    continue  # ต่างจังหวัด ข้าม
+                # เช็คว่าสาขาในทั้ง 2 ทริปอยู่ใกล้กันหรือไม่
+                # คำนวณระยะทางเฉลี่ยระหว่างสาขาใน trip1 กับ trip2
+                can_merge = False
+                
+                # ถ้าจังหวัดเดียวกัน - เช็คแบบพื้นฐาน
+                if trip1['provinces'] & trip2['provinces']:
+                    can_merge = True
+                
+                # เช็คระยะทางระหว่างสาขาด้วย (ป้องกันรวมสาขาไกลมาก)
+                if can_merge and not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                    max_distance = 0
+                    sample_codes_1 = list(trip1['codes'])[:3]  # เอา 3 สาขาแรก
+                    sample_codes_2 = list(trip2['codes'])[:3]
+                    
+                    for code1 in sample_codes_1:
+                        master1 = MASTER_DATA[MASTER_DATA['Plan Code'] == code1]
+                        if len(master1) == 0:
+                            continue
+                        lat1 = master1.iloc[0].get('ละติจูด', 0)
+                        lon1 = master1.iloc[0].get('ลองติจูด', 0)
+                        if lat1 == 0 or lon1 == 0:
+                            continue
+                        
+                        for code2 in sample_codes_2:
+                            master2 = MASTER_DATA[MASTER_DATA['Plan Code'] == code2]
+                            if len(master2) == 0:
+                                continue
+                            lat2 = master2.iloc[0].get('ละติจูด', 0)
+                            lon2 = master2.iloc[0].get('ลองติจูด', 0)
+                            if lat2 == 0 or lon2 == 0:
+                                continue
+                            
+                            # คำนวณระยะทาง
+                            import math
+                            lat1_r, lon1_r = math.radians(lat1), math.radians(lon1)
+                            lat2_r, lon2_r = math.radians(lat2), math.radians(lon2)
+                            dlat = lat2_r - lat1_r
+                            dlon = lon2_r - lon1_r
+                            a = math.sin(dlat/2)**2 + math.cos(lat1_r) * math.cos(lat2_r) * math.sin(dlon/2)**2
+                            c = 2 * math.asin(math.sqrt(a))
+                            distance = 6371 * c
+                            
+                            if distance > max_distance:
+                                max_distance = distance
+                    
+                    # ถ้าห่างกันเกิน 50 กม. = ไม่รวม (แม้จังหวัดเดียวกัน)
+                    if max_distance > 50:
+                        can_merge = False
+                
+                if not can_merge:
+                    continue  # ไม่สามารถรวมได้
                 
                 # ลองรวมกัน
                 combined_w = trip1['weight'] + trip2['weight']
