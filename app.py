@@ -1090,7 +1090,7 @@ def main():
                         if not code_bookings:
                             return paired
                         
-                        # หาสาขาอื่นที่อยู่ Booking เดียวกัน + จังหวัดเดียวกัน
+                        # หาสาขาอื่นที่อยู่ Booking เดียวกัน (ไม่สนจังหวัด)
                         for booking in code_bookings:
                             if booking == 'nan' or not booking.strip():
                                 continue
@@ -1098,10 +1098,9 @@ def main():
                             same_booking = df_data[df_data[booking_col].astype(str) == booking]
                             for _, other_row in same_booking.iterrows():
                                 other_code = other_row['Code']
-                                other_province = other_row.get('Province', 'UNKNOWN')
                                 
-                                # เงื่อนไข: Booking เดียวกัน + จังหวัดเดียวกัน
-                                if other_code != code and other_province == code_province:
+                                # เงื่อนไข: Booking เดียวกัน = รวมกลุ่ม (ไม่สนจังหวัด)
+                                if other_code != code:
                                     paired.add(other_code)
                         
                         return paired
