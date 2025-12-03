@@ -1148,18 +1148,15 @@ def predict_trips(test_df, model_data):
                 different_province = True
             
             # ตรวจสอบความเหมาะสมในการรวมกลุ่ม
-            # ลำดับความสำคัญ: 1. ชื่อคล้ายกัน  2. ประวัติ  3. ตำบล/อำเภอใกล้กัน  4. ระยะทาง
+            # ลำดับความสำคัญ: 1. ประวัติบุ๊ค  2. ตำบลเดียวกัน  3. ชื่อคล้ายกัน  4. อำเภอเดียวกัน
             
             can_pair = False
             allow_cross_province = False  # อนุญาตข้ามจังหวัดได้หรือไม่
             
-            # 1. ชื่อคล้ายกัน → รวมได้ทันที
-            if names_are_similar:
+            # 1. มีประวัติร่วมกัน (Booking History) → รวมได้ทันที (ลำดับแรก)
+            if has_history:
                 can_pair = True
-            # 2. มีประวัติร่วมกัน → รวมได้ทันที
-            elif has_history:
-                can_pair = True
-            # 3. เช็คตำบล/อำเภอจาก Master
+            # 2. เช็คตำบลจาก Master (ลำดับที่สอง - สำคัญมาก)
             elif not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
                 seed_master = MASTER_DATA[MASTER_DATA['Plan Code'] == seed_code]
                 code_master = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
@@ -1168,23 +1165,35 @@ def predict_trips(test_df, model_data):
                     seed_m = seed_master.iloc[0]
                     code_m = code_master.iloc[0]
                     
-                    # เช็คตำบลเดียวกัน - อนุญาตข้ามจังหวัดได้
-                    if seed_m.get('ตำบล', '') and code_m.get('ตำบล', ''):
-                        if seed_m.get('ตำบล', '') == code_m.get('ตำบล', ''):
-                            can_pair = True
-                            allow_cross_province = True  # ตำบลเดียวกัน = ข้ามจังหวัดได้
+                    seed_subdistrict = seed_m.get('ตำบล', '').strip()
+                    code_subdistrict = code_m.get('ตำบล', '').strip()
+                    seed_district = seed_m.get('อำเภอ', '').strip()
+                    code_district = code_m.get('อำเภอ', '').strip()
                     
-                    # เช็คอำเภอเดียวกัน (ต้องจังหวัดเดียวกันด้วย)
-                    if not can_pair and seed_m.get('อำเภอ', '') and code_m.get('อำเภอ', ''):
-                        if (seed_m.get('อำเภอ', '') == code_m.get('อำเภอ', '') and 
-                            seed_m.get('จังหวัด', '') == code_m.get('จังหวัด', '')):
+                    # เช็คตำบลเดียวกัน - อนุญาตข้ามจังหวัดได้
+                    if seed_subdistrict and code_subdistrict and seed_subdistrict == code_subdistrict:
+                        can_pair = True
+                        allow_cross_province = True  # ตำบลเดียวกัน = ข้ามจังหวัดได้
+                    
+                    # ถ้าไม่ใช่ตำบลเดียวกัน → เช็คชื่อคล้ายกัน (ลำดับที่สาม)
+                    elif names_are_similar:
+                        can_pair = True
+                    
+                    # เช็คอำเภอเดียวกัน (ต้องจังหวัดเดียวกันด้วย และต้องไม่ต่างตำบลมาก)
+                    elif seed_district and code_district and seed_district == code_district:
+                        if seed_m.get('จังหวัด', '') == code_m.get('จังหวัด', ''):
+                            # อำเภอเดียวกันแต่ต่างตำบล - รวมได้แต่ระมัดระวัง
                             can_pair = True
+            
+            # 3. ถ้ายังไม่ผ่าน และชื่อคล้ายกัน → รวมได้
+            elif names_are_similar:
+                can_pair = True
             
             # ถ้าต่างจังหวัดและไม่ได้รับอนุญาตข้าม → ข้าม
             if different_province and not allow_cross_province:
                 continue
             
-            # 4. ถ้ายังไม่ผ่าน → เช็คระยะทาง (ภายใน 20 กม.) - ใช้พิกัดจาก Master
+            # 4. ถ้ายังไม่ผ่าน → เช็คระยะทาง (ภายใน 15 กม. เท่านั้น - เข้มงวดขึ้น)
             if not can_pair:
                 # ดึงพิกัดจาก Master
                 seed_lat, seed_lon = 0, 0
@@ -1222,10 +1231,11 @@ def predict_trips(test_df, model_data):
                         c = 2 * math.asin(math.sqrt(a))
                         distance_km = 6371 * c  # รัศมีโลก
                         
-                        # ถ้าห่างไม่เกิน 20 กม. = ใกล้กัน → รวมได้ (แม้ต่างจังหวัด)
-                        if distance_km <= 20:
+                        # ลดระยะทางจาก 20km → 15km (เข้มงวดขึ้น)
+                        # ถ้าห่างไม่เกิน 15 กม. = ใกล้กันมาก → รวมได้ (แม้ต่างจังหวัด)
+                        if distance_km <= 15:
                             can_pair = True
-                            allow_cross_province = True  # ใกล้กัน = ข้ามจังหวัดได้
+                            allow_cross_province = True  # ใกล้กันมาก = ข้ามจังหวัดได้
             
             # ถ้าไม่ผ่านเงื่อนไขใดๆ → ข้ามสาขานี้
             if not can_pair:
