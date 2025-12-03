@@ -37,6 +37,24 @@ EXCLUDE_BRANCHES = ['DC011', 'PTDC', 'PTG DISTRIBUTION CENTER']
 EXCLUDE_NAMES = ['Distribution Center', 'PTG Distribution', 'บ.พีทีจี เอ็นเนอยี']
 
 # ==========================================
+# LOAD MASTER DATA
+# ==========================================
+@st.cache_data
+def load_master_data():
+    """โหลดไฟล์ Master สถานที่ส่ง"""
+    try:
+        df_master = pd.read_excel('Dc/Master สถานที่ส่ง.xlsx')
+        # ทำความสะอาด Plan Code
+        df_master['Plan Code'] = df_master['Plan Code'].apply(lambda x: str(x).strip().upper() if pd.notna(x) else '')
+        return df_master
+    except Exception as e:
+        st.error(f"ไม่สามารถโหลดไฟล์ Master: {e}")
+        return pd.DataFrame()
+
+# โหลด Master Data
+MASTER_DATA = load_master_data()
+
+# ==========================================
 # HELPER FUNCTIONS
 # ==========================================
 def normalize(val):
@@ -1107,7 +1125,7 @@ def main():
                     
                     all_codes_set = set(df_region['Code'].unique())
                     
-                    # สร้างกลุ่มสาขาแบบ Union-Find (ตามลำดับ: Booking → ระยะทาง)
+                    # สร้างกลุ่มสาขาแบบ Union-Find (ตามลำดับ: Booking → ตำบล → อำเภอ → จังหวัด)
                     # Step 1: สร้างกลุ่มจาก Booking ก่อน
                     booking_groups = {}
                     for _, row in df_region.iterrows():
@@ -1117,56 +1135,58 @@ def main():
                         # หาสาขาที่อยู่ Booking เดียวกัน
                         paired = find_paired_branches(code, code_province, df_region)
                         
-                        # เก็บกลุ่มพร้อมพิกัด
+                        # เก็บกลุ่มพร้อมข้อมูลจาก Master
                         group_key = tuple(sorted({code} | paired))
                         if group_key not in booking_groups:
-                            # เก็บพิกัดและจังหวัดของแต่ละสาขา
+                            # ดึงข้อมูลจาก Master Data
                             locations = {}
                             for c in group_key:
-                                c_row = df_region[df_region['Code'] == c].iloc[0] if len(df_region[df_region['Code'] == c]) > 0 else None
-                                if c_row is not None:
+                                master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == c]
+                                if len(master_row) > 0:
+                                    master_row = master_row.iloc[0]
                                     locations[c] = {
-                                        'lat': c_row.get('Latitude', 0) if 'Latitude' in df_region.columns else 0,
-                                        'lon': c_row.get('Longitude', 0) if 'Longitude' in df_region.columns else 0,
-                                        'province': c_row.get('Province', 'UNKNOWN')
+                                        'subdistrict': master_row.get('ตำบล', ''),
+                                        'district': master_row.get('อำเภอ', ''),
+                                        'province': master_row.get('จังหวัด', 'UNKNOWN'),
+                                        'lat': master_row.get('ละติจูด', 0),
+                                        'lon': master_row.get('ลองติจูด', 0)
                                     }
+                                else:
+                                    # ถ้าไม่มีใน Master ใช้จากไฟล์เดิม
+                                    c_row = df_region[df_region['Code'] == c].iloc[0] if len(df_region[df_region['Code'] == c]) > 0 else None
+                                    if c_row is not None:
+                                        locations[c] = {
+                                            'subdistrict': '',
+                                            'district': '',
+                                            'province': c_row.get('Province', 'UNKNOWN'),
+                                            'lat': 0,
+                                            'lon': 0
+                                        }
                             booking_groups[group_key] = locations
                     
-                    # Step 2: รวมกลุ่มที่อยู่ใกล้กัน (ตำบล → อำเภอ → จังหวัด)
-                    def calculate_distance(loc1, loc2):
-                        """คำนวณระยะทางระหว่าง 2 จุด (กม.)"""
-                        if loc1['lat'] == 0 or loc2['lat'] == 0:
-                            return 999999  # ไม่มีพิกัด
-                        import math
-                        lat1, lon1 = math.radians(loc1['lat']), math.radians(loc1['lon'])
-                        lat2, lon2 = math.radians(loc2['lat']), math.radians(loc2['lon'])
-                        dlat = lat2 - lat1
-                        dlon = lon2 - lon1
-                        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
-                        c = 2 * math.asin(math.sqrt(a))
-                        return 6371 * c
-                    
+                    # Step 2: รวมกลุ่มตามลำดับ ตำบล → อำเภอ → จังหวัด
                     def groups_can_merge(locs1, locs2):
-                        """เช็คว่า 2 กลุ่มควรรวมกันไหม"""
-                        # เช็คระยะทางระหว่างสาขาในแต่ละกลุ่ม
-                        for code1, loc1 in locs1.items():
-                            for code2, loc2 in locs2.items():
-                                dist = calculate_distance(loc1, loc2)
-                                # ใกล้มาก (0-5 กม.) = ตำบลเดียวกัน
-                                if dist <= 5:
-                                    return True, 'ตำบล'
+                        """เช็คว่า 2 กลุ่มควรรวมกันไหม (ตามลำดับความละเอียด)"""
+                        # 1. เช็คตำบลเดียวกัน (ต้องมีข้อมูลตำบล)
+                        subdistricts1 = set(loc.get('subdistrict', '') for loc in locs1.values() if loc.get('subdistrict', ''))
+                        subdistricts2 = set(loc.get('subdistrict', '') for loc in locs2.values() if loc.get('subdistrict', ''))
+                        if subdistricts1 and subdistricts2 and (subdistricts1 & subdistricts2):
+                            return True, 'ตำบล'
                         
-                        # เช็คอำเภอ (5-20 กม.)
-                        for code1, loc1 in locs1.items():
-                            for code2, loc2 in locs2.items():
-                                dist = calculate_distance(loc1, loc2)
-                                if dist <= 20 and loc1['province'] == loc2['province']:
-                                    return True, 'อำเภอ'
+                        # 2. เช็คอำเภอเดียวกัน (ต้องมีข้อมูลอำเภอและจังหวัดเดียวกัน)
+                        districts1 = {(loc.get('district', ''), loc.get('province', '')) for loc in locs1.values() if loc.get('district', '')}
+                        districts2 = {(loc.get('district', ''), loc.get('province', '')) for loc in locs2.values() if loc.get('district', '')}
+                        if districts1 and districts2:
+                            # เช็คว่ามีอำเภอและจังหวัดตรงกัน
+                            for d1, p1 in districts1:
+                                for d2, p2 in districts2:
+                                    if d1 == d2 and p1 == p2 and p1:
+                                        return True, 'อำเภอ'
                         
-                        # เช็คจังหวัด (20-50 กม.)
-                        provinces1 = set(loc['province'] for loc in locs1.values())
-                        provinces2 = set(loc['province'] for loc in locs2.values())
-                        if provinces1 & provinces2:  # มีจังหวัดร่วมกัน
+                        # 3. เช็คจังหวัดเดียวกัน
+                        provinces1 = set(loc.get('province', '') for loc in locs1.values() if loc.get('province', ''))
+                        provinces2 = set(loc.get('province', '') for loc in locs2.values() if loc.get('province', ''))
+                        if provinces1 & provinces2:
                             return True, 'จังหวัด'
                         
                         return False, None
