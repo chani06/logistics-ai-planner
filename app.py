@@ -46,17 +46,20 @@ DISTANCE_REQUIRE_6W = 100  # ถ้าห่างจาก DC เกิน 100 
 # ==========================================
 # LOAD MASTER DATA
 # ==========================================
-@st.cache_data
+@st.cache_data(ttl=3600)  # Cache 1 ชั่วโมง
 def load_master_data():
-    """โหลดไฟล์ Master สถานที่ส่ง"""
+    """โหลดไฟล์ Master สถานที่ส่ง (Optimized)"""
     try:
-        df_master = pd.read_excel('Dc/Master สถานที่ส่ง.xlsx')
-        # ทำความสะอาด Plan Code
+        # โหลดเฉพาะคอลัมน์ที่จำเป็น
+        usecols = ['Plan Code', 'ตำบล', 'อำเภอ', 'จังหวัด', 'ละติจูด', 'ลองติจูด']
+        df_master = pd.read_excel('Dc/Master สถานที่ส่ง.xlsx', usecols=usecols)
+        # ทำความสะอาด Plan Code (vectorized)
         if 'Plan Code' in df_master.columns:
-            df_master['Plan Code'] = df_master['Plan Code'].apply(lambda x: str(x).strip().upper() if pd.notna(x) else '')
+            df_master['Plan Code'] = df_master['Plan Code'].astype(str).str.strip().str.upper()
+        # สร้าง dict สำหรับค้นหาเร็ว
+        df_master = df_master[df_master['Plan Code'] != '']
         return df_master
     except FileNotFoundError:
-        # ไม่มีไฟล์ Master - ใช้งานได้ปกติแต่ไม่มีข้อมูลตำบล/อำเภอ
         return pd.DataFrame()
     except Exception as e:
         st.warning(f"ไม่สามารถโหลดไฟล์ Master: {e} (จะใช้ข้อมูลจากไฟล์อัปโหลดแทน)")
@@ -65,9 +68,9 @@ def load_master_data():
 # โหลด Master Data
 MASTER_DATA = load_master_data()
 
-@st.cache_data
+@st.cache_data(ttl=3600)  # Cache 1 ชั่วโมง
 def load_booking_history_restrictions():
-    """โหลดประวัติการจัดส่งจาก Booking History - ข้อมูลจริง 3,053 booking"""
+    """โหลดประวัติการจัดส่งจาก Booking History - ข้อมูลจริง 3,053 booking (Optimized)"""
     try:
         # ลองหาไฟล์ Booking History (อาจมีชื่อหลายแบบ)
         possible_files = [
@@ -175,9 +178,9 @@ def load_learned_restrictions_fallback():
         }
     }
 
-@st.cache_data
+@st.cache_data(ttl=3600)  # Cache 1 ชั่วโมง
 def load_punthai_reference():
-    """โหลดไฟล์ Punthai Maxmart เพื่อเรียนรู้หลักการจัดทริป (Location patterns)"""
+    """โหลดไฟล์ Punthai Maxmart เพื่อเรียนรู้หลักการจัดทริป (Location patterns - Optimized)"""
     try:
         file_path = 'Dc/แผนงาน Punthai Maxmart รอบสั่ง 24หยิบ 25พฤศจิกายน 2568 To.เฟิ(1) - สำเนา.xlsx'
         df = pd.read_excel(file_path, sheet_name='2.Punthai', header=1)
