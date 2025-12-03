@@ -619,6 +619,33 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     
     return distance
 
+def get_region_type(province):
+    """
+    กำหนดประเภทพื้นที่และรถที่เหมาะสม
+    
+    Returns:
+        str: 'nearby' (ใกล้ - ใช้ 4W/JB), 'far' (ไกล - ใช้ 6W), 'unknown'
+    """
+    if pd.isna(province):
+        return 'unknown'
+    
+    prov = str(province).strip()
+    
+    # กรุงเทพ + ปริมณฑล + ภาคกลาง = ใกล้ → ใช้ 4W/JB
+    nearby_provinces = [
+        'กรุงเทพมหานคร', 'กรุงเทพ',
+        'นครปฐม', 'นนทบุรี', 'ปทุมธานี', 'สมุทรปราการ', 'สมุทรสาคร', 'ฉะเชิงเทรา',
+        'ชัยนาท', 'พระนครศรีอยุธยา', 'ลพบุรี', 'สระบุรี', 'สิงห์บุรี', 'อ่างทอง', 'อยุธยา',
+        'สมุทรสงคราม', 'สุพรรณบุรี', 'นครนายก'
+    ]
+    
+    for nearby in nearby_provinces:
+        if nearby in prov:
+            return 'nearby'
+    
+    # จังหวัดอื่นๆ = ไกล → ใช้ 6W
+    return 'far'
+
 def is_nearby_province(prov1, prov2):
     """เช็คว่าจังหวัดใกล้เคียงกันหรือไม่ (จากไฟล์ประวัติ)"""
     if pd.isna(prov1) or pd.isna(prov2):
@@ -1687,17 +1714,29 @@ def predict_trips(test_df, model_data):
     if merge_count > 0:
         st.success(f"✅ Phase 1: รวมทริปสำเร็จ {merge_count} ครั้ง")
     
-    # 🎯 Phase 2: ปรับขนาดรถสำหรับทริปเล็กที่เหลือ
+    # 🎯 Phase 2: ปรับขนาดรถตามพื้นที่และประสิทธิภาพ
     st.text("Phase 2: ปรับขนาดรถ...")
     downsize_count = 0
+    region_changes = {'nearby_6w_to_jb': 0, 'far_keep_6w': 0, 'other': 0}
     
     # เก็บข้อมูลทริปที่เหลือ
-    remaining_trips = []
     for trip_num in test_df['Trip'].unique():
         trip_data = test_df[test_df['Trip'] == trip_num]
         branch_count = len(trip_data)
         total_w = trip_data['Weight'].sum()
         total_c = trip_data['Cube'].sum()
+        trip_codes = set(trip_data['Code'].values)
+        
+        # เช็คว่าทริปนี้อยู่พื้นที่ใกล้หรือไกล
+        provinces = set()
+        for code in trip_codes:
+            prov = get_province(code)
+            if prov != 'UNKNOWN':
+                provinces.add(prov)
+        
+        # ถ้าทุกจังหวัดในทริปเป็นพื้นที่ใกล้ → ไม่ควรใช้ 6W
+        all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
+        has_far = any(get_region_type(p) == 'far' for p in provinces) if provinces else True
         
         # คำนวณ % การใช้รถแต่ละประเภท
         util_4w = max((total_w / LIMITS['4W']['max_w']) * 100, 
@@ -1708,25 +1747,39 @@ def predict_trips(test_df, model_data):
                       (total_c / LIMITS['6W']['max_c']) * 100)
         
         # ตรวจสอบข้อจำกัดสาขา
-        trip_codes = set(trip_data['Code'].values)
         max_allowed = get_max_vehicle_for_trip(trip_codes)
         
-        # เลือกรถที่เหมาะสม
+        # 🎯 กลยุทธ์เลือกรถ (ปรับตามพื้นที่)
         recommended = None
+        
+        # 1. เช็ค 4W ก่อน (ถ้าเหมาะสม)
         if max_allowed == '4W' or (util_4w <= 105 and total_w <= LIMITS['4W']['max_w'] * BUFFER and 
                                     total_c <= LIMITS['4W']['max_c'] * BUFFER):
             if util_4w >= 50:  # ใช้ 4W ถ้าเต็มกว่า 50%
                 recommended = '4W'
         
-        if not recommended:
-            if max_allowed in ['4W', 'JB'] and (util_jb <= 105 and 
-                                                  total_w <= LIMITS['JB']['max_w'] * BUFFER and
-                                                  total_c <= LIMITS['JB']['max_c'] * BUFFER):
-                if util_jb >= 50:  # ใช้ JB ถ้าเต็มกว่า 50%
+        # 2. เช็ค JB
+        if not recommended and max_allowed in ['4W', 'JB']:
+            if (util_jb <= 105 and total_w <= LIMITS['JB']['max_w'] * BUFFER and
+                total_c <= LIMITS['JB']['max_c'] * BUFFER):
+                # 🎯 พื้นที่ใกล้ → ใช้ JB ถ้าเต็ม ≥40% (ยืดหยุ่นกว่า)
+                # พื้นที่ไกล → ใช้ JB ถ้าเต็ม ≥50%
+                min_util = 40 if all_nearby else 50
+                if util_jb >= min_util:
                     recommended = 'JB'
         
+        # 3. เช็ค 6W
         if not recommended:
-            recommended = '6W'  # Default
+            # 🚨 กรุงเทพ+ปริมณฑล+กลาง → พยายามหลีกเลี่ยง 6W
+            if all_nearby and util_jb <= 110:  # ถ้า JB เกินนิดหน่อย ยอมใช้แทน 6W
+                recommended = 'JB'
+                region_changes['nearby_6w_to_jb'] += 1
+            else:
+                recommended = '6W'
+                if has_far:
+                    region_changes['far_keep_6w'] += 1
+                else:
+                    region_changes['other'] += 1
         
         # บันทึกการปรับขนาด
         original_vehicle = trip_recommended_vehicles.get(trip_num, '6W')
@@ -1734,8 +1787,13 @@ def predict_trips(test_df, model_data):
             trip_recommended_vehicles[trip_num] = recommended
             downsize_count += 1
     
+    # แสดงผล Phase 2
     if downsize_count > 0:
         st.success(f"✅ Phase 2: ปรับขนาดรถสำเร็จ {downsize_count} ทริป")
+        if region_changes['nearby_6w_to_jb'] > 0:
+            st.info(f"   🎯 ปรับ 6W → JB ในพื้นที่ใกล้: {region_changes['nearby_6w_to_jb']} ทริป")
+        if region_changes['far_keep_6w'] > 0:
+            st.info(f"   🚛 คง 6W ในพื้นที่ไกล: {region_changes['far_keep_6w']} ทริป")
     
     # สรุปผลและแนะนำรถ
     summary_data = []
