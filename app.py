@@ -516,10 +516,18 @@ def is_similar_name(name1, name2):
             return "", ""
         s = str(name).strip().upper()
         
-        # ลบ prefix/suffix ที่พบบ่อย
-        prefixes = ['PTC-MRT-', 'PTC-', 'PUN-', 'MAXMART', 'FUTURE', 'ฟิวเจอร์', 'CW', 'FC']
+        # ลบ prefix/suffix ที่พบบ่อย (เรียงจากยาวไปสั้น)
+        prefixes = ['PTC-MRT-', 'FC PTF ', 'PTC-', 'PTC ', 'PUN-', 'PTF ', 
+                   'MAXMART', 'FUTURE', 'ฟิวเจอร์', 'CW', 'FC', 'NW', 'MI', 'PI']
         for prefix in prefixes:
-            s = s.replace(prefix, '')
+            if s.startswith(prefix):
+                s = s[len(prefix):].strip()
+                break  # ลบแค่ prefix แรก
+        
+        # ลบตัวอักษรเดี่ยวที่ขึ้นต้น (M, P, N) ถ้าตามด้วยตัวเลข
+        import re
+        if re.match(r'^[MPN]\d', s):
+            s = s[1:]
         
         # แยกภาษาไทยและอังกฤษ
         thai_chars = ''.join([c for c in s if '\u0e01' <= c <= '\u0e5b'])
@@ -1585,8 +1593,18 @@ def predict_trips(test_df, model_data):
                             if distance > max_distance:
                                 max_distance = distance
                     
-                    # ถ้าห่างกันเกิน 50 กม. = ไม่รวม (แม้จังหวัดเดียวกัน)
-                    if max_distance > 50:
+                    # ปรับระยะทางตามจำนวนสาขา
+                    # ทริปเล็ก (≤4) → ยืดหยุ่นกว่า (80km)
+                    # ทริปกลาง (5-8) → ปานกลาง (60km)
+                    # ทริปใหญ่ (≥9) → เข้มงวด (50km)
+                    if trip1['count'] <= 4 or trip2['count'] <= 4:
+                        max_allowed_distance = 80  # ทริปเล็ก
+                    elif trip1['count'] <= 8 or trip2['count'] <= 8:
+                        max_allowed_distance = 60  # ทริปกลาง
+                    else:
+                        max_allowed_distance = 50  # ทริปใหญ่
+                    
+                    if max_distance > max_allowed_distance:
                         can_merge = False
                 
                 if not can_merge:
@@ -1840,17 +1858,42 @@ def predict_trips(test_df, model_data):
     
     test_df['Truck'] = test_df['Trip'].map(trip_truck_map)
     
-    # เพิ่มคอลัมน์ระยะทางจาก DC และเรียงลำดับ
+    # เพิ่มคอลัมน์ระยะทางระหว่างสาขาในทริป และเรียงลำดับ
     def add_distance_and_sort(df):
-        # เพิ่มคอลัมน์ระยะทาง
-        distances = []
-        for _, row in df.iterrows():
-            _, distance = get_required_vehicle_by_distance(row['Code'])
-            distances.append(distance)
-        df['Distance_from_DC'] = distances
+        # คำนวณระยะทาง max ภายในแต่ละทริป
+        trip_distances = {}
+        for trip_num in df['Trip'].unique():
+            trip_codes = df[df['Trip'] == trip_num]['Code'].tolist()
+            max_dist = 0
+            
+            # หาระยะทางสูงสุดระหว่างสาขาในทริป
+            for i in range(len(trip_codes)):
+                for j in range(i + 1, len(trip_codes)):
+                    code1, code2 = trip_codes[i], trip_codes[j]
+                    
+                    # ดึงพิกัด
+                    if not MASTER_DATA.empty:
+                        m1 = MASTER_DATA[MASTER_DATA['Plan Code'] == code1]
+                        m2 = MASTER_DATA[MASTER_DATA['Plan Code'] == code2]
+                        
+                        if len(m1) > 0 and len(m2) > 0:
+                            lat1 = m1.iloc[0].get('ละติจูด', 0)
+                            lon1 = m1.iloc[0].get('ลองติจูด', 0)
+                            lat2 = m2.iloc[0].get('ละติจูด', 0)
+                            lon2 = m2.iloc[0].get('ลองติจูด', 0)
+                            
+                            if lat1 and lon1 and lat2 and lon2:
+                                dist = haversine_distance(lat1, lon1, lat2, lon2)
+                                if dist > max_dist:
+                                    max_dist = dist
+            
+            trip_distances[trip_num] = round(max_dist, 2)
         
-        # เรียงลำดับภายในแต่ละทริป: Trip → Distance
-        df = df.sort_values(['Trip', 'Distance_from_DC'], ascending=[True, True])
+        # เพิ่มคอลัมน์ระยะทาง max ในทริป
+        df['Max_Distance_in_Trip'] = df['Trip'].map(trip_distances)
+        
+        # เรียงลำดับภายในแต่ละทริป: Trip → Weight (มากไปน้อย)
+        df = df.sort_values(['Trip', 'Weight'], ascending=[True, False])
         return df
     
     test_df = add_distance_and_sort(test_df)
