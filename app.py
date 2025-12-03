@@ -1942,8 +1942,8 @@ def predict_trips(test_df, model_data):
             
             distance = haversine_distance(branch_lat, branch_lon, centroid_lat, centroid_lon)
             
-            # ถ้าไกลเกิน 30km → ข้าม
-            if distance > 30:
+            # ถ้าไกลเกิน 50km → ข้าม (เพิ่มจาก 30km)
+            if distance > 50:
                 continue
             
             # เช็คว่าเพิ่มแล้วเกินไหม
@@ -1953,13 +1953,13 @@ def predict_trips(test_df, model_data):
             new_c = trip_c + branch_c
             new_count = len(trip_data) + 1
             
-            # เช็คว่าใส่ได้ไหม (ยอมให้เกิน 120%)
+            # เช็คว่าใส่ได้ไหม (ยอมให้เกิน 125% สำหรับสาขาเดียว)
             new_util = max(
                 (new_w / LIMITS['6W']['max_w']) * 100,
                 (new_c / LIMITS['6W']['max_c']) * 100
             )
             
-            if new_util <= 120 and new_count <= MAX_BRANCHES_PER_TRIP:
+            if new_util <= 125 and new_count <= MAX_BRANCHES_PER_TRIP:
                 # เช็คข้อจำกัดสาขา
                 trip_codes = set(trip_data['Code'].values) | {branch_code}
                 max_allowed = get_max_vehicle_for_trip(trip_codes)
@@ -1982,7 +1982,7 @@ def predict_trips(test_df, model_data):
     pickup_count = 0
     MAX_DETOUR_KM_LOCAL = MAX_DETOUR_KM  # ใช้ค่าจาก config (12 กม.)
     
-    # วนลูปทุกทริปที่ยัง < 100% utilization
+    # วนลูปทุกทริปที่ยังไม่เต็ม (เป้าหมาย 95%)
     for trip_num in sorted(test_df['Trip'].unique()):
         trip_data = test_df[test_df['Trip'] == trip_num]
         current_w = trip_data['Weight'].sum()
@@ -1995,9 +1995,12 @@ def predict_trips(test_df, model_data):
             (current_c / LIMITS['6W']['max_c']) * 100
         )
         
-        # ถ้าเต็ม ≥120% หรือมีสาขาเยอะแล้ว → ข้าม
-        # เปลี่ยนจาก 95% เป็น 120% เพื่อให้สามารถเก็บสาขาได้มากขึ้น
-        if current_util >= 120 or current_count >= MAX_BRANCHES_PER_TRIP:
+        # 🎯 เป้าหมาย: เก็บสาขาจนถึง TARGET_UTIL
+        TARGET_UTIL = 95  # เป้าหมาย utilization
+        MAX_PICKUP_UTIL = 125  # สูงสุดที่ยอมเก็บได้
+        
+        # ถ้าเกิน 125% หรือมีสาขาเยอะแล้ว → ข้าม
+        if current_util >= MAX_PICKUP_UTIL or current_count >= MAX_BRANCHES_PER_TRIP:
             continue
         
         # หาจังหวัดของทริปปัจจุบัน
