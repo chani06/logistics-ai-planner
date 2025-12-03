@@ -665,7 +665,8 @@ def predict_trips(test_df, model_data):
                 suggested = trip_truck_map_file[trip_num]
                 source = "📋 ไฟล์"
             else:
-                suggested = suggest_truck(total_w, total_c)
+                trip_codes = trip_data['Code'].unique()
+                suggested = suggest_truck(total_w, total_c, '6W', trip_codes)
                 source = "🤖 AI"
             
             # คำนวณ % การใช้รถ
