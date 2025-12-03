@@ -116,7 +116,7 @@ def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None):
     3. ใช้งานได้มากที่สุด (ใกล้ 100% ที่สุด)
     """
     # เช็คว่ามีสาขาที่ต้องใช้ 6W เพราะอยู่ไกลหรือไม่
-    if trip_codes:
+    if trip_codes is not None and len(trip_codes) > 0:
         for code in trip_codes:
             required_vehicle, distance = get_required_vehicle_by_distance(code)
             if required_vehicle == '6W':
