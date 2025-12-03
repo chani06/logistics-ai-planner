@@ -1395,18 +1395,36 @@ def main():
                     }
                     
                     def get_region(province):
-                        if pd.isna(province):
+                        if pd.isna(province) or not province or str(province).strip() in ['', 'nan', 'UNKNOWN']:
                             return 'ไม่ระบุ'
                         for region, provinces in region_groups.items():
                             if any(p in str(province) for p in provinces):
                                 return region
                         return 'อื่นๆ'
                     
-                    # เพิ่มคอลัมน์ภาค
-                    if 'Province' in df_region.columns:
-                        df_region['Region'] = df_region['Province'].apply(get_region)
-                    else:
-                        df_region['Region'] = 'ไม่ระบุ'
+                    # เพิ่มคอลัมน์ภาค - ดึงจังหวัดจาก Master ถ้าไม่มี
+                    if 'Province' not in df_region.columns or df_region['Province'].isna().any():
+                        # ดึงจังหวัดจาก Master
+                        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                            province_map = {}
+                            for _, row in MASTER_DATA.iterrows():
+                                code = row.get('Plan Code', '')
+                                province = row.get('จังหวัด', '')
+                                if code and province:
+                                    province_map[code] = province
+                            
+                            # ใส่จังหวัดให้แต่ละสาขา
+                            if 'Province' not in df_region.columns:
+                                df_region['Province'] = df_region['Code'].map(province_map)
+                            else:
+                                # เติมเฉพาะที่เป็น NaN
+                                df_region['Province'] = df_region.apply(
+                                    lambda row: province_map.get(row['Code'], row.get('Province', 'UNKNOWN')) 
+                                    if pd.isna(row.get('Province')) else row['Province'],
+                                    axis=1
+                                )
+                    
+                    df_region['Region'] = df_region['Province'].apply(get_region)
                     
                     # หากลุ่มสาขา (ใช้ Booking No. เป็นหลัก)
                     def find_paired_branches(code, code_province, df_data):
