@@ -1451,6 +1451,20 @@ def predict_trips(test_df, model_data):
                     
                     return 0
                 
+                # 🚨 เช็คข้อจำกัดรถของสาขาใหม่ก่อน
+                code_max_vehicle = get_max_vehicle_for_branch(code)
+                current_trip_with_new = current_trip + [code]
+                trip_max_vehicle = get_max_vehicle_for_trip(set(current_trip_with_new))
+                
+                # ถ้าสาขาใหม่จำกัดรถเล็กกว่ารถปัจจุบัน → ห้ามเพิ่ม
+                vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
+                current_priority = vehicle_priority.get(vehicle_type, 3)
+                new_priority = vehicle_priority.get(trip_max_vehicle, 3)
+                
+                if new_priority < current_priority:
+                    # สาขาใหม่จำกัดรถเล็กกว่า → ข้ามสาขานี้
+                    continue
+                
                 # เช็คว่าเกินขีดจำกัดหรือไม่
                 can_fit = trip_weight <= max_w and trip_cube <= max_c
                 
@@ -1921,7 +1935,7 @@ def predict_trips(test_df, model_data):
         # ตรวจสอบข้อจำกัดสาขา
         max_allowed = get_max_vehicle_for_trip(trip_codes)
         
-        # 🎯 กลยุทธ์เลือกรถ (เน้น Cube ต้องเต็ม)
+        # 🎯 กลยุทธ์เลือกรถ (เน้น Cube ต้องเต็ม + เคารพข้อจำกัดสาขา)
         recommended = None
         cube_util_4w = (total_c / LIMITS['4W']['max_c']) * 100
         cube_util_jb = (total_c / LIMITS['JB']['max_c']) * 100
@@ -1935,28 +1949,17 @@ def predict_trips(test_df, model_data):
             recommended = '6W'
             region_changes['far_keep_6w'] += 1
         else:
-            # 🎯 เลือกรถตาม Cube (เป้าหมาย: Cube เต็ม 80-120%, น้ำหนักไม่เกิน 130%)
+            # 🎯 เลือกรถตาม Cube + ข้อจำกัดสาขา (เป้าหมาย: Cube เต็ม 95-120%, น้ำหนักไม่เกิน 130%)
             
-            # 1. ลอง 4W ก่อน
+            # 1. ลอง 4W ก่อน (เฉพาะเมื่อ max_allowed = 4W)
             if max_allowed == '4W':
-                # 4W เกิน Cube > 100% (>5m³) → อัปเกรดเป็น JB
-                if cube_util_4w > 100 and max_allowed in ['4W', 'JB']:
-                    recommended = 'JB'
-                # 4W Cube เต็มดี (≥95%) และน้ำหนักไม่เกินมาก → ใช้ 4W
-                elif cube_util_4w >= 95 and weight_util_4w <= 130:
-                    recommended = '4W'
-                # 4W Cube เกินแต่น้ำหนักตาม → อัปเกรด JB
-                elif cube_util_4w > 100:
-                    recommended = 'JB'
-                # 4W ไม่เต็ม → ใช้ 4W ไปก่อน
-                else:
-                    recommended = '4W'
+                recommended = '4W'  # บังคับใช้ 4W เพราะมีสาขาจำกัด
             
-            # 2. ลอง JB
-            if not recommended and max_allowed in ['4W', 'JB']:
-                # JB Cube เกิน 100% (>7m³) → อัปเกรดเป็น 6W
-                if cube_util_jb > 100:
-                    recommended = '6W'
+            # 2. ลอง JB (เมื่อ max_allowed = 4W หรือ JB)
+            elif max_allowed in ['4W', 'JB']:
+                # JB Cube เกิน 100% (>7m³) แต่ max_allowed ไม่ให้ใช้ 6W → ยังใช้ JB
+                if cube_util_jb > 100 and max_allowed == 'JB':
+                    recommended = 'JB'  # บังคับใช้ JB แม้เกิน
                 # JB Cube เต็มดี (≥95%) และน้ำหนักไม่เกินมาก → ใช้ JB
                 elif cube_util_jb >= 95 and weight_util_jb <= 130:
                     recommended = 'JB'
@@ -1964,8 +1967,8 @@ def predict_trips(test_df, model_data):
                 else:
                     recommended = 'JB'
             
-            # 3. ใช้ 6W
-            if not recommended:
+            # 3. ใช้ 6W (เฉพาะเมื่อไม่มีข้อจำกัด)
+            else:
                 # กรุงเทพ+ปริมณฑล+กลาง → พยายามหลีกเลี่ยง 6W ถ้า JB พอใช้ได้
                 if all_nearby and cube_util_jb <= 120 and weight_util_jb <= 130:
                     recommended = 'JB'
