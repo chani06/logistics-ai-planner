@@ -139,39 +139,69 @@ def get_most_used_vehicle_for_branch(code, branch_vehicles):
     return max(vehicle_history, key=vehicle_history.get)
 
 def is_similar_name(name1, name2):
-    """เช็คว่าชื่อสาขาคล้ายกันหรือไม่ (เช่น นครราชสีมา1, นครราชสีมา2)"""
+    """เช็คว่าชื่อสาขาคล้ายกันหรือไม่ - รองรับทั้งไทยและอังกฤษ"""
     def clean_name(name):
         if pd.isna(name) or name is None:
-            return ""
+            return "", ""
         s = str(name).strip().upper()
-        # ลบ prefix ที่พบบ่อย
-        prefixes = ['PTC-MRT-', 'PTC-', 'PUN-', 'FC', 'MAXMART', 'MaxMart']
+        
+        # ลบ prefix/suffix ที่พบบ่อย
+        prefixes = ['PTC-MRT-', 'PTC-', 'PUN-', 'MAXMART', 'FUTURE', 'ฟิวเจอร์', 'CW', 'FC']
         for prefix in prefixes:
-            s = s.replace(prefix.upper(), '')
-        # เอาเฉพาะตัวอักษรภาษาไทยและภาษาอังกฤษ (ไม่รวมตัวเลข)
-        cleaned = ''.join([c for c in s if c.isalpha()])
-        return cleaned
+            s = s.replace(prefix, '')
+        
+        # แยกภาษาไทยและอังกฤษ
+        thai_chars = ''.join([c for c in s if '\u0e01' <= c <= '\u0e5b'])
+        eng_chars = ''.join([c for c in s if c.isalpha() and c.isascii()])
+        
+        return thai_chars, eng_chars
     
-    clean1 = clean_name(name1)
-    clean2 = clean_name(name2)
+    thai1, eng1 = clean_name(name1)
+    thai2, eng2 = clean_name(name2)
     
     # ต้องมีความยาวพอสมควร
-    if len(clean1) < 3 or len(clean2) < 3:
+    if len(thai1) < 3 and len(eng1) < 3:
+        return False
+    if len(thai2) < 3 and len(eng2) < 3:
         return False
     
-    # เช็คว่ามีส่วนที่เหมือนกันหรือไม่
-    shorter = min(clean1, clean2, key=len)
-    longer = max(clean1, clean2, key=len)
+    # เช็คภาษาไทย
+    if thai1 and thai2:
+        shorter_thai = min(thai1, thai2, key=len)
+        longer_thai = max(thai1, thai2, key=len)
+        if len(shorter_thai) >= 3 and shorter_thai in longer_thai:
+            return True
+        # ความคล้าย 80%+
+        if len(shorter_thai) >= 5:
+            common = sum(1 for c in shorter_thai if c in longer_thai)
+            if common / len(shorter_thai) >= 0.8:
+                return True
     
-    # ถ้าชื่อสั้นอยู่ในชื่อยาว หรือ ตรงกัน 80%+ = คล้ายกัน
-    if shorter in longer:
-        return True
+    # เช็คภาษาอังกฤษ
+    if eng1 and eng2:
+        shorter_eng = min(eng1, eng2, key=len)
+        longer_eng = max(eng1, eng2, key=len)
+        if len(shorter_eng) >= 3 and shorter_eng in longer_eng:
+            return True
+        # ความคล้าย 80%+
+        if len(shorter_eng) >= 5:
+            common = sum(1 for c in shorter_eng if c in longer_eng)
+            if common / len(shorter_eng) >= 0.8:
+                return True
     
-    # นับตัวอักษรที่เหมือนกัน
-    matches = sum(1 for a, b in zip(clean1, clean2) if a == b)
-    similarity = matches / max(len(clean1), len(clean2))
+    # เช็คคำสำคัญระหว่างไทย-อังกฤษ (เช่น Future = ฟิวเจอร์, Rangsit = รังสิต)
+    thai_eng_map = {
+        'RANGSIT': 'รังสิต',
+        'FUTURE': 'ฟิวเจอร',
+        'PARK': 'ปารค',
+        'TRIANGLE': 'ไตรแองเกิล',
+    }
     
-    return similarity >= 0.8  # คล้ายกัน 80% ขึ้นไป
+    for eng_word, thai_word in thai_eng_map.items():
+        if (eng_word in eng1 and thai_word in thai2) or (eng_word in eng2 and thai_word in thai1):
+            return True
+    
+    return False
 
 def is_nearby_province(prov1, prov2):
     """เช็คว่าจังหวัดใกล้เคียงกันหรือไม่ (จากไฟล์ประวัติ)"""
@@ -562,15 +592,23 @@ def predict_trips(test_df, model_data):
         seed_province = get_province(seed_code)
         seed_name = test_df[test_df['Code'] == seed_code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
         
-        # จัดเรียง remaining โดยให้ชื่อคล้ายกันมาก่อน
+        # จัดเรียง remaining ตามลำดับ: ชื่อคล้ายกัน แล้วตามลำดับในไฟล์
+        code_to_index = {row['Code']: idx for idx, row in test_df.iterrows()} if 'Code' in test_df.columns else {}
+        
         def get_priority(code):
             code_name = test_df[test_df['Code'] == code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
+            code_index = code_to_index.get(code, 999999)
+            seed_index = code_to_index.get(seed_code, 0)
+            
             if is_similar_name(seed_name, code_name):
-                return 0  # ลำดับแรก - ชื่อคล้ายกัน
+                # ลำดับแรก - ชื่อคล้ายกัน + เรียงตามลำดับในไฟล์
+                return (0, abs(code_index - seed_index))
             pair = tuple(sorted([seed_code, code]))
             if pair in trip_pairs:
-                return 1  # ลำดับสอง - เคยไปด้วยกัน
-            return 2  # ลำดับสุดท้าย - อื่นๆ
+                # ลำดับสอง - เคยไปด้วยกัน
+                return (1, code_index)
+            # ลำดับสุดท้าย - อื่นๆ
+            return (2, code_index)
         
         remaining_sorted = sorted(remaining, key=get_priority)
         
