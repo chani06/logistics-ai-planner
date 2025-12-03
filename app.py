@@ -662,21 +662,44 @@ def predict_trips(test_df, model_data):
             code_name = test_df[test_df['Code'] == code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
             names_are_similar = is_similar_name(seed_name, code_name)
             
-            # กฎการเช็คจังหวัด - มีลำดับความสำคัญ:
+            # กฎการเช็คจังหวัด/พื้นที่ - มีลำดับความสำคัญ:
             # 1. ถ้ามีประวัติร่วมกัน → อนุญาตเสมอ (ไว้ใจประวัติ)
             # 2. ถ้าชื่อคล้ายกัน → อนุญาตเสมอ (แม้ต่างจังหวัดหรือไม่รู้จังหวัด)
-            # 3. ถ้าไม่มีทั้ง 2 → ใช้จังหวัดตัดสิน (ต้องเป็นจังหวัดเดียวกัน)
+            # 3. ถ้าไม่มีทั้ง 2 → ต้องเป็นจังหวัดเดียวกัน + อยู่ใกล้กัน (รัศมี 20 กม.)
             
             has_history = pair in trip_pairs
             
-            # ถ้าไม่มีประวัติและชื่อไม่คล้าย → ใช้จังหวัดตัดสิน
+            # ถ้าไม่มีประวัติและชื่อไม่คล้าย → เช็คเข้มงวด
             if not has_history and not names_are_similar:
+                # ต้องมีข้อมูลจังหวัด
                 if seed_province == 'UNKNOWN' or code_province == 'UNKNOWN':
-                    # ไม่มีข้อมูลจังหวัด = ข้าม (เพื่อความปลอดภัย)
                     continue
-                elif seed_province != code_province:
-                    # ต่างจังหวัด = ห้ามจับคู่
+                    
+                # ต้องเป็นจังหวัดเดียวกัน
+                if seed_province != code_province:
                     continue
+                
+                # เช็คระยะทาง (ถ้ามีพิกัด) - ต้องอยู่ใกล้กันภายใน 20 กม.
+                if 'Latitude' in test_df.columns and 'Longitude' in test_df.columns:
+                    seed_lat = test_df[test_df['Code'] == seed_code]['Latitude'].iloc[0] if len(test_df[test_df['Code'] == seed_code]) > 0 else 0
+                    seed_lon = test_df[test_df['Code'] == seed_code]['Longitude'].iloc[0] if len(test_df[test_df['Code'] == seed_code]) > 0 else 0
+                    code_lat = test_df[test_df['Code'] == code]['Latitude'].iloc[0] if len(test_df[test_df['Code'] == code]) > 0 else 0
+                    code_lon = test_df[test_df['Code'] == code]['Longitude'].iloc[0] if len(test_df[test_df['Code'] == code]) > 0 else 0
+                    
+                    # คำนวณระยะทาง (haversine formula)
+                    if seed_lat != 0 and seed_lon != 0 and code_lat != 0 and code_lon != 0:
+                        import math
+                        lat1, lon1 = math.radians(seed_lat), math.radians(seed_lon)
+                        lat2, lon2 = math.radians(code_lat), math.radians(code_lon)
+                        dlat = lat2 - lat1
+                        dlon = lon2 - lon1
+                        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+                        c = 2 * math.asin(math.sqrt(a))
+                        distance_km = 6371 * c  # รัศมีโลก
+                        
+                        # ถ้าห่างเกิน 20 กม. = ต่างพื้นที่ → ข้าม
+                        if distance_km > 20:
+                            continue
             
             # กฎ 1: ถ้าเคยไปด้วยกันในประวัติ = จัดเข้าทริปเดียวกัน + ใช้รถแบบเดิม
             if pair in trip_pairs:
