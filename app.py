@@ -1719,6 +1719,115 @@ def predict_trips(test_df, model_data):
     if merge_count > 0:
         st.success(f"✅ Phase 1: รวมทริปสำเร็จ {merge_count} ครั้ง")
     
+    # 🎯 Phase 1.5: เก็บสาขาที่อยู่ในเส้นทาง (Route Pickup Optimization)
+    st.text("Phase 1.5: เก็บสาขาที่อยู่ในเส้นทาง...")
+    pickup_count = 0
+    MAX_DETOUR_KM = 15  # ระยะเบี่ยงทางไม่เกิน 15 กม.
+    
+    # วนลูปทุกทริปที่ยัง < 100% utilization
+    for trip_num in sorted(test_df['Trip'].unique()):
+        trip_data = test_df[test_df['Trip'] == trip_num]
+        current_w = trip_data['Weight'].sum()
+        current_c = trip_data['Cube'].sum()
+        current_count = len(trip_data)
+        
+        # คำนวณ % การใช้รถปัจจุบัน (ใช้ 6W เป็นมาตรฐาน)
+        current_util = max(
+            (current_w / LIMITS['6W']['max_w']) * 100,
+            (current_c / LIMITS['6W']['max_c']) * 100
+        )
+        
+        # ถ้าเต็ม ≥95% หรือมีสาขาเยอะแล้ว → ข้าม
+        if current_util >= 95 or current_count >= MAX_BRANCHES_PER_TRIP:
+            continue
+        
+        # หาจังหวัดของทริปปัจจุบัน
+        trip_provinces = set()
+        trip_coords = []
+        for code in trip_data['Code'].values:
+            prov = get_province(code)
+            if prov != 'UNKNOWN':
+                trip_provinces.add(prov)
+            
+            # เก็บพิกัด
+            lat, lon = get_lat_lon(code)
+            if lat and lon:
+                trip_coords.append((lat, lon))
+        
+        # ถ้าไม่มีพิกัด → ข้าม
+        if not trip_coords:
+            continue
+        
+        # หาสาขาที่ยังไม่ได้จัดทริป (Trip = 0)
+        unassigned = test_df[test_df['Trip'] == 0]
+        
+        for idx, row in unassigned.iterrows():
+            branch_code = row['Code']
+            branch_w = row['Weight']
+            branch_c = row['Cube']
+            branch_prov = get_province(branch_code)
+            branch_lat, branch_lon = get_lat_lon(branch_code)
+            
+            # ถ้าไม่มีพิกัด → ข้าม
+            if not branch_lat or not branch_lon:
+                continue
+            
+            # เช็คว่าอยู่ในจังหวัดเดียวกันหรือใกล้เคียง
+            if branch_prov not in trip_provinces:
+                # เช็คระยะทางจากทุกสาขาในทริป
+                min_distance = float('inf')
+                for trip_lat, trip_lon in trip_coords:
+                    dist = haversine_distance(trip_lat, trip_lon, branch_lat, branch_lon)
+                    if dist < min_distance:
+                        min_distance = dist
+                
+                # ถ้าไม่ได้อยู่ในเส้นทาง (ไกลเกิน 15 กม. จากทุกสาขา) → ข้าม
+                if min_distance > MAX_DETOUR_KM:
+                    continue
+            
+            # คำนวณว่าเพิ่มสาขานี้แล้วเกินไหม
+            new_w = current_w + branch_w
+            new_c = current_c + branch_c
+            new_count = current_count + 1
+            
+            # คำนวณ % ใหม่
+            new_util = max(
+                (new_w / LIMITS['6W']['max_w']) * 100,
+                (new_c / LIMITS['6W']['max_c']) * 100
+            )
+            
+            # ถ้าเพิ่มแล้วไม่เกิน 105% และไม่เกิน MAX_BRANCHES_PER_TRIP → เพิ่มได้
+            if new_util <= 105 and new_count <= MAX_BRANCHES_PER_TRIP:
+                # เช็คข้อจำกัดสาขา
+                test_trip_codes = set(trip_data['Code'].values) | {branch_code}
+                max_allowed = get_max_vehicle_for_trip(test_trip_codes)
+                
+                # ถ้าสาขานี้จำกัดรถเล็กกว่ารถปัจจุบัน → ต้องเช็คว่าใส่ได้ไหม
+                # (ปล่อยให้ Phase 2 จัดการ)
+                
+                # เพิ่มสาขาเข้าทริป
+                test_df.loc[test_df['Code'] == branch_code, 'Trip'] = trip_num
+                
+                # อัปเดตข้อมูลปัจจุบัน
+                current_w = new_w
+                current_c = new_c
+                current_count = new_count
+                current_util = new_util
+                
+                # เพิ่มพิกัดใหม่
+                trip_coords.append((branch_lat, branch_lon))
+                if branch_prov != 'UNKNOWN':
+                    trip_provinces.add(branch_prov)
+                
+                pickup_count += 1
+                
+                # ถ้าเต็ม ≥95% แล้ว → หยุดเพิ่มสาขาในทริปนี้
+                if current_util >= 95 or current_count >= MAX_BRANCHES_PER_TRIP:
+                    break
+    
+    if pickup_count > 0:
+        st.success(f"✅ Phase 1.5: เก็บสาขาเพิ่มสำเร็จ {pickup_count} สาขา")
+    
     # 🎯 Phase 2: ปรับขนาดรถตามพื้นที่และประสิทธิภาพ
     st.text("Phase 2: ปรับขนาดรถ...")
     downsize_count = 0
