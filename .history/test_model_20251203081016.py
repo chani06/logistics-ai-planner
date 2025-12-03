@@ -277,13 +277,19 @@ def create_training_data(df):
     trip_vehicles = {}  # เก็บรถที่ใช้สำหรับแต่ละคู่ {pair: {'vehicle': '4W', 'count': 5}}
     
     # หาคู่ที่เคยไปด้วยกัน (Positive pairs) พร้อมเก็บข้อมูลรถ
-    # ใช้ Trip (ซึ่งอาจมาจาก Booking No)
-    if 'Trip' not in df.columns:
-        print("⚠️ ไม่พบคอลัมน์ Trip - ใช้เฉพาะข้อมูลสาขา")
-    
-    # จัดกลุ่มตาม Trip
+    # ใช้ทั้ง Trip และ Booking No (ถ้ามี)
+    groupby_cols = []
     if 'Trip' in df.columns:
-        for group_key, group in df.groupby('Trip'):
+        groupby_cols.append('Trip')
+    if 'Booking' in df.columns:
+        groupby_cols.append('Booking')
+    
+    if not groupby_cols:
+        print("⚠️ ไม่พบคอลัมน์ Trip หรือ Booking - ใช้เฉพาะข้อมูลสาขา")
+    
+    # จัดกลุ่มตาม Trip หรือ Booking
+    if groupby_cols:
+        for group_key, group in df.groupby(groupby_cols):
             codes = sorted(group['Code'].unique())
             
             # ดึงประเภทรถของกลุ่มนี้
