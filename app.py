@@ -941,13 +941,27 @@ def predict_trips(test_df, model_data):
             total_w = trip_data['Weight'].sum()
             total_c = trip_data['Cube'].sum()
             
-            # ใช้รถจากไฟล์
+            # ตรวจสอบข้อจำกัดของสาขาในทริป
+            trip_codes = trip_data['Code'].unique()
+            max_vehicles = []
+            for c in trip_codes:
+                max_vehicles.append(get_max_vehicle_for_branch(c))
+            
+            vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
+            min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles)
+            max_allowed_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(min_max_size, '6W')
+            
+            # ใช้รถจากไฟล์ แต่ต้องไม่เกินข้อจำกัดของสาขา
             if trip_num in trip_truck_map_file:
                 suggested = trip_truck_map_file[trip_num]
-                source = "📋 ไฟล์"
+                # ตรวจสอบว่ารถจากไฟล์ไม่เกินข้อจำกัดสาขา
+                if vehicle_sizes.get(suggested, 0) > min_max_size:
+                    suggested = max_allowed_vehicle
+                    source = f"📋 ไฟล์ → {max_allowed_vehicle} (จำกัดสาขา)"
+                else:
+                    source = "📋 ไฟล์"
             else:
-                trip_codes = trip_data['Code'].unique()
-                suggested = suggest_truck(total_w, total_c, '6W', trip_codes)
+                suggested = suggest_truck(total_w, total_c, max_allowed_vehicle, trip_codes)
                 source = "🤖 AI"
             
             # ตรวจสอบว่ารถที่เลือกใส่ของได้จริงหรือไม่ (ห้ามเกิน 105%)
@@ -1493,30 +1507,24 @@ def predict_trips(test_df, model_data):
         min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles)
         max_allowed_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(min_max_size, '6W')
         
-        # เช็คว่ามีสาขาที่ต้องใช้ 6W เพราะอยู่ไกลหรือไม่
-        must_use_6w = False
-        for code in trip_codes:
-            required_vehicle, distance = get_required_vehicle_by_distance(code)
-            if required_vehicle == '6W':
-                must_use_6w = True
-                break
-        
-        # เลือกรถ: ถ้ามีในประวัติใช้ตามประวัติ ไม่มีก็ auto-suggest
-        if must_use_6w:
-            suggested = '6W'
-            source = "📍 ระยะไกล"
-        elif trip_num in trip_recommended_vehicles:
+        # เลือกรถ: ลำดับความสำคัญ 1) ประวัติ (Booking/Punthai) 2) ข้อจำกัดสาขา 3) AI
+        if trip_num in trip_recommended_vehicles:
+            # มีประวัติ - ใช้ตามประวัติเป็นหลัก
             suggested = trip_recommended_vehicles[trip_num]
-            # ตรวจสอบว่ารถที่แนะนำไม่เกินข้อจำกัด
-            if vehicle_sizes.get(suggested, 0) > min_max_size:
-                suggested = max_allowed_vehicle
-            # ตรวจสอบว่าต้องใช้ 6W หรือไม่
-            if must_use_6w and suggested != '6W':
-                suggested = '6W'
             source = "📜 ประวัติ"
+            
+            # เช็คว่ารถจากประวัติขัดกับข้อจำกัดสาขาหรือไม่
+            if vehicle_sizes.get(suggested, 0) > min_max_size:
+                # ถ้าขัด - ลดลงตามข้อจำกัด
+                suggested = max_allowed_vehicle
+                source = f"📜 ประวัติ → {max_allowed_vehicle} (จำกัดสาขา)"
         else:
+            # ไม่มีประวัติ - ใช้ AI พร้อมเคารพข้อจำกัดสาขา
             suggested = suggest_truck(total_w, total_c, max_allowed_vehicle, trip_codes)
-            source = "🤖 AI"
+            if min_max_size < 3:
+                source = f"🤖 AI (จำกัด {max_allowed_vehicle})"
+            else:
+                source = "🤖 AI"
         
         # ตรวจสอบว่ารถที่เลือกใส่ของได้จริงหรือไม่ (ห้ามเกิน 105%)
         if suggested in LIMITS:
