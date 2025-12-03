@@ -635,18 +635,28 @@ def predict_trips(test_df, model_data):
         remaining = all_codes[:]
         recommended_vehicle = None  # รถที่แนะนำสำหรับทริปนี้
         
-        # ฟังก์ชันดึงจังหวัดจากหลายแหล่ง (ไฟล์อัปโหลด หรือ branch_info จาก model)
+        # ฟังก์ชันดึงจังหวัดจากหลายแหล่ง (Master → ไฟล์อัปโหลด → ประวัติ)
         def get_province(branch_code):
-            # ลองดึงจากไฟล์อัปโหลดก่อน
+            # 1. ลองดึงจาก Master ก่อน (ข้อมูลแม่นที่สุด)
+            if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == branch_code]
+                if len(master_row) > 0:
+                    prov = master_row.iloc[0].get('จังหวัด', '')
+                    if prov and str(prov).strip() and prov != 'UNKNOWN':
+                        return str(prov).strip()
+            
+            # 2. ลองดึงจากไฟล์อัปโหลด
             if 'Province' in test_df.columns:
                 prov = test_df[test_df['Code'] == branch_code]['Province'].iloc[0] if len(test_df[test_df['Code'] == branch_code]) > 0 else None
                 if prov and prov != 'UNKNOWN' and str(prov).strip():
                     return prov
-            # ถ้าไม่มี ลองดึงจาก branch_info (ประวัติการเทรน)
+            
+            # 3. ถ้าไม่มี ลองดึงจาก branch_info (ประวัติการเทรน)
             if branch_code in branch_info:
                 prov = branch_info[branch_code].get('province', 'UNKNOWN')
                 if prov and prov != 'UNKNOWN' and str(prov).strip():
                     return prov
+            
             return 'UNKNOWN'
         
         # ข้อมูลจังหวัดของ seed
