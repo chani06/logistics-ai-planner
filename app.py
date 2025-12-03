@@ -1980,10 +1980,19 @@ def predict_trips(test_df, model_data):
                     else:
                         region_changes['other'] += 1
         
+        # 🚨 บังคับใช้ max_allowed ถ้ารถที่แนะนำใหญ่กว่าข้อจำกัด
+        vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
+        recommended_priority = vehicle_priority.get(recommended, 3)
+        allowed_priority = vehicle_priority.get(max_allowed, 3)
+        
+        if recommended_priority > allowed_priority:
+            # รถที่แนะนำใหญ่กว่าที่อนุญาต → บังคับใช้ max_allowed
+            recommended = max_allowed
+        
         # บันทึกการปรับขนาด
         original_vehicle = trip_recommended_vehicles.get(trip_num, '6W')
+        trip_recommended_vehicles[trip_num] = recommended
         if recommended != original_vehicle:
-            trip_recommended_vehicles[trip_num] = recommended
             downsize_count += 1
     
     # แสดงผล Phase 2
@@ -1993,6 +2002,31 @@ def predict_trips(test_df, model_data):
             st.info(f"   🎯 ปรับ 6W → JB ในพื้นที่ใกล้: {region_changes['nearby_6w_to_jb']} ทริป")
         if region_changes['far_keep_6w'] > 0:
             st.info(f"   🚛 คง 6W ในพื้นที่ไกล: {region_changes['far_keep_6w']} ทริป")
+    
+    # 🚨 Phase 2.1: ตรวจสอบและแก้ไขทริปที่ใช้รถใหญ่เกินข้อจำกัด
+    st.text("Phase 2.1: ตรวจสอบข้อจำกัดรถ...")
+    fix_count = 0
+    for trip_num in test_df['Trip'].unique():
+        if trip_num == 0:
+            continue
+        
+        trip_data = test_df[test_df['Trip'] == trip_num]
+        trip_codes = set(trip_data['Code'].values)
+        current_vehicle = trip_recommended_vehicles.get(trip_num, '6W')
+        max_allowed = get_max_vehicle_for_trip(trip_codes)
+        
+        # เช็คว่ารถที่ใช้อยู่ใหญ่กว่าที่อนุญาตหรือไม่
+        vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
+        current_priority = vehicle_priority.get(current_vehicle, 3)
+        allowed_priority = vehicle_priority.get(max_allowed, 3)
+        
+        if current_priority > allowed_priority:
+            # บังคับปรับลงตาม max_allowed
+            trip_recommended_vehicles[trip_num] = max_allowed
+            fix_count += 1
+    
+    if fix_count > 0:
+        st.warning(f"⚠️ Phase 2.1: พบ {fix_count} ทริปใช้รถเกินข้อจำกัด → ปรับเป็น 4W/JB ตามข้อจำกัดสาขา")
     
     # 🎯 Phase 2.5: แยกทริปที่ Cube เกินไปมาก (น้ำหนักเบา แต่เต็ม Cube)
     st.text("Phase 2.5: แยกทริปที่ Cube เต็มเกิน...")
