@@ -1252,10 +1252,11 @@ def predict_trips(test_df, model_data):
                     seed_m = seed_master.iloc[0]
                     code_m = code_master.iloc[0]
                     
-                    seed_subdistrict = seed_m.get('ตำบล', '').strip()
-                    code_subdistrict = code_m.get('ตำบล', '').strip()
-                    seed_district = seed_m.get('อำเภอ', '').strip()
-                    code_district = code_m.get('อำเภอ', '').strip()
+                    # ใช้ bracket notation แทน .get() เพื่อหลีกเลี่ยง Series.get() error
+                    seed_subdistrict = str(seed_m['ตำบล']).strip() if 'ตำบล' in seed_m.index and pd.notna(seed_m['ตำบล']) else ''
+                    code_subdistrict = str(code_m['ตำบล']).strip() if 'ตำบล' in code_m.index and pd.notna(code_m['ตำบล']) else ''
+                    seed_district = str(seed_m['อำเภอ']).strip() if 'อำเภอ' in seed_m.index and pd.notna(seed_m['อำเภอ']) else ''
+                    code_district = str(code_m['อำเภอ']).strip() if 'อำเภอ' in code_m.index and pd.notna(code_m['อำเภอ']) else ''
                     
                     # เช็คตำบลเดียวกัน - อนุญาตข้ามจังหวัดได้
                     if seed_subdistrict and code_subdistrict and seed_subdistrict == code_subdistrict:
@@ -1814,14 +1815,21 @@ def predict_trips(test_df, model_data):
             new_c = current_c + branch_c
             new_count = current_count + 1
             
-            # คำนวณ % ใหม่
-            new_util = max(
-                (new_w / LIMITS['6W']['max_w']) * 100,
-                (new_c / LIMITS['6W']['max_c']) * 100
-            )
+            # คำนวณ % ใหม่ (เน้น Cube)
+            new_cube_util = (new_c / LIMITS['6W']['max_c']) * 100
+            new_weight_util = (new_w / LIMITS['6W']['max_w']) * 100
+            new_util = max(new_cube_util, new_weight_util)
             
-            # ถ้าเพิ่มแล้วไม่เกิน 105% และไม่เกิน MAX_BRANCHES_PER_TRIP → เพิ่มได้
-            if new_util <= 105 and new_count <= MAX_BRANCHES_PER_TRIP:
+            # 🎯 ถ้ารถไม่เต็ม (<95%) → ยอมให้เพิ่มแม้เกิน 105% ได้ แต่ไม่เกิน 130%
+            # เป้าหมาย: Cube 95-130%, น้ำหนัก ≤130%
+            if current_util < 95:
+                # รถยังไม่เต็ม → ยืดหยุ่นมาก (ยอมให้เกินได้ถึง 130%)
+                can_add = new_cube_util <= 130 and new_weight_util <= 130 and new_count <= MAX_BRANCHES_PER_TRIP
+            else:
+                # รถเต็มพอสมควรแล้ว → เข้มงวดขึ้น (ไม่เกิน 120%)
+                can_add = new_cube_util <= 120 and new_weight_util <= 130 and new_count <= MAX_BRANCHES_PER_TRIP
+            
+            if can_add:
                 # เช็คข้อจำกัดสาขา
                 test_trip_codes = set(trip_data['Code'].values) | {branch_code}
                 max_allowed = get_max_vehicle_for_trip(test_trip_codes)
@@ -1845,8 +1853,9 @@ def predict_trips(test_df, model_data):
                 
                 pickup_count += 1
                 
-                # ถ้าเต็ม ≥95% แล้ว → หยุดเพิ่มสาขาในทริปนี้
-                if current_util >= 95 or current_count >= MAX_BRANCHES_PER_TRIP:
+                # ถ้าเต็มเกินไปแล้ว (Cube >120% หรือสาขาเกิน MAX) → หยุดเพิ่มสาขา
+                current_cube_util = (current_c / LIMITS['6W']['max_c']) * 100
+                if current_cube_util >= 120 or current_count >= MAX_BRANCHES_PER_TRIP:
                     break
     
     if pickup_count > 0:
@@ -2037,7 +2046,13 @@ def predict_trips(test_df, model_data):
             g1_ok = g1_cube_util <= 130 and g1_weight_util <= 130 and g1_cube_util >= 95
             g2_ok = g2_cube_util <= 130 and g2_weight_util <= 130 and g2_cube_util >= 95
             
-            if g1_ok and g2_ok and len(g1_codes) >= 2 and len(g2_codes) >= 2:
+            # 🚨 เช็คว่าถ้าแยกแล้วรถใหม่ไม่เต็ม → ไม่ต้องแยก ให้ยัดใส่รถเดิมแม้เกิน
+            if not (g1_ok and g2_ok):
+                # ถ้าแยกแล้วรถใดรถหนึ่งไม่เต็ม (Cube <95%) → ไม่แยก
+                # ยอมให้รถเดิมเกิน 120% ได้ เพื่อไม่ให้รถใหม่วิ่งไม่คุ้ม
+                should_split = False
+            
+            if should_split and g1_ok and g2_ok and len(g1_codes) >= 2 and len(g2_codes) >= 2:
                 # แยกทริป: เก็บ trip_num เดิม ให้ g1, สร้างทริปใหม่ให้ g2
                 for code in g2_codes:
                     test_df.loc[test_df['Code'] == code, 'Trip'] = next_trip_num
