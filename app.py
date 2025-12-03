@@ -340,13 +340,12 @@ def get_max_vehicle_for_branch(branch_code):
     # 3. ถ้าไม่มีทั้งสองแหล่ง = ใช้รถใหญ่ได้
     return '6W'
 
-def get_max_vehicle_for_trip(trip_codes, branch_restrictions):
+def get_max_vehicle_for_trip(trip_codes):
     """
     หารถใหญ่สุดที่ทริปนี้ใช้ได้ (เช็คข้อจำกัดของทุกสาขาในทริป)
     
     Args:
         trip_codes: set ของ branch codes ในทริป
-        branch_restrictions: dict ข้อจำกัดสาขา
     
     Returns:
         str: '4W', 'JB', หรือ '6W'
@@ -1692,7 +1691,7 @@ def predict_trips(test_df, model_data):
         
         # ตรวจสอบข้อจำกัดสาขา
         trip_codes = set(trip_data['Code'].values)
-        max_allowed = get_max_vehicle_for_trip(trip_codes, branch_restrictions)
+        max_allowed = get_max_vehicle_for_trip(trip_codes)
         
         # เลือกรถที่เหมาะสม
         recommended = None
