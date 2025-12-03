@@ -276,7 +276,6 @@ def create_pair_features(code1, code2, branch_info):
         'weight_diff': weight_diff,
         'cube_diff': cube_diff,
         'same_province': same_province,
-        'name_similarity': name_similarity,
         'distance_km': distance_km,
         'avg_weight_1': info1['avg_weight'],
         'avg_weight_2': info2['avg_weight'],

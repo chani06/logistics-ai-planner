@@ -237,15 +237,6 @@ def create_pair_features(code1, code2, branch_info):
     # จังหวัดเดียวกันหรือไม่
     same_province = 1 if info1['province'] == info2['province'] else 0
     
-    # ความคล้ายของชื่อสาขา (Jaccard similarity)
-    from difflib import SequenceMatcher
-    name1 = info1.get('name', '').upper()
-    name2 = info2.get('name', '').upper()
-    name_similarity = 0.0
-    if name1 and name2:
-        # ใช้ SequenceMatcher สำหรับความคล้ายของ string
-        name_similarity = SequenceMatcher(None, name1, name2).ratio()
-    
     # คำนวณระยะทางจากพิกัด
     distance_km = 0.0
     if info1['latitude'] != 0 and info2['latitude'] != 0:
@@ -276,7 +267,6 @@ def create_pair_features(code1, code2, branch_info):
         'weight_diff': weight_diff,
         'cube_diff': cube_diff,
         'same_province': same_province,
-        'name_similarity': name_similarity,
         'distance_km': distance_km,
         'avg_weight_1': info1['avg_weight'],
         'avg_weight_2': info2['avg_weight'],
@@ -597,15 +587,20 @@ def predict_trips(test_df, model_data):
             code_name = test_df[test_df['Code'] == code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
             names_are_similar = is_similar_name(seed_name, code_name)
             
-            # กฎสำคัญที่สุด: บังคับห้ามข้ามจังหวัด 100%
-            # ต้องเป็นจังหวัดเดียวกันเท่านั้น (ไม่มีข้อยกเว้น)
+            # กฎสำคัญที่สุด: เช็คจังหวัดก่อนเสมอ (แม้จะอยู่ในประวัติ)
+            # ต้องเป็นจังหวัดเดียวกันหรือใกล้เคียงกันเท่านั้น
+            # ข้อยกเว้น: ถ้าชื่อคล้ายกันมาก (เช่น ถ.พระเทพ1, ถ.พระเทพ 1) ให้จับคู่ได้
             if seed_province == 'UNKNOWN' or code_province == 'UNKNOWN':
                 # ถ้าไม่มีข้อมูลจังหวัด ให้เช็คจากประวัติหรือชื่อคล้ายกัน
                 if pair not in trip_pairs and not names_are_similar:
                     continue
-            elif seed_province != code_province:
-                # ต่างจังหวัด = ห้ามจับคู่เด็ดขาด
-                continue
+            elif not is_nearby_province(seed_province, code_province):
+                continue  # จังหวัดไม่ใกล้เคียงกัน ข้ามไปเลย
+            
+            # ถ้าเกิน TARGET_BRANCHES แล้ว ต้องเข้มงวดมากขึ้น - ต้องเป็นจังหวัดเดียวกัน
+            if len(current_trip) >= TARGET_BRANCHES_PER_TRIP:
+                if seed_province != code_province:
+                    continue
             
             # กฎ 1: ถ้าเคยไปด้วยกันในประวัติ = จัดเข้าทริปเดียวกัน + ใช้รถแบบเดิม
             if pair in trip_pairs:

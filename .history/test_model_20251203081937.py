@@ -90,19 +90,13 @@ def load_historical_data(folder='Dc', separate_test=True):
                 col_upper = col_clean.upper().replace(' ', '').replace('_', '')
                 
                 # รหัสสาขา
-                if col_clean == 'BranchCode' or 'รหัสสาขา' in col_clean or  'BRANCH_CODE' in col_upper:
+                if col_clean == 'BranchCode' or 'รหัสสาขา' in col_clean or col_clean == 'รหัส WMS' or 'BRANCH_CODE' in col_upper:
                     rename_map[col] = 'Code'
                 # ชื่อสาขา
                 elif col_clean == 'Branch' or 'ชื่อสาขา' in col_clean or col_clean == 'สาขา' or 'BRANCH_DESCRIPTION' in col_upper:
                     rename_map[col] = 'Name'
-                # BU
-                elif col_clean == 'BU' or col_upper == 'BU':
-                    rename_map[col] = 'BU'
-                # Sep
-                elif col_clean == 'Sep.' or col_clean == 'Sep' or col_upper == 'SEP':
-                    rename_map[col] = 'Sep'
                 # Booking No
-                elif 'BOOKING' in col_upper:
+                elif 'BOOKING' in col_upper and 'NO' in col_upper:
                     rename_map[col] = 'Booking'
                 # เลขทริป
                 elif col_clean == 'Trip':
@@ -111,51 +105,11 @@ def load_historical_data(folder='Dc', separate_test=True):
                 elif col_clean == 'Trip no' or 'TRIPNO' in col_upper or col_clean == 'ประเภทรถ':
                     rename_map[col] = 'Vehicle'
                 # น้ำหนัก
-                elif col_clean == 'Total Wgt' or col_clean == 'TOTALWGT' or 'น้ำหนัก' in col_clean or 'WEIGHT' in col_upper or 'WGT' in col_upper:
+                elif col_clean == 'TOTALWGT' or 'น้ำหนัก' in col_clean or 'WEIGHT' in col_upper:
                     rename_map[col] = 'Weight'
                 # คิว/ปริมาตร
-                elif col_clean == 'Total Cube' or col_clean == 'TOTALCUBE' or 'คิว' in col_clean or 'CUBE' in col_upper:
+                elif col_clean == 'TOTALCUBE' or 'คิว' in col_clean or 'CUBE' in col_upper:
                     rename_map[col] = 'Cube'
-                # จำนวนชิ้น
-                elif 'จำนวนชิ้น' in col_clean or 'PIECES' in col_upper or 'QTY' in col_upper:
-                    rename_map[col] = 'Pieces'
-                # วันที่โหลด
-                elif 'วันที่โหลด' in col_clean or 'LOADDATE' in col_upper:
-                    rename_map[col] = 'LoadDate'
-                # เวลาโหลด
-                elif 'เวลาโหลด' in col_clean or 'LOADTIME' in col_upper:
-                    rename_map[col] = 'LoadTime'
-                # ประตู
-                elif col_clean == 'ประตู' or col_clean == 'Door' or col_upper == 'DOOR':
-                    rename_map[col] = 'Door'
-                # WAVE
-                elif col_clean == 'WAVE' or col_upper == 'WAVE':
-                    rename_map[col] = 'Wave'
-                # Remark
-                elif col_clean.lower() == 'remark' or col_upper == 'REMARK':
-                    rename_map[col] = 'Remark'
-                # Order, Seq, Route
-                elif col_clean == 'Order' or col_upper == 'ORDER':
-                    rename_map[col] = 'Order'
-                elif col_clean == 'Seq.' or col_clean == 'Seq' or col_upper == 'SEQ':
-                    rename_map[col] = 'Seq'
-                elif col_clean == 'Route' or col_upper == 'ROUTE':
-                    rename_map[col] = 'Route'
-                # Description
-                elif col_clean == 'Description' or col_upper == 'DESCRIPTION':
-                    rename_map[col] = 'Description'
-                # วันที่ตามรอบ
-                elif 'วันที่ตามรอบ' in col_clean or 'CYCLEDATE' in col_upper:
-                    rename_map[col] = 'CycleDate'
-                # SAL
-                elif col_clean == 'SAL' or col_upper == 'SAL':
-                    rename_map[col] = 'SAL'
-                # Delivery Date
-                elif 'DELIVERY' in col_upper and 'DATE' in col_upper:
-                    rename_map[col] = 'DeliveryDate'
-                # Carrier
-                elif col_clean == 'Carrier' or col_upper == 'CARRIER':
-                    rename_map[col] = 'Carrier'
                 # จังหวัด
                 elif 'จังหวัด' in col_clean or 'PROVINCE' in col_upper:
                     rename_map[col] = 'Province'
@@ -328,7 +282,6 @@ def create_training_data(df):
         print("⚠️ ไม่พบคอลัมน์ Trip - ใช้เฉพาะข้อมูลสาขา")
     
     # จัดกลุ่มตาม Trip
-    cross_province_pairs = 0
     if 'Trip' in df.columns:
         for group_key, group in df.groupby('Trip'):
             codes = sorted(group['Code'].unique())
@@ -341,18 +294,7 @@ def create_training_data(df):
             if len(codes) >= 2:
                 for i in range(len(codes)):
                     for j in range(i+1, len(codes)):
-                        code1, code2 = codes[i], codes[j]
-                        pair = tuple(sorted([code1, code2]))
-                        
-                        # ✅ กรอง: ห้ามเพิ่ม pairs ที่ข้ามจังหวัด
-                        if code1 in branch_info and code2 in branch_info:
-                            prov1 = branch_info[code1]['province']
-                            prov2 = branch_info[code2]['province']
-                            
-                            if prov1 != prov2:
-                                cross_province_pairs += 1
-                                continue  # ข้าม pair นี้ไป
-                        
+                        pair = tuple(sorted([codes[i], codes[j]]))
                         trip_pairs.add(pair)
                         
                         # เก็บข้อมูลรถสำหรับคู่นี้
@@ -370,59 +312,47 @@ def create_training_data(df):
             trip_vehicles[pair]['count'] = vehicles[most_used]
     
     print(f"  ✅ พบคู่ที่เคยไปด้วยกัน: {len(trip_pairs)} คู่")
-    print(f"  ⚠️  กรองคู่ข้ามจังหวัดออก: {cross_province_pairs} คู่")
     
     # สร้าง features สำหรับ positive pairs
+    # กรองเฉพาะคู่ที่เป็นจังหวัดเดียวกัน (บังคับ 100%)
+    filtered_pairs = 0
     for code1, code2 in trip_pairs:
         if code1 in branch_info and code2 in branch_info:
-            features = create_pair_features(code1, code2, branch_info)
-            features['label'] = 1  # ควรไปด้วยกัน
-            positive_pairs.append(features)
+            # ✅ บังคับให้เป็นจังหวัดเดียวกันเท่านั้น
+            if branch_info[code1]['province'] == branch_info[code2]['province']:
+                features = create_pair_features(code1, code2, branch_info)
+                features['label'] = 1  # ควรไปด้วยกัน
+                positive_pairs.append(features)
+            else:
+                filtered_pairs += 1
+    
+    if filtered_pairs > 0:
+        print(f"  ⚠️  กรองคู่ข้ามโซนออก: {filtered_pairs} คู่ (ห้ามจับข้ามจังหวัด)")
     
     # สร้าง negative pairs - เลือกสาขาจากคนละทริปที่ไม่เคยไปด้วยกัน
-    # กลยุทธ์ใหม่: สร้างเฉพาะจังหวัดเดียวกัน เพื่อสอน model ว่าแม้จังหวัดเดียวกันก็ไม่จำเป็นต้องไปด้วยกัน
-    # แต่ถ้าต่างจังหวัด = ห้ามไปด้วยกันอย่างแน่นอน (ไม่ต้องสอน)
+    # กลยุทธ์: หาคู่สาขาที่อยู่ในทริปต่างกัน และห่างไกลกัน (จังหวัดคนละภาค)
     np.random.seed(42)
     num_negative = len(positive_pairs)
     
-    # แยกสาขาตามจังหวัด
-    province_codes = {}
-    for code, info in branch_info.items():
-        prov = info['province']
-        if prov not in province_codes:
-            province_codes[prov] = []
-        province_codes[prov].append(code)
-    
     # สร้างรายการทริปของแต่ละสาขา
     code_trips = {}
-    if 'Trip' in df.columns:
-        for trip, group in df.groupby('Trip'):
-            for code in group['Code'].unique():
-                if code not in code_trips:
-                    code_trips[code] = []
-                code_trips[code].append(trip)
+    for trip, group in df.groupby('Trip'):
+        for code in group['Code'].unique():
+            if code not in code_trips:
+                code_trips[code] = []
+            code_trips[code].append(trip)
     
     attempted = 0
-    max_attempts = num_negative * 30
+    max_attempts = num_negative * 20
     
     while len(negative_pairs) < num_negative and attempted < max_attempts:
-        # สุ่มเลือกจังหวัด
-        prov = np.random.choice(list(province_codes.keys()))
-        codes_in_prov = province_codes[prov]
-        
-        # ต้องมีอย่างน้อย 2 สาขาในจังหวัดนี้
-        if len(codes_in_prov) < 2:
-            attempted += 1
-            continue
-        
-        # สุ่มเลือก 2 สาขาในจังหวัดเดียวกัน
-        idx1, idx2 = np.random.choice(len(codes_in_prov), 2, replace=False)
-        code1, code2 = codes_in_prov[idx1], codes_in_prov[idx2]
+        idx1, idx2 = np.random.choice(len(all_codes), 2, replace=False)
+        code1, code2 = all_codes[idx1], all_codes[idx2]
         pair = tuple(sorted([code1, code2]))
         
         # เช็คว่าไม่เคยไปด้วยกันจริงๆ
         if pair not in trip_pairs:
-            # เพิ่มเงื่อนไข: ควรอยู่คนละทริปอย่างชัดเจน
+            # เพิ่มเงื่อนไข: ควรอยู่คนละทริปอย่างชัดเจน (ไม่มีทริปที่ทับซ้อนกัน)
             trips1 = set(code_trips.get(code1, []))
             trips2 = set(code_trips.get(code2, []))
             shared_trips = trips1 & trips2
@@ -460,15 +390,6 @@ def create_pair_features(code1, code2, branch_info):
     # จังหวัดเดียวกันหรือไม่
     same_province = 1 if info1['province'] == info2['province'] else 0
     
-    # ความคล้ายของชื่อสาขา (Jaccard similarity)
-    from difflib import SequenceMatcher
-    name1 = info1.get('name', '').upper()
-    name2 = info2.get('name', '').upper()
-    name_similarity = 0.0
-    if name1 and name2:
-        # ใช้ SequenceMatcher สำหรับความคล้ายของ string
-        name_similarity = SequenceMatcher(None, name1, name2).ratio()
-    
     # คำนวณระยะทางจากพิกัด (ถ้ามี)
     import math
     distance_km = 0.0
@@ -500,7 +421,6 @@ def create_pair_features(code1, code2, branch_info):
         'weight_diff': weight_diff,
         'cube_diff': cube_diff,
         'same_province': same_province,
-        'name_similarity': name_similarity,
         'distance_km': distance_km,
         'avg_weight_1': info1['avg_weight'],
         'avg_weight_2': info2['avg_weight'],

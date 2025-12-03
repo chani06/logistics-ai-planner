@@ -237,15 +237,6 @@ def create_pair_features(code1, code2, branch_info):
     # จังหวัดเดียวกันหรือไม่
     same_province = 1 if info1['province'] == info2['province'] else 0
     
-    # ความคล้ายของชื่อสาขา (Jaccard similarity)
-    from difflib import SequenceMatcher
-    name1 = info1.get('name', '').upper()
-    name2 = info2.get('name', '').upper()
-    name_similarity = 0.0
-    if name1 and name2:
-        # ใช้ SequenceMatcher สำหรับความคล้ายของ string
-        name_similarity = SequenceMatcher(None, name1, name2).ratio()
-    
     # คำนวณระยะทางจากพิกัด
     distance_km = 0.0
     if info1['latitude'] != 0 and info2['latitude'] != 0:
@@ -276,7 +267,6 @@ def create_pair_features(code1, code2, branch_info):
         'weight_diff': weight_diff,
         'cube_diff': cube_diff,
         'same_province': same_province,
-        'name_similarity': name_similarity,
         'distance_km': distance_km,
         'avg_weight_1': info1['avg_weight'],
         'avg_weight_2': info2['avg_weight'],

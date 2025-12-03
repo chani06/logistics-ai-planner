@@ -90,7 +90,7 @@ def load_historical_data(folder='Dc', separate_test=True):
                 col_upper = col_clean.upper().replace(' ', '').replace('_', '')
                 
                 # รหัสสาขา
-                if col_clean == 'BranchCode' or 'รหัสสาขา' in col_clean or  'BRANCH_CODE' in col_upper:
+                if col_clean == 'BranchCode' or 'รหัสสาขา' in col_clean or col_clean == 'รหัส WMS' or 'BRANCH_CODE' in col_upper:
                     rename_map[col] = 'Code'
                 # ชื่อสาขา
                 elif col_clean == 'Branch' or 'ชื่อสาขา' in col_clean or col_clean == 'สาขา' or 'BRANCH_DESCRIPTION' in col_upper:
