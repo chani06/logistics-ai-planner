@@ -237,11 +237,6 @@ def create_pair_features(code1, code2, branch_info):
     # จังหวัดเดียวกันหรือไม่
     same_province = 1 if info1['province'] == info2['province'] else 0
     
-    # Code prefix เหมือนกันหรือไม่
-    prefix1 = code1[:2] if len(code1) >= 2 else code1
-    prefix2 = code2[:2] if len(code2) >= 2 else code2
-    same_prefix = 1 if prefix1 == prefix2 else 0
-    
     # คำนวณระยะทางจากพิกัด
     distance_km = 0.0
     if info1['latitude'] != 0 and info2['latitude'] != 0:
@@ -272,7 +267,6 @@ def create_pair_features(code1, code2, branch_info):
         'weight_diff': weight_diff,
         'cube_diff': cube_diff,
         'same_province': same_province,
-        'same_prefix': same_prefix,
         'distance_km': distance_km,
         'avg_weight_1': info1['avg_weight'],
         'avg_weight_2': info2['avg_weight'],
