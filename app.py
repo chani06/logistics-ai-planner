@@ -1107,7 +1107,7 @@ def main():
                     
                     all_codes_set = set(df_region['Code'].unique())
                     
-                    # สร้างกลุ่มสาขาแบบ Union-Find (รวมข้าม Booking ถ้าจังหวัดเดียวกัน)
+                    # สร้างกลุ่มสาขาแบบ Union-Find (ตามลำดับ: Booking → ระยะทาง)
                     # Step 1: สร้างกลุ่มจาก Booking ก่อน
                     booking_groups = {}
                     for _, row in df_region.iterrows():
@@ -1117,59 +1117,101 @@ def main():
                         # หาสาขาที่อยู่ Booking เดียวกัน
                         paired = find_paired_branches(code, code_province, df_region)
                         
-                        # เก็บกลุ่มพร้อมจังหวัด
+                        # เก็บกลุ่มพร้อมพิกัด
                         group_key = tuple(sorted({code} | paired))
                         if group_key not in booking_groups:
-                            # เก็บจังหวัดทั้งหมดในกลุ่มนี้
-                            provinces = set()
+                            # เก็บพิกัดและจังหวัดของแต่ละสาขา
+                            locations = {}
                             for c in group_key:
-                                prov = df_region[df_region['Code'] == c]['Province'].iloc[0] if len(df_region[df_region['Code'] == c]) > 0 else 'UNKNOWN'
-                                provinces.add(prov)
-                            booking_groups[group_key] = provinces
+                                c_row = df_region[df_region['Code'] == c].iloc[0] if len(df_region[df_region['Code'] == c]) > 0 else None
+                                if c_row is not None:
+                                    locations[c] = {
+                                        'lat': c_row.get('Latitude', 0) if 'Latitude' in df_region.columns else 0,
+                                        'lon': c_row.get('Longitude', 0) if 'Longitude' in df_region.columns else 0,
+                                        'province': c_row.get('Province', 'UNKNOWN')
+                                    }
+                            booking_groups[group_key] = locations
                     
-                    # Step 2: รวมกลุ่มที่มีจังหวัดร่วมกัน
+                    # Step 2: รวมกลุ่มที่อยู่ใกล้กัน (ตำบล → อำเภอ → จังหวัด)
+                    def calculate_distance(loc1, loc2):
+                        """คำนวณระยะทางระหว่าง 2 จุด (กม.)"""
+                        if loc1['lat'] == 0 or loc2['lat'] == 0:
+                            return 999999  # ไม่มีพิกัด
+                        import math
+                        lat1, lon1 = math.radians(loc1['lat']), math.radians(loc1['lon'])
+                        lat2, lon2 = math.radians(loc2['lat']), math.radians(loc2['lon'])
+                        dlat = lat2 - lat1
+                        dlon = lon2 - lon1
+                        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+                        c = 2 * math.asin(math.sqrt(a))
+                        return 6371 * c
+                    
+                    def groups_can_merge(locs1, locs2):
+                        """เช็คว่า 2 กลุ่มควรรวมกันไหม"""
+                        # เช็คระยะทางระหว่างสาขาในแต่ละกลุ่ม
+                        for code1, loc1 in locs1.items():
+                            for code2, loc2 in locs2.items():
+                                dist = calculate_distance(loc1, loc2)
+                                # ใกล้มาก (0-5 กม.) = ตำบลเดียวกัน
+                                if dist <= 5:
+                                    return True, 'ตำบล'
+                        
+                        # เช็คอำเภอ (5-20 กม.)
+                        for code1, loc1 in locs1.items():
+                            for code2, loc2 in locs2.items():
+                                dist = calculate_distance(loc1, loc2)
+                                if dist <= 20 and loc1['province'] == loc2['province']:
+                                    return True, 'อำเภอ'
+                        
+                        # เช็คจังหวัด (20-50 กม.)
+                        provinces1 = set(loc['province'] for loc in locs1.values())
+                        provinces2 = set(loc['province'] for loc in locs2.values())
+                        if provinces1 & provinces2:  # มีจังหวัดร่วมกัน
+                            return True, 'จังหวัด'
+                        
+                        return False, None
+                    
                     merged_groups = []
                     used_groups = set()
                     
-                    for group1, provinces1 in booking_groups.items():
+                    for group1, locs1 in booking_groups.items():
                         if group1 in used_groups:
                             continue
                         
-                        # เริ่มต้นกลุ่มใหม่
                         merged_codes = set(group1)
-                        merged_provinces = provinces1.copy()
+                        merged_locs = locs1.copy()
                         used_groups.add(group1)
                         
-                        # หากลุ่มอื่นที่มีจังหวัดร่วมกัน
+                        # หากลุ่มอื่นที่ใกล้เคียง
                         changed = True
                         while changed:
                             changed = False
-                            for group2, provinces2 in booking_groups.items():
+                            for group2, locs2 in booking_groups.items():
                                 if group2 in used_groups:
                                     continue
-                                # ถ้ามีจังหวัดร่วมกัน → รวมกลุ่ม
-                                if merged_provinces & provinces2:
+                                can_merge, level = groups_can_merge(merged_locs, locs2)
+                                if can_merge:
                                     merged_codes |= set(group2)
-                                    merged_provinces |= provinces2
+                                    merged_locs.update(locs2)
                                     used_groups.add(group2)
                                     changed = True
                         
                         merged_groups.append({
                             'codes': merged_codes,
-                            'provinces': merged_provinces
+                            'locations': merged_locs
                         })
                     
-                    # Step 3: แปลงเป็น groups format เดิม
+                    # Step 3: แปลงเป็น groups format
                     groups = []
                     for mg in merged_groups:
-                        # ใช้จังหวัดแรกเป็นตัวแทน
                         rep_code = list(mg['codes'])[0]
                         rep_row = df_region[df_region['Code'] == rep_code].iloc[0]
+                        provinces = set(loc['province'] for loc in mg['locations'].values())
                         
                         groups.append({
                             'codes': mg['codes'],
                             'region': rep_row.get('Region', 'ไม่ระบุ'),
-                            'province': ', '.join(sorted(mg['provinces']))
+                            'province': ', '.join(sorted(provinces))
                         })
                     
                     # แสดงสถิติ
