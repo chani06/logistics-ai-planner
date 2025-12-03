@@ -27,7 +27,7 @@ LIMITS = {
 BUFFER = 1.05
 
 # จำกัดจำนวนสาขาต่อทริป (เรียนรู้จากไฟล์ Punthai: เฉลี่ย 8.5 สาขา/ทริป)
-MAX_BRANCHES_PER_TRIP = 12  # สูงสุด 12 สาขาต่อทริป
+MAX_BRANCHES_PER_TRIP = 13  # สูงสุด 13 สาขาต่อทริป (ยืดหยุ่นสำหรับรถเล็ก)
 TARGET_BRANCHES_PER_TRIP = 9  # เป้าหมาย 9 สาขาต่อทริป (ใกล้เคียง 8.5)
 
 # รายการสาขาที่ไม่ต้องการจัดส่ง (ตัดออก)
@@ -180,8 +180,8 @@ def can_fit_truck(total_weight, total_cube, truck_type):
 def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None):
     """
     แนะนำรถที่เหมาะสม โดยเลือกรถที่:
-    1. ใส่ของได้พอดี (ไม่เกินขีดจำกัด)
-    2. ใช้งานได้มากที่สุด (ใกล้ 100% ที่สุด)
+    1. ใส่ของได้พอดี (ไม่เกินขีดจำกัด 105%)
+    2. ใช้งานได้ใกล้ 100% มากที่สุด (เป้าหมาย: 90-100%)
     หมายเหตุ: ไม่บังคับ 6W ที่นี่ - ให้ predict_trips จัดการระยะทาง
     """
     vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
@@ -189,6 +189,7 @@ def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None):
     
     best_truck = None
     best_utilization = 0
+    best_distance_from_100 = 999  # ระยะห่างจาก 100%
     
     for truck in ['4W', 'JB', '6W']:
         truck_size = vehicle_sizes.get(truck, 0)
@@ -202,10 +203,27 @@ def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None):
             c_util = (total_cube / limits['max_c']) * 100
             utilization = max(w_util, c_util)
             
-            # เลือกรถที่ใช้งานได้มากที่สุด (ใกล้ 100%)
-            if utilization > best_utilization:
-                best_utilization = utilization
+            # คำนวณระยะห่างจาก 100%
+            distance_from_100 = abs(100 - utilization)
+            
+            # เลือกรถที่ใกล้ 100% ที่สุด (90-105% เป็นเป้าหมาย)
+            # ถ้าใช้งานใกล้เคียงกัน เลือกรถที่ใช้งานสูงกว่า
+            if best_truck is None:
                 best_truck = truck
+                best_utilization = utilization
+                best_distance_from_100 = distance_from_100
+            else:
+                # ถ้าอยู่ในช่วง 90-105% เลือกที่ใกล้ 100% ที่สุด
+                if 90 <= utilization <= 105:
+                    if distance_from_100 < best_distance_from_100 or best_utilization < 90:
+                        best_truck = truck
+                        best_utilization = utilization
+                        best_distance_from_100 = distance_from_100
+                # ถ้าทั้งคู่ไม่อยู่ในช่วง เลือกที่ใช้งานสูงกว่า
+                elif utilization > best_utilization:
+                    best_truck = truck
+                    best_utilization = utilization
+                    best_distance_from_100 = distance_from_100
     
     if best_truck:
         return best_truck
@@ -1196,19 +1214,29 @@ def predict_trips(test_df, model_data):
                     combined_c <= LIMITS['6W']['max_c'] * BUFFER and
                     combined_count <= MAX_BRANCHES_PER_TRIP):
                     
-                    # คำนวณว่ารวมแล้วคุ้มหรือไม่
+                    # คำนวณ % การใช้รถหลังรวม
+                    combined_6w_util = max(
+                        (combined_w / LIMITS['6W']['max_w']) * 100,
+                        (combined_c / LIMITS['6W']['max_c']) * 100
+                    )
+                    
+                    # คำนวณว่ารวมแล้วคุ้มหรือไม่ (เป้าหมาย: ใกล้ 100%)
                     should_merge = False
                     
-                    # เงื่อนไข 1: ทริปใดทริปหนึ่งมี ≤3 สาขา
-                    if trip1['count'] <= 3 or trip2['count'] <= 3:
+                    # เงื่อนไข 1: ทริปใดทริปหนึ่งมี ≤3 สาขา และรวมแล้วไม่เกิน 105%
+                    if (trip1['count'] <= 3 or trip2['count'] <= 3) and combined_6w_util <= 105:
                         should_merge = True
                     
-                    # เงื่อนไข 2: ทั้ง 2 ทริปใช้รถต่ำกว่า 50%
-                    elif trip1['util'] < 50 and trip2['util'] < 50:
+                    # เงื่อนไข 2: ทั้ง 2 ทริปใช้รถต่ำกว่า 50% และรวมแล้ว 60-105%
+                    elif trip1['util'] < 50 and trip2['util'] < 50 and 60 <= combined_6w_util <= 105:
                         should_merge = True
                     
-                    # เงื่อนไข 3: รวมแล้วได้สาขา ≤10 และทั้ง 2 ทริปใช้รถต่ำกว่า 60%
-                    elif combined_count <= 10 and trip1['util'] < 60 and trip2['util'] < 60:
+                    # เงื่อนไข 3: รวมแล้วใช้รถ 80-105% (ใกล้ 100% มาก)
+                    elif combined_count <= 13 and 80 <= combined_6w_util <= 105:
+                        should_merge = True
+                    
+                    # เงื่อนไข 4: รวมแล้วได้สาขา ≤10 และใช้รถ 70-105%
+                    elif combined_count <= 10 and 70 <= combined_6w_util <= 105:
                         should_merge = True
                     
                     if should_merge:
@@ -1240,7 +1268,7 @@ def predict_trips(test_df, model_data):
         all_trips = [t for t in all_trips if t is not None]
     
     if merge_count > 0:
-        st.text(f"รวมทริปสำเร็จ {merge_count} ครั้ง")
+        st.success(f"✅ รวมทริปสำเร็จ {merge_count} ครั้ง เพื่อเพิ่มประสิทธิภาพการใช้รถ")
     
     # สรุปผลและแนะนำรถ
     summary_data = []
