@@ -375,7 +375,7 @@ def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None):
     
     # ตรวจสอบข้อจำกัดของสาขาทั้งหมดในกลุ่ม
     branch_max_vehicle = '6W'  # เริ่มต้นที่ใหญ่สุด
-    if trip_codes:
+    if trip_codes is not None and len(trip_codes) > 0:
         for code in trip_codes:
             branch_max = get_max_vehicle_for_branch(code)
             # หารถที่เล็กที่สุดที่ต้องใช้
@@ -982,7 +982,7 @@ def predict_trips(test_df, model_data):
             # คำนวณระยะทางรวมของทริป (เส้นทาง: DC → สาขา1 → สาขา2 → ... → DC)
             trip_codes = trip_data['Code'].unique()
             total_distance = 0
-            if len(trip_codes) > 0:
+            if trip_codes is not None and len(trip_codes) > 0:
                 # ดึงพิกัดของแต่ละสาขาจาก Master
                 branch_coords = []
                 for code in trip_codes:
@@ -1549,7 +1549,7 @@ def predict_trips(test_df, model_data):
         
         # คำนวณระยะทางรวมของทริป (เส้นทาง: DC → สาขา1 → สาขา2 → ... → DC)
         total_distance = 0
-        if len(trip_codes) > 0:
+        if trip_codes is not None and len(trip_codes) > 0:
             # ดึงพิกัดของแต่ละสาขาจาก Master
             branch_coords = []
             for code in trip_codes:
