@@ -1977,6 +1977,118 @@ def predict_trips(test_df, model_data):
     if reassign_count > 0:
         st.success(f"✅ Phase 1.25: ย้ายสาขาเดียวสำเร็จ {reassign_count} สาขา")
     
+    # 🎯 Phase 1.75: รวมทริป utilization ต่ำ (<50%) ให้เต็มขึ้น
+    st.text("Phase 1.75: รวมทริป utilization ต่ำ...")
+    rebalance_count = 0
+    LOW_UTIL_THRESHOLD = 50  # ทริปที่ต่ำกว่า 50% ถือว่าไม่คุ้ม
+    
+    # หาทริปที่ utilization ต่ำ
+    low_util_trips = []
+    for trip_num in sorted(test_df['Trip'].unique()):
+        if trip_num == 0:
+            continue
+        
+        trip_data = test_df[test_df['Trip'] == trip_num]
+        trip_w = trip_data['Weight'].sum()
+        trip_c = trip_data['Cube'].sum()
+        trip_count = len(trip_data)
+        
+        trip_util = max(
+            (trip_w / LIMITS['6W']['max_w']) * 100,
+            (trip_c / LIMITS['6W']['max_c']) * 100
+        )
+        
+        # ถ้า util < 50% และมี ≤6 สาขา → พิจารณารวม
+        if trip_util < LOW_UTIL_THRESHOLD and trip_count <= 6:
+            # หา centroid ของทริป
+            trip_lats, trip_lons = [], []
+            for code in trip_data['Code'].values:
+                lat, lon = get_lat_lon(code)
+                if lat and lon:
+                    trip_lats.append(lat)
+                    trip_lons.append(lon)
+            
+            if trip_lats:
+                low_util_trips.append({
+                    'trip': trip_num,
+                    'util': trip_util,
+                    'count': trip_count,
+                    'weight': trip_w,
+                    'cube': trip_c,
+                    'codes': set(trip_data['Code'].values),
+                    'lat': sum(trip_lats) / len(trip_lats),
+                    'lon': sum(trip_lons) / len(trip_lons)
+                })
+    
+    # พยายามรวมทริปต่ำกับทริปใกล้เคียง
+    for low_trip in low_util_trips:
+        best_merge = None
+        min_distance = float('inf')
+        
+        # หาทริปที่ใกล้ที่สุด
+        for trip_num in test_df['Trip'].unique():
+            if trip_num == 0 or trip_num == low_trip['trip']:
+                continue
+            
+            trip_data = test_df[test_df['Trip'] == trip_num]
+            trip_count = len(trip_data)
+            
+            # ข้ามทริปที่มีสาขาเยอะเกินไป
+            if trip_count >= MAX_BRANCHES_PER_TRIP:
+                continue
+            
+            # หา centroid ของทริปนี้
+            trip_lats, trip_lons = [], []
+            for code in trip_data['Code'].values:
+                lat, lon = get_lat_lon(code)
+                if lat and lon:
+                    trip_lats.append(lat)
+                    trip_lons.append(lon)
+            
+            if not trip_lats:
+                continue
+            
+            target_lat = sum(trip_lats) / len(trip_lats)
+            target_lon = sum(trip_lons) / len(trip_lons)
+            
+            # คำนวณระยะทาง
+            distance = haversine_distance(low_trip['lat'], low_trip['lon'], target_lat, target_lon)
+            
+            # ถ้าไกลเกิน 50km → ข้าม
+            if distance > 50:
+                continue
+            
+            # ตรวจสอบว่ารวมแล้วเกินไหม
+            trip_w = trip_data['Weight'].sum()
+            trip_c = trip_data['Cube'].sum()
+            combined_w = trip_w + low_trip['weight']
+            combined_c = trip_c + low_trip['cube']
+            combined_count = trip_count + low_trip['count']
+            
+            combined_util = max(
+                (combined_w / LIMITS['6W']['max_w']) * 100,
+                (combined_c / LIMITS['6W']['max_c']) * 100
+            )
+            
+            # รวมได้ถ้า ≤120% และสาขา ≤MAX
+            if combined_util <= 120 and combined_count <= MAX_BRANCHES_PER_TRIP:
+                # เช็คข้อจำกัดสาขา
+                combined_codes = low_trip['codes'] | set(trip_data['Code'].values)
+                max_allowed = get_max_vehicle_for_trip(combined_codes)
+                
+                if distance < min_distance:
+                    min_distance = distance
+                    best_merge = trip_num
+        
+        # ถ้าเจอทริปที่เหมาะสม → รวม
+        if best_merge is not None:
+            for code in low_trip['codes']:
+                test_df.loc[test_df['Code'] == code, 'Trip'] = best_merge
+            rebalance_count += 1
+    
+    if rebalance_count > 0:
+        st.success(f"✅ Phase 1.75: รวมทริป utilization ต่ำสำเร็จ {rebalance_count} ทริป")
+    
     # 🎯 Phase 1.5: เก็บสาขาที่อยู่ในเส้นทาง (Route Pickup Optimization)
     st.text("Phase 1.5: เก็บสาขาที่อยู่ในเส้นทาง...")
     pickup_count = 0
