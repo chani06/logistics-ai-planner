@@ -1082,6 +1082,12 @@ def predict_trips(test_df, model_data):
         else:
             w_util = c_util = 0
         
+        # คำนวณระยะทางรวมของทริป
+        total_distance = 0
+        for code in trip_codes:
+            _, distance = get_required_vehicle_by_distance(code)
+            total_distance += distance
+        
         summary_data.append({
             'Trip': trip_num,
             'Branches': len(trip_data),
@@ -1089,7 +1095,8 @@ def predict_trips(test_df, model_data):
             'Cube': total_c,
             'Truck': f"{suggested} {source}",
             'Weight_Use%': w_util,
-            'Cube_Use%': c_util
+            'Cube_Use%': c_util,
+            'Total_Distance': total_distance
         })
     
     summary_df = pd.DataFrame(summary_data)
@@ -1104,6 +1111,21 @@ def predict_trips(test_df, model_data):
         trip_truck_type_map[row['Trip']] = truck_type
     
     test_df['Truck'] = test_df['Trip'].map(trip_truck_map)
+    
+    # เพิ่มคอลัมน์ระยะทางจาก DC และเรียงลำดับ
+    def add_distance_and_sort(df):
+        # เพิ่มคอลัมน์ระยะทาง
+        distances = []
+        for _, row in df.iterrows():
+            _, distance = get_required_vehicle_by_distance(row['Code'])
+            distances.append(distance)
+        df['Distance_from_DC'] = distances
+        
+        # เรียงลำดับภายในแต่ละทริป: Trip → Distance
+        df = df.sort_values(['Trip', 'Distance_from_DC'], ascending=[True, True])
+        return df
+    
+    test_df = add_distance_and_sort(test_df)
     
     # เพิ่มคอลัมน์เช็คว่าสาขาเคยใช้รถประเภทนี้หรือไม่
     def check_vehicle_history(row):
@@ -1245,7 +1267,8 @@ def main():
                                     'Weight': '{:.2f}',
                                     'Cube': '{:.2f}',
                                     'Weight_Use%': '{:.1f}%',
-                                    'Cube_Use%': '{:.1f}%'
+                                    'Cube_Use%': '{:.1f}%',
+                                    'Total_Distance': '{:.1f} km'
                                 }).background_gradient(
                                     subset=['Weight_Use%', 'Cube_Use%'],
                                     cmap='RdYlGn',
@@ -1256,20 +1279,29 @@ def main():
                                 height=400
                             )
                             
-                            # ตารางรายละเอียดทั้งหมด (มีคอลัมน์รถ)
-                            with st.expander("📋 ดูรายละเอียดรายสาขา (พร้อมข้อมูลรถ)"):
+                            # ตารางรายละเอียดทั้งหมด (มีคอลัมน์รถและระยะทาง)
+                            with st.expander("📋 ดูรายละเอียดรายสาขา (เรียงตามระยะทาง)"):
                                 # จัดเรียงคอลัมน์ที่สำคัญ
-                                display_cols = ['Trip', 'Code', 'Name', 'Weight', 'Cube', 'Truck', 'VehicleCheck']
+                                display_cols = ['Trip', 'Code', 'Name', 'Distance_from_DC', 'Weight', 'Cube', 'Truck', 'VehicleCheck']
                                 if 'Province' in result_df.columns:
                                     display_cols.insert(3, 'Province')
                                 
                                 display_df = result_df[display_cols].copy()
                                 if 'Province' not in result_df.columns:
-                                    display_df.columns = ['ทริป', 'รหัส', 'ชื่อสาขา', 'น้ำหนัก(kg)', 'คิว(m³)', 'รถ', 'ตรวจสอบรถ']
+                                    display_df.columns = ['ทริป', 'รหัส', 'ชื่อสาขา', 'ระยะทาง(km)', 'น้ำหนัก(kg)', 'คิว(m³)', 'รถ', 'ตรวจสอบรถ']
                                 else:
-                                    display_df.columns = ['ทริป', 'รหัส', 'ชื่อสาขา', 'จังหวัด', 'น้ำหนัก(kg)', 'คิว(m³)', 'รถ', 'ตรวจสอบรถ']
+                                    display_df.columns = ['ทริป', 'รหัส', 'ชื่อสาขา', 'จังหวัด', 'ระยะทาง(km)', 'น้ำหนัก(kg)', 'คิว(m³)', 'รถ', 'ตรวจสอบรถ']
                                 
-                                st.dataframe(display_df, use_container_width=True, height=400)
+                                # จัดรูปแบบคอลัมน์ระยะทาง
+                                st.dataframe(
+                                    display_df.style.format({
+                                        'ระยะทาง(km)': '{:.1f}',
+                                        'น้ำหนัก(kg)': '{:.2f}',
+                                        'คิว(m³)': '{:.2f}'
+                                    }),
+                                    use_container_width=True, 
+                                    height=400
+                                )
                             
                             # แสดงสาขาที่มีคำเตือน
                             warning_branches = result_df[result_df['VehicleCheck'].str.contains('⚠️', na=False)]
