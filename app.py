@@ -2278,7 +2278,7 @@ def predict_trips(test_df, model_data):
             elif max_allowed == 'JB':
                 recommended = 'JB'
             
-            # 2. กรุงเทพ+ปริมณฑล (พื้นที่ใกล้มาก) → ลอง 4W/JB ก่อน (ห้าม 6W)
+            # 2. กรุงเทพ+ปริมณฑล (พื้นท้ี่ใกล้มาก) → ลอง 4W/JB ก่อน (ห้าม 6W)
             elif all_nearby:
                 # ลอง 4W ก่อน
                 if cube_util_4w <= 120 and weight_util_4w <= 130:
@@ -2287,10 +2287,9 @@ def predict_trips(test_df, model_data):
                 elif cube_util_jb <= 130 and weight_util_jb <= 130:
                     recommended = 'JB'
                     region_changes['nearby_6w_to_jb'] += 1
-                # ถ้า JB ก็ไม่พอ → บังคับใช้ JB แต่เตือน (ห้ามใช้ 6W)
+                # ถ้า JB ก็ไม่พอ → ต้องแยกทริป (จะแยกใน Phase 2.5)
                 else:
-                    recommended = 'JB'
-                    st.warning(f"⚠️ Trip {trip_num}: กรุงเทพ/ปริมณฑล ของเกิน JB ({cube_util_jb:.1f}%) แต่บังคับใช้ JB (ห้าม 6W)")
+                    recommended = 'JB'  # กำหนดไว้ก่อน จะแยกภายหลัง
                     region_changes['nearby_6w_to_jb'] += 1
             
             # 3. พื้นที่ไกล/ต่างจังหวัด → ใช้ 6W ให้เต็มก่อน
@@ -2342,13 +2341,9 @@ def predict_trips(test_df, model_data):
         current_vehicle = trip_recommended_vehicles.get(trip_num, '6W')
         
         if all_nearby and current_vehicle == '6W':
-            # บังคับเปลี่ยนเป็น JB
+            # บังคับเปลี่ยนเป็น JB (ไม่แสดง warning)
             trip_recommended_vehicles[trip_num] = 'JB'
             bangkok_6w_count += 1
-            st.warning(f"⚠️ Trip {trip_num}: บังคับเปลี่ยนจาก 6W → JB (กรุงเทพ/ปริมณฑล ห้ามใช้ 6W)")
-    
-    if bangkok_6w_count > 0:
-        st.error(f"❌ พบ {bangkok_6w_count} ทริปในกรุงเทพ/ปริมณฑลใช้ 6W → บังคับเปลี่ยนเป็น JB")
     
     # 🚨 Phase 2.1: ตรวจสอบและแก้ไขทริปที่ใช้รถใหญ่เกินข้อจำกัด
     st.text("Phase 2.1: ตรวจสอบข้อจำกัดรถ...")
@@ -2443,6 +2438,13 @@ def predict_trips(test_df, model_data):
             if cube_util > 120 and len(trip_data) >= 4:
                 should_split = True
                 target_vehicle = 'JB'
+        elif current_vehicle == 'JB':
+            cube_util = (total_c / LIMITS['JB']['max_c']) * 100
+            weight_util = (total_w / LIMITS['JB']['max_w']) * 100
+            # JB Cube เกิน 130% → แยก (โดยเฉพาะกรุงเทพที่ห้ามใช้ 6W)
+            if cube_util > 130 and len(trip_data) >= 4:
+                should_split = True
+                target_vehicle = 'JB'  # แยกเป็น JB อีกคัน
             else:
                 should_split = False
         elif current_vehicle == 'JB':
@@ -2783,6 +2785,21 @@ def predict_trips(test_df, model_data):
         return f"🚫 จำกัด {max_used_vehicle} ({history_str})"
     
     test_df['VehicleCheck'] = test_df.apply(check_vehicle_history, axis=1)
+    
+    # เพิ่มคอลัมน์เตือนสำหรับทริปที่เกิน 12 สาขา
+    def check_branch_count(row):
+        trip_num = row['Trip']
+        if trip_num == 0:
+            return ""
+        
+        trip_branch_count = len(test_df[test_df['Trip'] == trip_num])
+        
+        if trip_branch_count > 12:
+            return f"⚠️ เกิน 12 สาขา ({trip_branch_count} สาขา)"
+        else:
+            return f"✅ {trip_branch_count} สาขา"
+    
+    test_df['BranchCount'] = test_df.apply(check_branch_count, axis=1)
     
     return test_df, summary_df
 
