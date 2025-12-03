@@ -1107,28 +1107,69 @@ def main():
                     
                     all_codes_set = set(df_region['Code'].unique())
                     
-                    # สร้างกลุ่มสาขา
-                    groups = []
-                    assigned = set()
-                    
-                    for _, row in df_region.drop_duplicates('Code').iterrows():
+                    # สร้างกลุ่มสาขาแบบ Union-Find (รวมข้าม Booking ถ้าจังหวัดเดียวกัน)
+                    # Step 1: สร้างกลุ่มจาก Booking ก่อน
+                    booking_groups = {}
+                    for _, row in df_region.iterrows():
                         code = row['Code']
-                        if code in assigned:
-                            continue
-                        
                         code_province = row.get('Province', 'UNKNOWN')
                         
-                        # หาสาขาที่อยู่ Booking เดียวกัน + จังหวัดเดียวกัน
+                        # หาสาขาที่อยู่ Booking เดียวกัน
                         paired = find_paired_branches(code, code_province, df_region)
-                        group_codes = {code} | (paired - assigned)
                         
-                        for c in group_codes:
-                            assigned.add(c)
+                        # เก็บกลุ่มพร้อมจังหวัด
+                        group_key = tuple(sorted({code} | paired))
+                        if group_key not in booking_groups:
+                            # เก็บจังหวัดทั้งหมดในกลุ่มนี้
+                            provinces = set()
+                            for c in group_key:
+                                prov = df_region[df_region['Code'] == c]['Province'].iloc[0] if len(df_region[df_region['Code'] == c]) > 0 else 'UNKNOWN'
+                                provinces.add(prov)
+                            booking_groups[group_key] = provinces
+                    
+                    # Step 2: รวมกลุ่มที่มีจังหวัดร่วมกัน
+                    merged_groups = []
+                    used_groups = set()
+                    
+                    for group1, provinces1 in booking_groups.items():
+                        if group1 in used_groups:
+                            continue
+                        
+                        # เริ่มต้นกลุ่มใหม่
+                        merged_codes = set(group1)
+                        merged_provinces = provinces1.copy()
+                        used_groups.add(group1)
+                        
+                        # หากลุ่มอื่นที่มีจังหวัดร่วมกัน
+                        changed = True
+                        while changed:
+                            changed = False
+                            for group2, provinces2 in booking_groups.items():
+                                if group2 in used_groups:
+                                    continue
+                                # ถ้ามีจังหวัดร่วมกัน → รวมกลุ่ม
+                                if merged_provinces & provinces2:
+                                    merged_codes |= set(group2)
+                                    merged_provinces |= provinces2
+                                    used_groups.add(group2)
+                                    changed = True
+                        
+                        merged_groups.append({
+                            'codes': merged_codes,
+                            'provinces': merged_provinces
+                        })
+                    
+                    # Step 3: แปลงเป็น groups format เดิม
+                    groups = []
+                    for mg in merged_groups:
+                        # ใช้จังหวัดแรกเป็นตัวแทน
+                        rep_code = list(mg['codes'])[0]
+                        rep_row = df_region[df_region['Code'] == rep_code].iloc[0]
                         
                         groups.append({
-                            'codes': group_codes,
-                            'region': row.get('Region', 'ไม่ระบุ'),
-                            'province': row.get('Province', 'ไม่ระบุ')
+                            'codes': mg['codes'],
+                            'region': rep_row.get('Region', 'ไม่ระบุ'),
+                            'province': ', '.join(sorted(mg['provinces']))
                         })
                     
                     # แสดงสถิติ
