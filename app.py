@@ -506,6 +506,20 @@ def process_dataframe(df):
         else:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
     
+    # เพิ่มจังหวัดจาก Master ถ้ายังไม่มี
+    if 'Province' not in df.columns or df['Province'].isna().all():
+        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns and 'Code' in df.columns:
+            # สร้าง mapping จาก Master
+            province_map = {}
+            for _, row in MASTER_DATA.iterrows():
+                code = row.get('Plan Code', '')
+                province = row.get('จังหวัด', '')
+                if code and province:
+                    province_map[code] = province
+            
+            # ใส่จังหวัดให้แต่ละสาขา
+            df['Province'] = df['Code'].map(province_map)
+    
     return df.reset_index(drop=True)
 
 def predict_trips(test_df, model_data):
