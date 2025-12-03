@@ -713,11 +713,39 @@ def predict_trips(test_df, model_data):
                 # ต่างจังหวัด = ห้ามจับคู่เด็ดขาด (แม้มีประวัติ)
                 continue
             
-            # ผ่านเช็คจังหวัดแล้ว - ถ้าชื่อคล้ายหรือมีประวัติ → ข้าม
-            if names_are_similar or has_history:
-                pass  # ไม่ต้องเช็คระยะทาง
-            else:
-                # ไม่มีประวัติและชื่อไม่คล้าย → เช็คระยะทาง (ภายใน 20 กม.)
+            # ผ่านเช็คจังหวัดแล้ว - ตรวจสอบความเหมาะสมในการรวมกลุ่ม
+            # ลำดับความสำคัญ: 1. ชื่อคล้ายกัน  2. ประวัติ  3. ตำบล/อำเภอเดียวกัน  4. ระยะทาง
+            
+            can_pair = False
+            
+            # 1. ชื่อคล้ายกัน → รวมได้ทันที
+            if names_are_similar:
+                can_pair = True
+            # 2. มีประวัติร่วมกัน → รวมได้ทันที
+            elif has_history:
+                can_pair = True
+            # 3. เช็คตำบล/อำเภอจาก Master
+            elif not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                seed_master = MASTER_DATA[MASTER_DATA['Plan Code'] == seed_code]
+                code_master = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                
+                if len(seed_master) > 0 and len(code_master) > 0:
+                    seed_m = seed_master.iloc[0]
+                    code_m = code_master.iloc[0]
+                    
+                    # เช็คตำบลเดียวกัน
+                    if seed_m.get('ตำบล', '') and code_m.get('ตำบล', ''):
+                        if seed_m.get('ตำบล', '') == code_m.get('ตำบล', ''):
+                            can_pair = True
+                    
+                    # เช็คอำเภอเดียวกัน (และจังหวัดเดียวกัน)
+                    if not can_pair and seed_m.get('อำเภอ', '') and code_m.get('อำเภอ', ''):
+                        if (seed_m.get('อำเภอ', '') == code_m.get('อำเภอ', '') and 
+                            seed_m.get('จังหวัด', '') == code_m.get('จังหวัด', '')):
+                            can_pair = True
+            
+            # 4. ถ้ายังไม่ผ่าน → เช็คระยะทาง (ภายใน 20 กม.)
+            if not can_pair:
                 if 'Latitude' in test_df.columns and 'Longitude' in test_df.columns:
                     seed_lat = test_df[test_df['Code'] == seed_code]['Latitude'].iloc[0] if len(test_df[test_df['Code'] == seed_code]) > 0 else 0
                     seed_lon = test_df[test_df['Code'] == seed_code]['Longitude'].iloc[0] if len(test_df[test_df['Code'] == seed_code]) > 0 else 0
@@ -736,8 +764,12 @@ def predict_trips(test_df, model_data):
                         distance_km = 6371 * c  # รัศมีโลก
                         
                         # ถ้าห่างเกิน 20 กม. = ต่างพื้นที่ → ข้าม
-                        if distance_km > 20:
-                            continue
+                        if distance_km <= 20:
+                            can_pair = True
+            
+            # ถ้าไม่ผ่านเงื่อนไขใดๆ → ข้ามสาขานี้
+            if not can_pair:
+                continue
             
             # กฎ 1: ถ้าเคยไปด้วยกันในประวัติ = จัดเข้าทริปเดียวกัน + ใช้รถแบบเดิม
             if pair in trip_pairs:
