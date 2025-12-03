@@ -2497,18 +2497,56 @@ def predict_trips(test_df, model_data):
                     # อัพเดททริป
                     if len(new_trips) > 1 and should_split:
                         # แยกทริป (มีสาขาเพียงพอทุกทริป)
-                        # ทริปแรกใช้เลขเดิม
-                        for code in new_trips[0]:
-                            test_df.loc[test_df['Code'] == code, 'Trip'] = trip_num
-                        trip_recommended_vehicles[trip_num] = target_vehicle
+                        # 🎯 เลือกรถที่เหมาะสมสำหรับแต่ละทริปที่แยก
                         
-                        # ทริปถัดไปสร้างใหม่
-                        for group in new_trips[1:]:
-                            new_trip_num = test_df['Trip'].max() + 1
-                            for code in group:
-                                test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip_num
-                            trip_recommended_vehicles[new_trip_num] = target_vehicle
-                            split_count += 1
+                        for idx, group in enumerate(new_trips):
+                            # คำนวณน้ำหนัก/คิวของทริปนี้
+                            group_data = test_df[test_df['Code'].isin(group)]
+                            group_w = group_data['Weight'].sum()
+                            group_c = group_data['Cube'].sum()
+                            
+                            # ตรวจสอบข้อจำกัดสาขาในกลุ่มนี้
+                            group_max_allowed = get_max_vehicle_for_trip(set(group))
+                            
+                            # เลือกรถที่เหมาะสม (เล็กสุดที่ใส่ได้)
+                            best_vehicle = None
+                            
+                            # ลอง 4W ก่อน (ถ้าไม่มีข้อจำกัด)
+                            if group_max_allowed != 'JB' and group_max_allowed != '6W':
+                                util_4w = max((group_w / LIMITS['4W']['max_w']) * 100, 
+                                             (group_c / LIMITS['4W']['max_c']) * 100)
+                                if util_4w >= 85 and util_4w <= 130:  # 4W คุ้มค่า: 85-130%
+                                    best_vehicle = '4W'
+                            
+                            # ถ้า 4W ไม่เหมาะสม → ลอง JB
+                            if best_vehicle is None and group_max_allowed != '6W':
+                                util_jb = max((group_w / LIMITS['JB']['max_w']) * 100,
+                                            (group_c / LIMITS['JB']['max_c']) * 100)
+                                if util_jb <= 140:  # JB ยอมได้ถึง 140%
+                                    best_vehicle = 'JB'
+                            
+                            # ถ้ายังไม่ได้ → ใช้ target_vehicle เดิม
+                            if best_vehicle is None:
+                                best_vehicle = target_vehicle
+                            
+                            # บังคับตามข้อจำกัดสาขา
+                            vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
+                            if vehicle_priority.get(best_vehicle, 3) > vehicle_priority.get(group_max_allowed, 3):
+                                best_vehicle = group_max_allowed
+                            
+                            # กำหนดทริป
+                            if idx == 0:
+                                # ทริปแรกใช้เลขเดิม
+                                for code in group:
+                                    test_df.loc[test_df['Code'] == code, 'Trip'] = trip_num
+                                trip_recommended_vehicles[trip_num] = best_vehicle
+                            else:
+                                # ทริปถัดไปสร้างใหม่
+                                new_trip_num = test_df['Trip'].max() + 1
+                                for code in group:
+                                    test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip_num
+                                trip_recommended_vehicles[new_trip_num] = best_vehicle
+                                split_count += 1
                     else:
                         # ไม่แยก → ใช้รถเดิม (ยอมรับที่เกินมา)
                         trip_recommended_vehicles[trip_num] = target_vehicle
