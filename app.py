@@ -36,6 +36,13 @@ EXCLUDE_BRANCHES = ['DC011', 'PTDC', 'PTG DISTRIBUTION CENTER']
 # รายชื่อที่ต้องตัดออก (ใช้ตรวจสอบชื่อ)
 EXCLUDE_NAMES = ['Distribution Center', 'PTG Distribution', 'บ.พีทีจี เอ็นเนอยี']
 
+# พิกัด DC วังน้อย (จุดกลาง)
+DC_WANG_NOI_LAT = 14.179394
+DC_WANG_NOI_LON = 100.648149
+
+# ระยะทางที่ต้องใช้รถ 6W (กม.)
+DISTANCE_REQUIRE_6W = 100  # ถ้าห่างจาก DC เกิน 100 กม. ต้องใช้ 6W
+
 # ==========================================
 # LOAD MASTER DATA
 # ==========================================
@@ -65,6 +72,35 @@ def normalize(val):
     """ทำให้รหัสสาขาเป็นมาตรฐาน"""
     return str(val).strip().upper().replace(" ", "").replace(".0", "")
 
+def calculate_distance_from_dc(lat, lon):
+    """คำนวณระยะทางจาก DC วังน้อย (กม.)"""
+    if lat == 0 or lon == 0:
+        return 0
+    import math
+    lat1, lon1 = math.radians(DC_WANG_NOI_LAT), math.radians(DC_WANG_NOI_LON)
+    lat2, lon2 = math.radians(lat), math.radians(lon)
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+    c = 2 * math.asin(math.sqrt(a))
+    return 6371 * c
+
+def get_required_vehicle_by_distance(branch_code):
+    """ตรวจสอบว่าสาขาต้องใช้รถอะไรตามระยะทางจาก DC"""
+    # ดึงพิกัดจาก Master
+    if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+        master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == branch_code]
+        if len(master_row) > 0:
+            lat = master_row.iloc[0].get('ละติจูด', 0)
+            lon = master_row.iloc[0].get('ลองติจูด', 0)
+            distance = calculate_distance_from_dc(lat, lon)
+            
+            # ถ้าห่างจาก DC เกินกำหนด → ต้องใช้ 6W
+            if distance > DISTANCE_REQUIRE_6W:
+                return '6W', distance
+    
+    return None, 0
+
 def can_fit_truck(total_weight, total_cube, truck_type):
     """เช็คว่าน้ำหนัก/คิวใส่รถได้หรือไม่"""
     limits = LIMITS[truck_type]
@@ -72,12 +108,19 @@ def can_fit_truck(total_weight, total_cube, truck_type):
     max_c = limits['max_c'] * BUFFER
     return total_weight <= max_w and total_cube <= max_c
 
-def suggest_truck(total_weight, total_cube, max_allowed='6W'):
+def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None):
     """
     แนะนำรถที่เหมาะสม โดยเลือกรถที่:
-    1. ใส่ของได้พอดี (ไม่เกินขีดจำกัด)
-    2. ใช้งานได้มากที่สุด (ใกล้ 100% ที่สุด)
+    1. เช็คระยะทางจาก DC - ถ้าไกล → บังคับ 6W
+    2. ใส่ของได้พอดี (ไม่เกินขีดจำกัด)
+    3. ใช้งานได้มากที่สุด (ใกล้ 100% ที่สุด)
     """
+    # เช็คว่ามีสาขาที่ต้องใช้ 6W เพราะอยู่ไกลหรือไม่
+    if trip_codes:
+        for code in trip_codes:
+            required_vehicle, distance = get_required_vehicle_by_distance(code)
+            if required_vehicle == '6W':
+                return '6W'  # บังคับ 6W เพราะมีสาขาที่อยู่ไกล
     vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
     max_size = vehicle_sizes.get(max_allowed, 3)
     
@@ -919,15 +962,29 @@ def predict_trips(test_df, model_data):
         min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles)
         max_allowed_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(min_max_size, '6W')
         
+        # เช็คว่ามีสาขาที่ต้องใช้ 6W เพราะอยู่ไกลหรือไม่
+        must_use_6w = False
+        for code in trip_codes:
+            required_vehicle, distance = get_required_vehicle_by_distance(code)
+            if required_vehicle == '6W':
+                must_use_6w = True
+                break
+        
         # เลือกรถ: ถ้ามีในประวัติใช้ตามประวัติ ไม่มีก็ auto-suggest
-        if trip_num in trip_recommended_vehicles:
+        if must_use_6w:
+            suggested = '6W'
+            source = "📍 ระยะไกล"
+        elif trip_num in trip_recommended_vehicles:
             suggested = trip_recommended_vehicles[trip_num]
             # ตรวจสอบว่ารถที่แนะนำไม่เกินข้อจำกัด
             if vehicle_sizes.get(suggested, 0) > min_max_size:
                 suggested = max_allowed_vehicle
+            # ตรวจสอบว่าต้องใช้ 6W หรือไม่
+            if must_use_6w and suggested != '6W':
+                suggested = '6W'
             source = "📜 ประวัติ"
         else:
-            suggested = suggest_truck(total_w, total_c, max_allowed_vehicle)
+            suggested = suggest_truck(total_w, total_c, max_allowed_vehicle, trip_codes)
             source = "🤖 AI"
         
         # คำนวณ % การใช้รถ
