@@ -72,23 +72,60 @@ def load_punthai_reference():
         file_path = 'Dc/แผนงาน Punthai Maxmart รอบสั่ง 24หยิบ 25พฤศจิกายน 2568 To.เฟิ(1) - สำเนา.xlsx'
         df = pd.read_excel(file_path, sheet_name='2.Punthai', header=1)
         
-        # กรองเฉพาะแถวที่มี Trip
+        # กรองเฉพาะแถวที่มี Trip และไม่ใช่ DC/Distribution Center
         df_clean = df[df['Trip'].notna()].copy()
+        df_clean = df_clean[~df_clean['BranchCode'].isin(['DC011', 'PTDC', 'PTG Distribution Center'])].copy()
+        
+        # Merge กับ Master เพื่อได้ข้อมูลตำบล/อำเภอ/จังหวัด
+        try:
+            df_master = pd.read_excel('Dc/Master สถานที่ส่ง.xlsx')
+            df_clean = df_clean.merge(
+                df_master[['Plan Code', 'ตำบล', 'อำเภอ', 'จังหวัด']],
+                left_on='BranchCode',
+                right_on='Plan Code',
+                how='left'
+            )
+        except:
+            pass
         
         # สร้าง dictionary: Trip → ข้อมูล
         trip_patterns = {}
+        location_stats = {
+            'same_province': 0,
+            'mixed_province': 0,
+            'avg_branches': 0
+        }
+        
         for trip_num in df_clean['Trip'].unique():
             trip_data = df_clean[df_clean['Trip'] == trip_num]
+            
+            # Get location info
+            provinces = set(trip_data['จังหวัด'].dropna().tolist()) if 'จังหวัด' in trip_data.columns else set()
+            
+            # Count same vs mixed province
+            if len(provinces) == 1:
+                location_stats['same_province'] += 1
+            elif len(provinces) > 1:
+                location_stats['mixed_province'] += 1
+            
             trip_patterns[int(trip_num)] = {
                 'branches': len(trip_data),
                 'codes': trip_data['BranchCode'].tolist(),
                 'weight': trip_data['TOTALWGT'].sum() if 'TOTALWGT' in trip_data.columns else 0,
-                'cube': trip_data['TOTALCUBE'].sum() if 'TOTALCUBE' in trip_data.columns else 0
+                'cube': trip_data['TOTALCUBE'].sum() if 'TOTALCUBE' in trip_data.columns else 0,
+                'provinces': list(provinces),
+                'same_province': len(provinces) == 1
             }
         
-        return trip_patterns
+        # Calculate stats
+        if trip_patterns:
+            location_stats['avg_branches'] = sum(t['branches'] for t in trip_patterns.values()) / len(trip_patterns)
+            total = location_stats['same_province'] + location_stats['mixed_province']
+            location_stats['same_province_pct'] = (location_stats['same_province'] / total * 100) if total > 0 else 0
+        
+        return {'patterns': trip_patterns, 'stats': location_stats}
     except:
-        return {}
+        return {'patterns': {}, 'stats': {}}
 
 # โหลด Punthai Reference
 PUNTHAI_PATTERNS = load_punthai_reference()
@@ -1393,6 +1430,19 @@ def main():
         st.title("🚚 ระบบจัดเที่ยว")
     with col2:
         st.image("https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/1f69a.svg", width=100)
+    
+    # Show Punthai learning stats
+    if PUNTHAI_PATTERNS and 'stats' in PUNTHAI_PATTERNS and PUNTHAI_PATTERNS['stats']:
+        stats = PUNTHAI_PATTERNS['stats']
+        with st.expander("📊 สถิติที่เรียนรู้จากไฟล์ Punthai Maxmart", expanded=False):
+            col_a, col_b, col_c = st.columns(3)
+            with col_a:
+                st.metric("เฉลี่ยสาขา/ทริป", f"{stats.get('avg_branches', 0):.1f}")
+            with col_b:
+                st.metric("ทริปจังหวัดเดียว", f"{stats.get('same_province_pct', 0):.1f}%")
+            with col_c:
+                total_trips = stats.get('same_province', 0) + stats.get('mixed_province', 0)
+                st.metric("จำนวนทริปอ้างอิง", total_trips)
     
     st.markdown("---")
     
