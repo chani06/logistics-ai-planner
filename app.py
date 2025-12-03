@@ -357,26 +357,53 @@ def process_dataframe(df):
         return None
     
     rename_map = {}
+    
+    # ถ้ามีคอลัมน์น้อยกว่า 15 = ใช้ลำดับคอลัมน์
+    # ลำดับมาตรฐาน: Sep, BU, รหัสสาขา, รหัส WMS, สาขา, Total Cube, Total Wgt, จำนวนชิ้น, Trip, Trip no, ...
+    if len(df.columns) >= 8:
+        col_list = list(df.columns)
+        # ลำดับ 2 = รหัสสาขา
+        if len(col_list) > 2:
+            rename_map[col_list[2]] = 'Code'
+        # ลำดับ 4 = สาขา/ชื่อ
+        if len(col_list) > 4:
+            rename_map[col_list[4]] = 'Name'
+        # ลำดับ 5 = Total Cube
+        if len(col_list) > 5:
+            rename_map[col_list[5]] = 'Cube'
+        # ลำดับ 6 = Total Wgt
+        if len(col_list) > 6:
+            rename_map[col_list[6]] = 'Weight'
+        # ลำดับ 8 = Trip
+        if len(col_list) > 8:
+            rename_map[col_list[8]] = 'Trip'
+        # ลำดับ 9 = Trip no
+        if len(col_list) > 9:
+            rename_map[col_list[9]] = 'TripNo'
+    
+    # ตรวจสอบเพิ่มเติมจากชื่อคอลัมน์
     for col in df.columns:
+        if col in rename_map:
+            continue
         col_clean = str(col).strip()
         col_upper = col_clean.upper().replace(' ', '').replace('_', '')
         
-        if col_clean == 'BranchCode' or 'รหัสสาขา' in col_clean or col_clean == 'รหัส WMS':
+        if col_clean == 'BranchCode' or 'รหัสสาขา' in col_clean or col_clean == 'รหัส WMS' or 'BRANCH_CODE' in col_upper:
             rename_map[col] = 'Code'
-        elif col_clean == 'Branch' or 'ชื่อสาขา' in col_clean or col_clean == 'สาขา':
+        elif col_clean == 'Branch' or 'ชื่อสาขา' in col_clean or col_clean == 'สาขา' or 'BRANCH' in col_upper:
             rename_map[col] = 'Name'
-        elif col_clean == 'TOTALWGT' or 'น้ำหนัก' in col_clean:
+        elif 'TOTALWGT' in col_upper or 'น้ำหนัก' in col_clean or 'WGT' in col_upper or 'WEIGHT' in col_upper:
             rename_map[col] = 'Weight'
-        elif col_clean == 'TOTALCUBE' or 'คิว' in col_clean:
+        elif 'TOTALCUBE' in col_upper or 'คิว' in col_clean or 'CUBE' in col_upper:
             rename_map[col] = 'Cube'
-        elif 'latitude' in col_clean.lower() or col_clean == 'ละติจูด':
+        elif 'latitude' in col_clean.lower() or col_clean == 'ละติจูด' or 'LAT' in col_upper:
             rename_map[col] = 'Latitude'
-        elif 'longitude' in col_clean.lower() or col_clean == 'ลองติจูด':
+        elif 'longitude' in col_clean.lower() or col_clean == 'ลองติจูด' or 'LONG' in col_upper or 'LNG' in col_upper:
             rename_map[col] = 'Longitude'
-        elif 'จังหวัด' in col_clean:
+        elif 'จังหวัด' in col_clean or 'PROVINCE' in col_upper:
             rename_map[col] = 'Province'
         elif col_upper in ['TRIPNO', 'TRIP_NO'] or col_clean == 'Trip no':
-            rename_map[col] = 'TripNo'  # ประเภทรถ เช่น 4W009, JB014
+            rename_map[col] = 'TripNo'
         elif col_upper == 'TRIP' or 'ทริป' in col_clean or 'เที่ยว' in col_clean:
             rename_map[col] = 'Trip'
     
@@ -625,13 +652,12 @@ def predict_trips(test_df, model_data):
             code_name = test_df[test_df['Code'] == code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
             names_are_similar = is_similar_name(seed_name, code_name)
             
-            # กฎสำคัญที่สุด: บังคับห้ามข้ามจังหวัด 100%
-            # ต้องเป็นจังหวัดเดียวกันเท่านั้น (ไม่มีข้อยกเว้น)
+            # กฎสำคัญที่สุด: บังคับห้ามข้ามจังหวัด 100% (ไม่มีข้อยกเว้น)
+            # ถ้าไม่รู้จังหวัด หรือต่างจังหวัด = ห้ามจับคู่
             if seed_province == 'UNKNOWN' or code_province == 'UNKNOWN':
-                # ถ้าไม่มีข้อมูลจังหวัด ให้เช็คจากประวัติหรือชื่อคล้ายกัน
-                if pair not in trip_pairs and not names_are_similar:
-                    continue
-            elif seed_province != code_province:
+                # ไม่มีข้อมูลจังหวัด = ข้าม (เพื่อความปลอดภัย)
+                continue
+            if seed_province != code_province:
                 # ต่างจังหวัด = ห้ามจับคู่เด็ดขาด
                 continue
             
