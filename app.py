@@ -198,7 +198,17 @@ def is_similar_name(name1, name2):
     }
     
     for eng_word, thai_word in thai_eng_map.items():
-        if (eng_word in eng1 and thai_word in thai2) or (eng_word in eng2 and thai_word in thai1):
+        # ตรวจสอบว่ามีคำนี้ในชื่อทั้งสองฝั่ง (ไทย-อังกฤษ หรือ อังกฤษ-อังกฤษ หรือ ไทย-ไทย)
+        has_eng_in_1 = eng_word in eng1
+        has_eng_in_2 = eng_word in eng2
+        has_thai_in_1 = thai_word in thai1
+        has_thai_in_2 = thai_word in thai2
+        
+        # ถ้าทั้งสองมีคำเดียวกัน (ไม่ว่าจะไทยหรืออังกฤษ) = คล้ายกัน
+        if (has_eng_in_1 and has_eng_in_2) or (has_thai_in_1 and has_thai_in_2):
+            return True
+        # ถ้าข้ามภาษา (อังกฤษ-ไทย)
+        if (has_eng_in_1 and has_thai_in_2) or (has_eng_in_2 and has_thai_in_1):
             return True
     
     return False
@@ -652,13 +662,14 @@ def predict_trips(test_df, model_data):
             code_name = test_df[test_df['Code'] == code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
             names_are_similar = is_similar_name(seed_name, code_name)
             
-            # กฎสำคัญที่สุด: บังคับห้ามข้ามจังหวัด 100% (ไม่มีข้อยกเว้น)
-            # ถ้าไม่รู้จังหวัด หรือต่างจังหวัด = ห้ามจับคู่
+            # กฎสำคัญที่สุด: บังคับห้ามข้ามจังหวัด 100%
+            # ข้อยกเว้น: ถ้าชื่อคล้ายกันมาก (เช่น Future Rangsit ทั้งหมด) → อนุญาต
             if seed_province == 'UNKNOWN' or code_province == 'UNKNOWN':
-                # ไม่มีข้อมูลจังหวัด = ข้าม (เพื่อความปลอดภัย)
-                continue
-            if seed_province != code_province:
-                # ต่างจังหวัด = ห้ามจับคู่เด็ดขาด
+                # ไม่มีข้อมูลจังหวัด - อนุญาตเฉพาะชื่อคล้ายกันหรือมีประวัติร่วมกัน
+                if not names_are_similar and pair not in trip_pairs:
+                    continue
+            elif seed_province != code_province:
+                # ต่างจังหวัด = ห้ามจับคู่เด็ดขาด (ไม่มีข้อยกเว้น)
                 continue
             
             # กฎ 1: ถ้าเคยไปด้วยกันในประวัติ = จัดเข้าทริปเดียวกัน + ใช้รถแบบเดิม
