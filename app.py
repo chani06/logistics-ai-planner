@@ -416,6 +416,8 @@ def process_dataframe(df):
             rename_map[col] = 'TripNo'
         elif col_upper == 'TRIP' or 'ทริป' in col_clean or 'เที่ยว' in col_clean:
             rename_map[col] = 'Trip'
+        elif 'BOOKING' in col_upper:
+            rename_map[col] = 'Booking'
     
     df = df.rename(columns=rename_map)
     
@@ -1069,25 +1071,37 @@ def main():
                     else:
                         df_region['Region'] = 'ไม่ระบุ'
                     
-                    # หากลุ่มสาขา (จากประวัติ + ชื่อคล้ายกัน)
-                    def find_paired_branches(code, code_name, all_codes, df_data):
+                    # หากลุ่มสาขา (ใช้ Booking No. เป็นหลัก)
+                    def find_paired_branches(code, code_province, df_data):
                         paired = set()
                         
-                        # 1. หาจากประวัติ trip_pairs
-                        for pair in trip_pairs:
-                            if code in pair:
-                                other = pair[0] if pair[1] == code else pair[1]
-                                if other in all_codes:
-                                    paired.add(other)
+                        # หา Booking No. ของสาขานี้
+                        code_rows = df_data[df_data['Code'] == code]
+                        if len(code_rows) == 0:
+                            return paired
                         
-                        # 2. หาจากชื่อสาขาคล้ายกัน (สำคัญ!)
-                        for other_code in all_codes:
-                            if other_code == code or other_code in paired:
+                        # เช็คว่ามีคอลัมน์ Booking หรือไม่
+                        if 'Booking' not in df_data.columns and 'Trip' not in df_data.columns:
+                            return paired
+                        
+                        booking_col = 'Booking' if 'Booking' in df_data.columns else 'Trip'
+                        code_bookings = set(code_rows[booking_col].dropna().astype(str))
+                        
+                        if not code_bookings:
+                            return paired
+                        
+                        # หาสาขาอื่นที่อยู่ Booking เดียวกัน + จังหวัดเดียวกัน
+                        for booking in code_bookings:
+                            if booking == 'nan' or not booking.strip():
                                 continue
-                            other_row = df_data[df_data['Code'] == other_code]
-                            if len(other_row) > 0 and 'Name' in other_row.columns:
-                                other_name = other_row['Name'].iloc[0]
-                                if is_similar_name(code_name, other_name):
+                            
+                            same_booking = df_data[df_data[booking_col].astype(str) == booking]
+                            for _, other_row in same_booking.iterrows():
+                                other_code = other_row['Code']
+                                other_province = other_row.get('Province', 'UNKNOWN')
+                                
+                                # เงื่อนไข: Booking เดียวกัน + จังหวัดเดียวกัน
+                                if other_code != code and other_province == code_province:
                                     paired.add(other_code)
                         
                         return paired
@@ -1103,10 +1117,10 @@ def main():
                         if code in assigned:
                             continue
                         
-                        code_name = row.get('Name', '')
+                        code_province = row.get('Province', 'UNKNOWN')
                         
-                        # หาสาขาที่เคยไปด้วยกัน หรือ ชื่อคล้ายกัน
-                        paired = find_paired_branches(code, code_name, all_codes_set, df_region)
+                        # หาสาขาที่อยู่ Booking เดียวกัน + จังหวัดเดียวกัน
+                        paired = find_paired_branches(code, code_province, df_region)
                         group_codes = {code} | (paired - assigned)
                         
                         for c in group_codes:
