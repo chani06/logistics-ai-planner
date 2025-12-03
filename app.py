@@ -662,24 +662,28 @@ def predict_trips(test_df, model_data):
             code_name = test_df[test_df['Code'] == code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
             names_are_similar = is_similar_name(seed_name, code_name)
             
-            # กฎการเช็คจังหวัด/พื้นที่ - มีลำดับความสำคัญ:
-            # 1. ถ้ามีประวัติร่วมกัน → อนุญาตเสมอ (ไว้ใจประวัติ)
-            # 2. ถ้าชื่อคล้ายกัน → อนุญาตเสมอ (แม้ต่างจังหวัดหรือไม่รู้จังหวัด)
-            # 3. ถ้าไม่มีทั้ง 2 → ต้องเป็นจังหวัดเดียวกัน + อยู่ใกล้กัน (รัศมี 20 กม.)
+            # กฎการเช็คจังหวัด/พื้นที่ - เช็คจังหวัดก่อนเสมอ:
+            # 1. เช็คจังหวัดก่อน - ต้องเป็นจังหวัดเดียวกัน (ไม่มีข้อยกเว้น)
+            # 2. ถ้าชื่อคล้ายกัน → อนุญาต (ไม่เช็คระยะทาง)
+            # 3. ถ้ามีประวัติร่วมกัน → อนุญาต (ไม่เช็คระยะทาง)
+            # 4. อื่นๆ → เช็คระยะทาง (ต้องอยู่ใกล้กันภายใน 20 กม.)
             
             has_history = pair in trip_pairs
             
-            # ถ้าไม่มีประวัติและชื่อไม่คล้าย → เช็คเข้มงวด
-            if not has_history and not names_are_similar:
-                # ต้องมีข้อมูลจังหวัด
-                if seed_province == 'UNKNOWN' or code_province == 'UNKNOWN':
+            # เช็คจังหวัดก่อนเสมอ (ไม่มีข้อยกเว้น)
+            if seed_province == 'UNKNOWN' or code_province == 'UNKNOWN':
+                # ไม่มีข้อมูลจังหวัด - อนุญาตเฉพาะชื่อคล้ายกัน
+                if not names_are_similar:
                     continue
-                    
-                # ต้องเป็นจังหวัดเดียวกัน
-                if seed_province != code_province:
-                    continue
-                
-                # เช็คระยะทาง (ถ้ามีพิกัด) - ต้องอยู่ใกล้กันภายใน 20 กม.
+            elif seed_province != code_province:
+                # ต่างจังหวัด = ห้ามจับคู่เด็ดขาด (แม้มีประวัติ)
+                continue
+            
+            # ผ่านเช็คจังหวัดแล้ว - ถ้าชื่อคล้ายหรือมีประวัติ → ข้าม
+            if names_are_similar or has_history:
+                pass  # ไม่ต้องเช็คระยะทาง
+            else:
+                # ไม่มีประวัติและชื่อไม่คล้าย → เช็คระยะทาง (ภายใน 20 กม.)
                 if 'Latitude' in test_df.columns and 'Longitude' in test_df.columns:
                     seed_lat = test_df[test_df['Code'] == seed_code]['Latitude'].iloc[0] if len(test_df[test_df['Code'] == seed_code]) > 0 else 0
                     seed_lon = test_df[test_df['Code'] == seed_code]['Longitude'].iloc[0] if len(test_df[test_df['Code'] == seed_code]) > 0 else 0
