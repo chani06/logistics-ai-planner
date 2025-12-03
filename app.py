@@ -2241,8 +2241,8 @@ def predict_trips(test_df, model_data):
         all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
         has_far = any(get_region_type(p) == 'far' for p in provinces) if provinces else True
         
-        # 🚛 เช็คระยะทาง - ไกลมาก (>200km) ต้องใช้ 6W
-        very_far = max_distance_from_dc > 200
+        # 🚛 เช็คระยะทาง - ไกลมากพิเศษ (>300km) ต้องใช้ 6W
+        very_far = max_distance_from_dc > 300
         
         # คำนวณ % การใช้รถแต่ละประเภท
         util_4w = max((total_w / LIMITS['4W']['max_w']) * 100, 
@@ -2266,10 +2266,20 @@ def predict_trips(test_df, model_data):
         
         # 🚨 ตรวจสอบข้อจำกัดสาขาก่อน
         if max_allowed == '4W':
-            recommended = '4W'
+            # ถ้า 4W ใส่ได้ → ใช้ 4W
+            if util_4w <= 130:
+                recommended = '4W'
+            # ถ้าใส่ไม่ได้ → ทำเครื่องหมายให้แยก (ใช้ 4W ไว้ก่อน)
+            else:
+                recommended = '4W'  # จะแยกใน Phase 2.1
         elif max_allowed == 'JB':
-            recommended = 'JB'
-        # 🚛 ระยะทางไกลมาก (>200km) และไม่มีข้อจำกัด → ต้องใช้ 6W
+            # ถ้า JB ใส่ได้ → ใช้ JB
+            if util_jb <= 130:
+                recommended = 'JB'
+            # ถ้าใส่ไม่ได้ → ทำเครื่องหมายให้แยก
+            else:
+                recommended = 'JB'  # จะแยกใน Phase 2.1
+        # 🚛 ระยะทางไกลมากพิเศษ (>300km) และไม่มีข้อจำกัด → ต้องใช้ 6W
         elif very_far:
             recommended = '6W'
             region_changes['far_keep_6w'] += 1
@@ -2354,60 +2364,82 @@ def predict_trips(test_df, model_data):
             continue
         
         trip_data = test_df[test_df['Trip'] == trip_num]
-        trip_codes = set(trip_data['Code'].values)
+        trip_codes = list(trip_data['Code'].values)
         current_vehicle = trip_recommended_vehicles.get(trip_num, '6W')
-        max_allowed = get_max_vehicle_for_trip(trip_codes)
+        max_allowed = get_max_vehicle_for_trip(set(trip_codes))
         
         total_w = trip_data['Weight'].sum()
         total_c = trip_data['Cube'].sum()
         
-        # เช็คว่ารถที่ใช้อยู่ใหญ่กว่าที่อนุญาตหรือไม่
+        # เช็คว่ารถที่ใช้อยู่ใหญ่กว่าที่อนุญาตหรือไม่ หรือเกินขนาดรถที่อนุญาต
         vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
         current_priority = vehicle_priority.get(current_vehicle, 3)
         allowed_priority = vehicle_priority.get(max_allowed, 3)
         
-        if current_priority > allowed_priority:
-            # เช็คว่าถ้าใช้รถที่อนุญาต จะใส่ได้ไหม
-            allowed_w = LIMITS[max_allowed]['max_w']
-            allowed_c = LIMITS[max_allowed]['max_c']
-            
-            if total_w <= allowed_w * 1.3 and total_c <= allowed_c * 1.3:
+        allowed_w = LIMITS[max_allowed]['max_w']
+        allowed_c = LIMITS[max_allowed]['max_c']
+        
+        # เช็ค utilization ของรถที่อนุญาต
+        util_allowed = max((total_w / allowed_w) * 100, (total_c / allowed_c) * 100)
+        
+        # กรณีที่ 1: รถใหญ่กว่าที่อนุญาต
+        # กรณีที่ 2: รถตามข้อจำกัดแต่ใส่ไม่ได้ (>130%)
+        if current_priority > allowed_priority or util_allowed > 130:
+            if util_allowed <= 130:
                 # ใส่รถที่อนุญาตได้ → ปรับรถ
                 trip_recommended_vehicles[trip_num] = max_allowed
                 fix_count += 1
             else:
-                # ใส่ไม่ได้ → ต้องแยกทริป
-                st.warning(f"⚠️ Trip {trip_num}: มีสาขาจำกัด {max_allowed} แต่ของเยอะเกินไป → แยกทริป")
+                # ใส่ไม่ได้ → แยกเป็นหลายทริปเล็ก
+                # จัดกลุ่มสาขาให้เต็มรถเล็กหลายคัน
+                new_trips = []
+                current_group = []
+                current_group_w = 0
+                current_group_c = 0
                 
-                # แยกสาขาที่จำกัดออกมาเป็นทริปใหม่
-                restricted_codes = []
-                unrestricted_codes = []
+                # เรียงตามน้ำหนัก (มาก→น้อย)
+                sorted_data = trip_data.sort_values('Weight', ascending=False)
                 
-                for code in trip_codes:
-                    branch_max = get_max_vehicle_for_branch(code)
-                    if vehicle_priority.get(branch_max, 3) < vehicle_priority.get('6W', 3):
-                        restricted_codes.append(code)
+                for _, row in sorted_data.iterrows():
+                    code = row['Code']
+                    w = row['Weight']
+                    c = row['Cube']
+                    
+                    # เช็คว่าถ้าเพิ่มสาขานี้ จะเกินรถที่อนุญาตไหม
+                    test_w = current_group_w + w
+                    test_c = current_group_c + c
+                    test_util = max((test_w / allowed_w) * 100, (test_c / allowed_c) * 100)
+                    
+                    if test_util <= 120 or len(current_group) == 0:
+                        # ใส่ได้
+                        current_group.append(code)
+                        current_group_w += w
+                        current_group_c += c
                     else:
-                        unrestricted_codes.append(code)
+                        # เต็มแล้ว → สร้างทริปใหม่
+                        new_trips.append(current_group.copy())
+                        current_group = [code]
+                        current_group_w = w
+                        current_group_c = c
                 
-                # สร้างทริปใหม่สำหรับสาขาที่จำกัด
-                if restricted_codes and unrestricted_codes:
-                    new_trip_num = test_df['Trip'].max() + 1
-                    for code in restricted_codes:
-                        test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip_num
+                # เพิ่มกลุ่มสุดท้าย
+                if current_group:
+                    new_trips.append(current_group)
+                
+                # อัพเดททริป
+                if len(new_trips) > 1:
+                    # ทริปแรกใช้เลขเดิม
+                    for code in new_trips[0]:
+                        test_df.loc[test_df['Code'] == code, 'Trip'] = trip_num
+                    trip_recommended_vehicles[trip_num] = max_allowed
                     
-                    # กำหนดรถใหม่
-                    restricted_data = test_df[test_df['Trip'] == new_trip_num]
-                    restricted_w = restricted_data['Weight'].sum()
-                    restricted_c = restricted_data['Cube'].sum()
-                    
-                    # หารถที่เหมาะสม
-                    if restricted_c <= LIMITS['4W']['max_c'] * 1.3:
-                        trip_recommended_vehicles[new_trip_num] = '4W'
-                    else:
-                        trip_recommended_vehicles[new_trip_num] = 'JB'
-                    
-                    split_count += 1
+                    # ทริปถัดไปสร้างใหม่
+                    for group in new_trips[1:]:
+                        new_trip_num = test_df['Trip'].max() + 1
+                        for code in group:
+                            test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip_num
+                        trip_recommended_vehicles[new_trip_num] = max_allowed
+                        split_count += 1
     
     if fix_count > 0:
         st.success(f"✅ Phase 2.1: ปรับรถสำเร็จ {fix_count} ทริป (ตามข้อจำกัดสาขา)")
