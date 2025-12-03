@@ -2483,8 +2483,20 @@ def predict_trips(test_df, model_data):
                         else:
                             new_trips.append(current_group)
                     
-                    # อัพเดททริป
+                    # ตรวจสอบก่อนแยกทริป: ถ้าแยกแล้วแต่ละทริปมีสาขาน้อยเกินไป → ไม่แยก
+                    min_branches_per_trip = 3  # ทริปควรมีอย่างน้อย 3 สาขา
+                    should_split = True
+                    
                     if len(new_trips) > 1:
+                        # เช็คว่าทุกทริปมีสาขาเพียงพอหรือไม่
+                        for group in new_trips:
+                            if len(group) < min_branches_per_trip:
+                                should_split = False
+                                break
+                    
+                    # อัพเดททริป
+                    if len(new_trips) > 1 and should_split:
+                        # แยกทริป (มีสาขาเพียงพอทุกทริป)
                         # ทริปแรกใช้เลขเดิม
                         for code in new_trips[0]:
                             test_df.loc[test_df['Code'] == code, 'Trip'] = trip_num
@@ -2497,8 +2509,8 @@ def predict_trips(test_df, model_data):
                                 test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip_num
                             trip_recommended_vehicles[new_trip_num] = target_vehicle
                             split_count += 1
-                    elif len(new_trips) == 1:
-                        # ไม่ต้องแยก → ใช้รถเดิม
+                    else:
+                        # ไม่แยก → ใช้รถเดิม (ยอมรับที่เกินมา)
                         trip_recommended_vehicles[trip_num] = target_vehicle
                         fix_count += 1
     
