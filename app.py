@@ -340,6 +340,32 @@ def get_max_vehicle_for_branch(branch_code):
     # 3. ถ้าไม่มีทั้งสองแหล่ง = ใช้รถใหญ่ได้
     return '6W'
 
+def get_max_vehicle_for_trip(trip_codes, branch_restrictions):
+    """
+    หารถใหญ่สุดที่ทริปนี้ใช้ได้ (เช็คข้อจำกัดของทุกสาขาในทริป)
+    
+    Args:
+        trip_codes: set ของ branch codes ในทริป
+        branch_restrictions: dict ข้อจำกัดสาขา
+    
+    Returns:
+        str: '4W', 'JB', หรือ '6W'
+    """
+    vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
+    max_allowed = '6W'  # Default
+    max_priority = 3
+    
+    for code in trip_codes:
+        branch_max = get_max_vehicle_for_branch(code)
+        priority = vehicle_priority.get(branch_max, 3)
+        
+        # เลือกรถที่เล็กที่สุด (ข้อจำกัดมากที่สุด)
+        if priority < max_priority:
+            max_priority = priority
+            max_allowed = branch_max
+    
+    return max_allowed
+
 def get_required_vehicle_by_distance(branch_code):
     """ตรวจสอบว่าสาขาต้องใช้รถอะไรตามระยะทางจาก DC"""
     # ดึงพิกัดจาก Master
