@@ -2751,6 +2751,76 @@ def predict_trips(test_df, model_data):
     
     test_df = add_distance_and_sort(test_df)
     
+    # 🗺️ คำนวณระยะทางแบบละเอียด
+    def calculate_detailed_distances(df):
+        """คำนวณ: DC→สาขาแรก, ระหว่างสาขา, รวมทั้งทริป"""
+        
+        # เตรียม dict เก็บผลลัพธ์
+        distance_from_dc = {}
+        distance_to_next = {}
+        total_trip_distance = {}
+        
+        for trip_num in df['Trip'].unique():
+            if trip_num == 0:
+                continue
+            
+            trip_data = df[df['Trip'] == trip_num].copy()
+            
+            # เรียงตาม Weight (มาก→น้อย) เพื่อให้ได้ลำดับเดียวกับการแสดงผล
+            trip_data = trip_data.sort_values('Weight', ascending=False)
+            codes = trip_data['Code'].tolist()
+            
+            # คำนวณระยะทาง
+            trip_total_dist = 0
+            prev_lat, prev_lon = DC_WANG_NOI_LAT, DC_WANG_NOI_LON
+            
+            for i, code in enumerate(codes):
+                # หาพิกัดสาขานี้
+                m = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                
+                if len(m) > 0:
+                    lat = m.iloc[0].get('ละติจูด', 0)
+                    lon = m.iloc[0].get('ลองติจูด', 0)
+                    
+                    if lat and lon:
+                        # คำนวณระยะทางจากจุดก่อนหน้า
+                        dist = haversine_distance(prev_lat, prev_lon, lat, lon)
+                        
+                        if i == 0:
+                            # สาขาแรก: ระยะจาก DC
+                            distance_from_dc[code] = round(dist, 2)
+                            distance_to_next[code] = 0  # ไม่มีระยะ "ก่อนหน้า"
+                        else:
+                            # สาขาถัดไป: ระยะจากสาขาก่อนหน้า
+                            distance_from_dc[code] = round(haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon), 2)
+                            distance_to_next[codes[i-1]] = round(dist, 2)  # บันทึกที่สาขาก่อนหน้า
+                            
+                            if i == len(codes) - 1:
+                                # สาขาสุดท้าย: ไม่มี "ถัดไป"
+                                distance_to_next[code] = 0
+                        
+                        trip_total_dist += dist
+                        prev_lat, prev_lon = lat, lon
+                    else:
+                        distance_from_dc[code] = 0
+                        distance_to_next[code] = 0
+                else:
+                    distance_from_dc[code] = 0
+                    distance_to_next[code] = 0
+            
+            # บันทึกระยะรวมทั้งทริป
+            for code in codes:
+                total_trip_distance[code] = round(trip_total_dist, 2)
+        
+        # เพิ่มคอลัมน์ลงใน DataFrame
+        df['Distance_from_DC'] = df['Code'].map(distance_from_dc).fillna(0)
+        df['Distance_to_Next'] = df['Code'].map(distance_to_next).fillna(0)
+        df['Total_Trip_Distance'] = df['Code'].map(total_trip_distance).fillna(0)
+        
+        return df
+    
+    test_df = calculate_detailed_distances(test_df)
+    
     # เพิ่มคอลัมน์เช็คว่าสาขาเคยใช้รถประเภทนี้หรือไม่
     def check_vehicle_history(row):
         code = row['Code']
@@ -2786,18 +2856,23 @@ def predict_trips(test_df, model_data):
     
     test_df['VehicleCheck'] = test_df.apply(check_vehicle_history, axis=1)
     
-    # เพิ่มคอลัมน์เตือนสำหรับทริปที่เกิน 12 สาขา
+    # เพิ่มคอลัมน์เตือนสำหรับทริปที่เกิน 12 สาขา (เฉพาะรถเล็ก)
     def check_branch_count(row):
         trip_num = row['Trip']
         if trip_num == 0:
             return ""
         
         trip_branch_count = len(test_df[test_df['Trip'] == trip_num])
+        truck_type = trip_truck_type_map.get(trip_num, '6W')
         
+        # เช็คเฉพาะรถเล็ก (4W, JB) - รถใหญ่ (6W) ไม่เตือน
         if trip_branch_count > 12:
-            return f"⚠️ เกิน 12 สาขา ({trip_branch_count} สาขา)"
+            if truck_type in ['4W', 'JB']:
+                return f"⚠️ เกิน 12 สาขา ({trip_branch_count} สาขา) - {truck_type}"
+            else:
+                return f"✅ {trip_branch_count} สาขา - {truck_type} (ยอมได้)"
         else:
-            return f"✅ {trip_branch_count} สาขา"
+            return f"✅ {trip_branch_count} สาขา - {truck_type}"
     
     test_df['BranchCount'] = test_df.apply(check_branch_count, axis=1)
     
