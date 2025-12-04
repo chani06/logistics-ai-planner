@@ -1180,6 +1180,26 @@ def predict_trips(test_df, model_data):
             # ⚡ Skip distance calculation completely for speed optimization
             trip_codes = trip_data['Code'].unique()
             total_distance = 0  # Skip all distance calculations
+                    if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                        master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                        if len(master_row) > 0:
+                            lat = master_row.iloc[0].get('ละติจูด', 0)
+                            lon = master_row.iloc[0].get('ลองติจูด', 0)
+                            if lat != 0 and lon != 0:
+                                branch_coords.append((lat, lon))
+                
+                # คำนวณระยะทางตามเส้นทาง
+                if len(branch_coords) > 0:
+                    # DC → สาขาแรก
+                    total_distance += calculate_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, 
+                                                        branch_coords[0][0], branch_coords[0][1])
+                    # สาขา → สาขา
+                    for i in range(len(branch_coords) - 1):
+                        total_distance += calculate_distance(branch_coords[i][0], branch_coords[i][1],
+                                                            branch_coords[i+1][0], branch_coords[i+1][1])
+                    # สาขาสุดท้าย → DC
+                    total_distance += calculate_distance(branch_coords[-1][0], branch_coords[-1][1],
+                                                        DC_WANG_NOI_LAT, DC_WANG_NOI_LON)
             
             summary_data.append({
                 'Trip': int(trip_num),

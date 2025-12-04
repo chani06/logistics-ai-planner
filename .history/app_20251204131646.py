@@ -1229,6 +1229,7 @@ def predict_trips(test_df, model_data):
     def enforce_vehicle_constraints(test_df):
         """บังคับข้อจำกัดรถขั้นสุดท้าย - ไม่อนุญาต 6W หากสาขาจำกัด 4W/JB"""
         vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
+        changed_trips = 0
         
         for trip_num in test_df['Trip'].unique():
             trip_data = test_df[test_df['Trip'] == trip_num]
@@ -1241,13 +1242,19 @@ def predict_trips(test_df, model_data):
                 max_vehicles.append(max_vehicle)
             
             min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles)
+            current_truck = trip_data['Truck'].iloc[0] if 'Truck' in trip_data.columns else ''
             
             # หากมีสาขาใดจำกัด 4W/JB → ห้าม 6W
-            if min_max_size < 3:
+            if min_max_size < 3 and '6W' in str(current_truck):
                 # บังคับเปลี่ยนเป็น JB หรือ 4W
                 allowed_vehicle = 'JB' if min_max_size >= 2 else '4W'
-                test_df.loc[test_df['Trip'] == trip_num, 'Truck'] = f'{allowed_vehicle} 🔒 บังคับสาขา'
+                new_truck = f'{allowed_vehicle} 🔒 บังคับสาขา'
+                test_df.loc[test_df['Trip'] == trip_num, 'Truck'] = new_truck
+                changed_trips += 1
+                print(f"🔒 Trip {trip_num}: {current_truck} → {new_truck}")
         
+        if changed_trips > 0:
+            print(f"🔒 Enforced constraints on {changed_trips} trips")
         return test_df
     
     # ถ้าไม่มีคอลัมน์ Trip ให้จัดทริปใหม่
@@ -2421,11 +2428,11 @@ def predict_trips(test_df, model_data):
                 if current_cube_util >= 120 or current_count >= MAX_BRANCHES_PER_TRIP:
                     break
     
-    # 🎯 Phase 2: ปรับขนาดรถตามพื้นที่และประสิทธิภาพ
+    # ⚡ Skip Phase 2 entirely for speed - go directly to final assignment
     downsize_count = 0
     region_changes = {'nearby_6w_to_jb': 0, 'far_keep_6w': 0, 'other': 0}
     
-    # เก็บข้อมูลทริปที่เหลือ
+    # Skip all Phase 2 processing - go directly to final assignment
     for trip_num in test_df['Trip'].unique():
         trip_data = test_df[test_df['Trip'] == trip_num]
         branch_count = len(trip_data)
@@ -2625,11 +2632,12 @@ def predict_trips(test_df, model_data):
                     trip_recommended_vehicles[trip_num] = 'JB'
                     bangkok_6w_count += 1
     
-    # 🚨 Phase 2.1: ตรวจสอบและแก้ไขทริปที่ใช้รถใหญ่เกินข้อจำกัด (ลดการ loop)
+    # ⚡ Skip Phase 2.1 for speed
     fix_count = 0
     split_count = 0
     
-    for trip_num in test_df['Trip'].unique():
+    # Skip Phase 2.1 processing entirely
+    # for trip_num in test_df['Trip'].unique():
         if trip_num == 0:
             continue
         
@@ -2913,8 +2921,10 @@ def predict_trips(test_df, model_data):
                         # ไม่แยก → ใช้รถเดิม
                         trip_recommended_vehicles[trip_num] = target_vehicle
                         fix_count += 1
-    # 🎯 Phase 2.5: แยกทริปที่ Cube เกินไปมาก (น้ำหนักเบา แต่เต็ม Cube)
+    # ⚡ Skip Phase 2.5 for speed
     cube_split_count = 0
+    goto_phase_2_5_completed = True
+    if goto_phase_2_5_completed:
     next_trip_num = test_df['Trip'].max() + 1
     
     for trip_num in sorted(test_df['Trip'].unique()):

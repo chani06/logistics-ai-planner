@@ -1177,9 +1177,33 @@ def predict_trips(test_df, model_data):
             else:
                 w_util = c_util = 0
             
-            # ⚡ Skip distance calculation completely for speed optimization
+            # ⚡ Skip distance calculation for small trips (speed optimization)
             trip_codes = trip_data['Code'].unique()
-            total_distance = 0  # Skip all distance calculations
+            total_distance = 0
+            if len(trip_codes) > 5:  # Only calculate distance for trips with >5 branches
+                # ดึงพิกัดของแต่ละสาขาจาก Master
+                branch_coords = []
+                for code in trip_codes:
+                    if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                        master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                        if len(master_row) > 0:
+                            lat = master_row.iloc[0].get('ละติจูด', 0)
+                            lon = master_row.iloc[0].get('ลองติจูด', 0)
+                            if lat != 0 and lon != 0:
+                                branch_coords.append((lat, lon))
+                
+                # คำนวณระยะทางตามเส้นทาง
+                if len(branch_coords) > 0:
+                    # DC → สาขาแรก
+                    total_distance += calculate_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, 
+                                                        branch_coords[0][0], branch_coords[0][1])
+                    # สาขา → สาขา
+                    for i in range(len(branch_coords) - 1):
+                        total_distance += calculate_distance(branch_coords[i][0], branch_coords[i][1],
+                                                            branch_coords[i+1][0], branch_coords[i+1][1])
+                    # สาขาสุดท้าย → DC
+                    total_distance += calculate_distance(branch_coords[-1][0], branch_coords[-1][1],
+                                                        DC_WANG_NOI_LAT, DC_WANG_NOI_LON)
             
             summary_data.append({
                 'Trip': int(trip_num),
@@ -2433,11 +2457,26 @@ def predict_trips(test_df, model_data):
         total_c = trip_data['Cube'].sum()
         trip_codes = set(trip_data['Code'].values)
         
-        # ⚡ Skip province calculations for speed - focus on weight/cube only
+        # เช็คว่าทริปนี้อยู่พื้นที่ใกล้หรือไกล
+        provinces = set()
         max_distance_from_dc = 0
-        all_nearby = True  # Assume nearby for speed
-        has_far = False
-        has_very_far_province = False
+        
+        for code in trip_codes:
+            prov = get_province(code)
+            if prov != 'UNKNOWN':
+                provinces.add(prov)
+            
+            # เช็คระยะทางจาก DC
+            _, distance = get_required_vehicle_by_distance(code)
+            if distance > max_distance_from_dc:
+                max_distance_from_dc = distance
+        
+        # ถ้าทุกจังหวัดในทริปเป็นพื้นที่ใกล้ → ไม่ควรใช้ 6W
+        all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
+        has_far = any(get_region_type(p) == 'far' for p in provinces) if provinces else True
+        
+        # 🚛 เช็คพื้นที่ไกลมากๆ (ภาคเหนือตอนบน/ใต้ลึก) → ต้องใช้ 6W เท่านั้น
+        has_very_far_province = any(get_region_type(p) == 'very_far' for p in provinces) if provinces else False
         
         # ⚠️ สำคัช: ถ้าทุกจังหวัดเป็น nearby → ห้าม 6W เด็ดขาด!
         if all_nearby:
@@ -2641,8 +2680,13 @@ def predict_trips(test_df, model_data):
         total_w = trip_data['Weight'].sum()
         total_c = trip_data['Cube'].sum()
         
-        # ⚡ Skip province calculations in Phase 2.1 for speed
-        all_nearby = True  # Assume nearby for speed optimization
+        # 🌏 เช็คว่าทริปนี้อยู่กรุงเทพ+ปริมณฑลหรือไม่
+        provinces = set()
+        for code in trip_codes:
+            prov = get_province(code)
+            if prov != 'UNKNOWN':
+                provinces.add(prov)
+        all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
         
         # 🔒 เช็คว่ารถที่ใช้อยู่ใหญ่กว่าที่อนุญาตหรือไม่ (ห้ามข้ามขั้น!)
         vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
