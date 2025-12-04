@@ -3457,11 +3457,8 @@ def predict_trips(test_df, model_data):
             
             trip_data = df[df['Trip'] == trip_num].copy()
             
-            # เรียงตาม Sequence (ถ้ามี) หรือ Weight เพื่อให้ได้ลำดับเดียวกับการแสดงผล
-            if 'Sequence' in trip_data.columns:
-                trip_data = trip_data.sort_values('Sequence', ascending=True)
-            else:
-                trip_data = trip_data.sort_values('Weight', ascending=False)
+            # เรียงตาม Weight (มาก→น้อย) เพื่อให้ได้ลำดับเดียวกับการแสดงผล
+            trip_data = trip_data.sort_values('Weight', ascending=False)
             codes = trip_data['Code'].tolist()
             
             # คำนวณระยะทาง

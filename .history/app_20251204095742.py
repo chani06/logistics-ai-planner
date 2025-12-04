@@ -3433,11 +3433,8 @@ def predict_trips(test_df, model_data):
         # เพิ่มคอลัมน์ระยะทาง max ในทริป
         df['Max_Distance_in_Trip'] = df['Trip'].map(trip_distances)
         
-        # เรียงลำดับภายในแต่ละทริป: Trip → Sequence (ถ้ามี) หรือ Weight
-        if 'Sequence' in df.columns:
-            df = df.sort_values(['Trip', 'Sequence'], ascending=[True, True])
-        else:
-            df = df.sort_values(['Trip', 'Weight'], ascending=[True, False])
+        # เรียงลำดับภายในแต่ละทริป: Trip → Weight (มากไปน้อย)
+        df = df.sort_values(['Trip', 'Weight'], ascending=[True, False])
         return df
     
     test_df = add_distance_and_sort(test_df)
@@ -3457,11 +3454,8 @@ def predict_trips(test_df, model_data):
             
             trip_data = df[df['Trip'] == trip_num].copy()
             
-            # เรียงตาม Sequence (ถ้ามี) หรือ Weight เพื่อให้ได้ลำดับเดียวกับการแสดงผล
-            if 'Sequence' in trip_data.columns:
-                trip_data = trip_data.sort_values('Sequence', ascending=True)
-            else:
-                trip_data = trip_data.sort_values('Weight', ascending=False)
+            # เรียงตาม Weight (มาก→น้อย) เพื่อให้ได้ลำดับเดียวกับการแสดงผล
+            trip_data = trip_data.sort_values('Weight', ascending=False)
             codes = trip_data['Code'].tolist()
             
             # คำนวณระยะทาง
