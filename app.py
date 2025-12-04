@@ -1176,11 +1176,20 @@ def predict_trips(test_df, model_data):
     3. ✅ AI ทำนายจาก Decision Tree Model
     4. ✅ เช็คน้ำหนัก/คิว ไม่เกินขีดจำกัดรถ
     """
-    model = model_data['model']
-    trip_pairs = model_data['trip_pairs'].copy()  # คัดลอกเพื่อไม่ให้กระทบต้นฉบับ
-    branch_info = model_data['branch_info']
+    # ตรวจสอบว่า model_data มีข้อมูลครบถ้วน
+    if not model_data or not isinstance(model_data, dict):
+        st.error("❌ ข้อมูลโมเดลไม่ถูกต้อง กรุณาเทรนโมเดลก่อน")
+        return test_df, []
+    
+    model = model_data.get('model')
+    trip_pairs = model_data.get('trip_pairs', set()).copy()  # คัดลอกเพื่อไม่ให้กระทบต้นฉบับ
+    branch_info = model_data.get('branch_info', {})
     trip_vehicles = model_data.get('trip_vehicles', {}).copy()
     branch_vehicles = model_data.get('branch_vehicles', {})
+    
+    if model is None:
+        st.error("❌ ไม่พบโมเดล กรุณาเทรนโมเดลก่อน")
+        return test_df, []
     
     # ★ ถ้าไฟล์อัปโหลดมีคอลัมน์ Trip ให้ใช้เป็นข้อมูลอ้างอิงหลัก
     # เพราะเป็นแผนงานที่ใช้จริงมาแล้ว
