@@ -3074,37 +3074,158 @@ def predict_trips(test_df, model_data):
                             trip_recommended_vehicles[new_trip_num] = new_trip_info['vehicle']
                             split_count += 1
     
-    # 🔄 บังคับเปลี่ยน nearby จาก 6W → JB/4W หลังแยกทริป
-    for trip_num in test_df['Trip'].unique():
+    # Phase 4 และ 5 ถูกลบออกเพื่อเพิ่มความเร็ว
+    
+    # 🔄 บังคับเปลี่ยน nearby จาก 6W → JB/4W หลังแยกทริปdf['Trip'].unique():
         if trip_num == 0:
             continue
         
         trip_data = test_df[test_df['Trip'] == trip_num]
-        trip_codes = set(trip_data['Code'].values)
+        trip_codes = list(trip_data['Code'].values)
+        total_w = trip_data['Weight'].sum()
+        total_c = trip_data['Cube'].sum()
         current_vehicle = trip_recommended_vehicles.get(trip_num, '6W')
         
-        # ถ้าใช้ 6W → เช็คว่าเป็น nearby ทั้งหมดหรือไม่
-        if current_vehicle == '6W':
-            provinces = set()
-            for code in trip_codes:
-                prov = get_province(code)
-                if prov != 'UNKNOWN':
-                    provinces.add(prov)
+        # คำนวณ utilization
+        util = max((total_w / LIMITS[current_vehicle]['max_w']) * 100,
+                   (total_c / LIMITS[current_vehicle]['max_c']) * 100)
+        
+        # คำนวณ centroid ของทริป
+        coords = []
+        for code in trip_codes:
+            lat, lon = get_lat_lon(code)
+            if lat and lon:
+                coords.append((lat, lon))
+        
+        if coords:
+            centroid_lat = sum(c[0] for c in coords) / len(coords)
+            centroid_lon = sum(c[1] for c in coords) / len(coords)
+        else:
+            centroid_lat, centroid_lon = DC_WANG_NOI_LAT, DC_WANG_NOI_LON
+        
+        trip_info = {
+            'trip_num': trip_num,
+            'codes': trip_codes,
+            'weight': total_w,
+            'cube': total_c,
+            'vehicle': current_vehicle,
+            'util': util,
+            'centroid_lat': centroid_lat,
+            'centroid_lon': centroid_lon
+        }
+        
+        if util < 80:
+            low_util_trips.append(trip_info)
+        else:
+            normal_trips.append(trip_info)
+    
+    # กระจายสาขาจากทริปที่น้อยเกินไปไปทริปที่ใกล้ที่สุด
+    for low_trip in low_util_trips:
+        for code in low_trip['codes']:
+            branch_data = test_df[test_df['Code'] == code]
+            branch_w = branch_data['Weight'].sum()
+            branch_c = branch_data['Cube'].sum()
+            branch_lat, branch_lon = get_lat_lon(code)
             
-            all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
+            if not branch_lat:
+                branch_lat, branch_lon = DC_WANG_NOI_LAT, DC_WANG_NOI_LON
             
-            if all_nearby:
-                # บังคับเปลี่ยนเป็น JB
-                total_w = trip_data['Weight'].sum()
-                total_c = trip_data['Cube'].sum()
-                jb_util = max((total_w / LIMITS['JB']['max_w']) * 100, 
-                             (total_c / LIMITS['JB']['max_c']) * 100)
+            best_trip = None
+            best_score = float('inf')
+            
+            # หาทริปที่ใกล้ที่สุดและรับได้
+            for normal_trip in normal_trips:
+                # คำนวณระยะทางจากสาขาไปยัง centroid ของทริป
+                distance = haversine_distance(branch_lat, branch_lon, 
+                                             normal_trip['centroid_lat'], normal_trip['centroid_lon'])
                 
-                if jb_util <= 140:
-                    trip_recommended_vehicles[trip_num] = 'JB'
-                else:
-                    # ต้องแยกทริป (จะทำใน Phase 2.5)
-                    trip_recommended_vehicles[trip_num] = 'JB'
+                # เช็คว่าใส่ได้ไหม
+                new_w = normal_trip['weight'] + branch_w
+                new_c = normal_trip['cube'] + branch_c
+                vehicle = normal_trip['vehicle']
+                new_util = max((new_w / LIMITS[vehicle]['max_w']) * 100,
+                              (new_c / LIMITS[vehicle]['max_c']) * 100)
+                
+                # เช็คข้อจำกัดสาขา
+                max_branches = 12 if vehicle in ['4W', 'JB'] else float('inf')
+                
+                if new_util <= 130 and len(normal_trip['codes']) < max_branches:
+                    # Score = ระยะทาง + penalty ถ้าเกิน 100%
+                    score = distance + max(0, new_util - 100) * 2
+                    if score < best_score:
+                        best_score = score
+                        best_trip = normal_trip
+            
+            if best_trip:
+                # ย้ายสาขาไปทริปใหม่
+                test_df.loc[test_df['Code'] == code, 'Trip'] = best_trip['trip_num']
+                best_trip['codes'].append(code)
+                best_trip['weight'] += branch_w
+                best_trip['cube'] += branch_c
+                # อัปเดต centroid
+                n = len(best_trip['codes'])
+                best_trip['centroid_lat'] = ((best_trip['centroid_lat'] * (n-1)) + branch_lat) / n
+                best_trip['centroid_lon'] = ((best_trip['centroid_lon'] * (n-1)) + branch_lon) / n
+                consolidate_count += 1
+        
+        # ลบทริปเก่าที่ว่างแล้ว
+        if low_trip['trip_num'] in trip_recommended_vehicles:
+            del trip_recommended_vehicles[low_trip['trip_num']]
+    
+    # ลบทริปที่ว่าง (ไม่มีสาขา)
+    for trip_num in list(test_df['Trip'].unique()):
+        if trip_num == 0:
+            continue
+        trip_data = test_df[test_df['Trip'] == trip_num]
+        if len(trip_data) == 0:
+            if trip_num in trip_recommended_vehicles:
+                del trip_recommended_vehicles[trip_num]
+    
+    # 🔄 Phase 5: เรียงลำดับสาขาใหม่ตาม Nearest Neighbor หลังกระจาย
+    def reorder_trip_by_nearest_neighbor(trip_codes):
+        """เรียงลำดับสาขาในทริปตาม Nearest Neighbor จาก DC"""
+        if len(trip_codes) <= 1:
+            return trip_codes
+        
+        route = []
+        remaining = list(trip_codes)
+        current_lat, current_lon = DC_WANG_NOI_LAT, DC_WANG_NOI_LON
+        
+        while remaining:
+            min_dist = float('inf')
+            nearest_code = None
+            
+            for code in remaining:
+                lat, lon = get_lat_lon(code)
+                if lat and lon:
+                    dist = haversine_distance(current_lat, current_lon, lat, lon)
+                    if dist < min_dist:
+                        min_dist = dist
+                        nearest_code = code
+            
+            if nearest_code:
+                route.append(nearest_code)
+                remaining.remove(nearest_code)
+                lat, lon = get_lat_lon(nearest_code)
+                if lat and lon:
+                    current_lat, current_lon = lat, lon
+            else:
+                route.extend(remaining)
+                break
+        
+        return route
+    
+    # เรียงลำดับสาขาใหม่ทุกทริป
+    for trip_num in test_df['Trip'].unique():
+        if trip_num == 0:
+            continue
+        
+        trip_codes = list(test_df[test_df['Trip'] == trip_num]['Code'].values)
+        ordered_codes = reorder_trip_by_nearest_neighbor(trip_codes)
+        
+        # กำหนด Sequence ตามลำดับใหม่
+        for seq, code in enumerate(ordered_codes, start=1):
+            test_df.loc[test_df['Code'] == code, 'Sequence'] = seq
     
     # สรุปผลและแนะนำรถ
     summary_data = []
