@@ -2514,17 +2514,28 @@ def predict_trips(test_df, model_data):
                         test_c = current_group_c + c
                         test_util = max((test_w / target_w) * 100, (test_c / target_c) * 100)
                         
-                        # เป้าหมาย: 95-120% (ไม่แยกถ้ายัง <95%)
-                        if test_util <= 120 or len(current_group) == 0:
+                        # 🚨 เงื่อนไขสำคัญ: รถเล็ก (4W/JB) ห้ามเกิน 12 สาขา
+                        max_branches = 12 if target_vehicle in ['4W', 'JB'] else 18
+                        
+                        # เป้าหมาย: 95-120% และไม่เกินจำนวนสาขา
+                        if (test_util <= 120 and len(current_group) < max_branches) or len(current_group) == 0:
                             # ใส่ได้
                             current_group.append(code)
                             current_group_w += w
                             current_group_c += c
                         else:
-                            # เต็มแล้ว → ตรวจสอบก่อนสร้างทริปใหม่
+                            # เต็มแล้ว → ตรวจสอบก่อนสร้างทริปใหศ่
                             current_util = max((current_group_w / target_w) * 100, (current_group_c / target_c) * 100)
+                            current_branches = len(current_group)
                             
-                            if current_util >= 95:  # ถ้าเต็มพอสมควร → สร้างทริปใหม่
+                            # 🎯 เป้าหมาย: 95-105% (ใกล้ 100% มากที่สุด)
+                            # หรือเกิน 12 สาขา (สำหรับรถเล็ก)
+                            should_create_new_trip = (
+                                current_util >= 95 or 
+                                (target_vehicle in ['4W', 'JB'] and current_branches >= 12)
+                            )
+                            
+                            if should_create_new_trip:
                                 new_trips.append(current_group.copy())
                                 current_group = [code]
                                 current_group_w = w
@@ -2582,19 +2593,20 @@ def predict_trips(test_df, model_data):
                             
                             # เลือกรถที่เหมาะสม (เล็กสุดที่ใส่ได้)
                             best_vehicle = None
+                            group_branches = len(group)
                             
-                            # ลอง 4W ก่อน (ถ้าไม่มีข้อจำกัด)
-                            if group_max_allowed != 'JB' and group_max_allowed != '6W':
+                            # ลอง 4W ก่อน (ถ้าไม่มีข้อจำกัด และไม่เกิน 12 สาขา)
+                            if group_max_allowed != 'JB' and group_max_allowed != '6W' and group_branches <= 12:
                                 util_4w = max((group_w / LIMITS['4W']['max_w']) * 100, 
                                              (group_c / LIMITS['4W']['max_c']) * 100)
-                                if util_4w >= 85 and util_4w <= 130:  # 4W คุ้มค่า: 85-130%
+                                if util_4w >= 90 and util_4w <= 130:  # 4W คุ้มค่า: 90-130% (ใกล้ 100%)
                                     best_vehicle = '4W'
                             
-                            # ถ้า 4W ไม่เหมาะสม → ลอง JB
-                            if best_vehicle is None and group_max_allowed != '6W':
+                            # ถ้า 4W ไม่เหมาะสม → ลอง JB (ต้องไม่เกิน 12 สาขา)
+                            if best_vehicle is None and group_max_allowed != '6W' and group_branches <= 12:
                                 util_jb = max((group_w / LIMITS['JB']['max_w']) * 100,
                                             (group_c / LIMITS['JB']['max_c']) * 100)
-                                if util_jb <= 140:  # JB ยอมได้ถึง 140%
+                                if util_jb >= 90 and util_jb <= 140:  # JB ยอมได้: 90-140% (ใกล้ 100%)
                                     best_vehicle = 'JB'
                             
                             # ถ้ายังไม่ได้ → ใช้ target_vehicle เดิม
