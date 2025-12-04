@@ -1236,20 +1236,48 @@ def predict_trips(test_df, model_data):
             trip_truck_display[row['Trip']] = row['Truck']
 
         test_df_result['Truck'] = test_df_result['Trip'].map(trip_truck_display)
+        # 🔒 Final enforcement: Never allow 6W if any branch restricts to 4W/JB
+        test_df_result = enforce_vehicle_constraints(test_df_result)
+        
         # Mark VehicleCheck if strict constraint enforced
         def vehicle_check_str(row):
             truck = row['Truck']
-            if '🔒' in truck:
+            if '🔒' in truck or 'บังคับสาขา' in truck:
                 return '🔒 จำกัดสาขา'
             return '✅ ใช้ตามไฟล์'
         test_df_result['VehicleCheck'] = test_df_result.apply(vehicle_check_str, axis=1)
 
         return test_df_result, summary_df
     
+    # 🔒 Final enforcement of vehicle constraints
+    def enforce_vehicle_constraints(test_df):
+        """บังคับข้อจำกัดรถขั้นสุดท้าย - ไม่อนุญาต 6W หากสาขาจำกัด 4W/JB"""
+        vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
+        
+        for trip_num in test_df['Trip'].unique():
+            trip_data = test_df[test_df['Trip'] == trip_num]
+            trip_codes = trip_data['Code'].unique()
+            
+            # ตรวจสอบข้อจำกัดที่เข้มงวดที่สุดในทริป
+            max_vehicles = []
+            for code in trip_codes:
+                max_vehicle = get_max_vehicle_for_branch(code)
+                max_vehicles.append(max_vehicle)
+            
+            min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles)
+            
+            # หากมีสาขาใดจำกัด 4W/JB → ห้าม 6W
+            if min_max_size < 3:
+                # บังคับเปลี่ยนเป็น JB หรือ 4W
+                allowed_vehicle = 'JB' if min_max_size >= 2 else '4W'
+                test_df.loc[test_df['Trip'] == trip_num, 'Truck'] = f'{allowed_vehicle} 🔒 บังคับสาขา'
+        
+        return test_df
+    
     # ถ้าไม่มีคอลัมน์ Trip ให้จัดทริปใหม่
     
     # 🗺️ จัดกลุ่มสาขาตามพิกัดก่อน (Spatial Clustering)
-    def create_distance_based_clusters(codes, max_distance_km=50):
+    def create_distance_based_clusters(codes, max_distance_km=25):
         """จัดกลุ่มสาขาที่อยู่ใกล้กัน (ไม่เกิน max_distance_km)"""
         clusters = []
         remaining = codes.copy()
