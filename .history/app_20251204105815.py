@@ -1095,32 +1095,18 @@ def predict_trips(test_df, model_data):
             min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles)
             max_allowed_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(min_max_size, '6W')
             
-
-            # 🚨 STRICT: Branch constraint (🔒) > History (📜) > AI (🤖)
-            # 1. Branch constraint (never allow 6W if any branch restricts to 4W/JB)
-            if min_max_size < 3:  # 1=4W, 2=JB
-                # Only allow 4W/JB, never 6W
-                allowed = ['4W', 'JB'] if min_max_size == 2 else ['4W']
-            else:
-                allowed = ['4W', 'JB', '6W']
-
+            # ใช้รถจากไฟล์ แต่ต้องไม่เกินข้อจำกัดของสาขา
             if trip_num in trip_truck_map_file:
                 suggested = trip_truck_map_file[trip_num]
-                # If suggested vehicle is not allowed, override to strictest allowed
-                if suggested not in allowed:
-                    suggested = allowed[0]
-                    source = f"📋 ไฟล์ → {suggested} (🔒 จำกัดสาขา)"
+                # ตรวจสอบว่ารถจากไฟล์ไม่เกินข้อจำกัดสาขา
+                if vehicle_sizes.get(suggested, 0) > min_max_size:
+                    suggested = max_allowed_vehicle
+                    source = f"📋 ไฟล์ → {max_allowed_vehicle} (จำกัดสาขา)"
                 else:
                     source = "📋 ไฟล์"
             else:
-                # AI suggestion, but must respect allowed
-                ai_suggested = suggest_truck(total_w, total_c, max_allowed_vehicle, trip_codes)
-                if ai_suggested not in allowed:
-                    suggested = allowed[0]
-                    source = f"🤖 AI → {suggested} (🔒 จำกัดสาขา)"
-                else:
-                    suggested = ai_suggested
-                    source = "🤖 AI"
+                suggested = suggest_truck(total_w, total_c, max_allowed_vehicle, trip_codes)
+                source = "🤖 AI"
             
             # ตรวจสอบว่ารถที่เลือกใส่ของได้จริงหรือไม่ (ห้ามเกิน 105%)
             if suggested in LIMITS:
@@ -1190,34 +1176,16 @@ def predict_trips(test_df, model_data):
                 'Total_Distance': total_distance
             })
         
-
         summary_df = pd.DataFrame(summary_data)
-
-        # 🚨 Double Check: No trip uses a vehicle larger than allowed by any branch
-        for idx, row in summary_df.iterrows():
-            trip_num = row['Trip']
-            trip_codes = test_df_result[test_df_result['Trip'] == trip_num]['Code'].unique()
-            max_allowed = get_max_vehicle_for_trip(trip_codes)
-            vehicle_type = row['Truck'].split()[0]
-            vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
-            if vehicle_sizes.get(vehicle_type, 3) > vehicle_sizes.get(max_allowed, 3):
-                # Override to strictest allowed
-                summary_df.at[idx, 'Truck'] = f"{max_allowed} 🔒 จำกัดสาขา"
-
+        
         # เพิ่มคอลัมน์รถ
         trip_truck_display = {}
         for _, row in summary_df.iterrows():
             trip_truck_display[row['Trip']] = row['Truck']
-
+        
         test_df_result['Truck'] = test_df_result['Trip'].map(trip_truck_display)
-        # Mark VehicleCheck if strict constraint enforced
-        def vehicle_check_str(row):
-            truck = row['Truck']
-            if '🔒' in truck:
-                return '🔒 จำกัดสาขา'
-            return '✅ ใช้ตามไฟล์'
-        test_df_result['VehicleCheck'] = test_df_result.apply(vehicle_check_str, axis=1)
-
+        test_df_result['VehicleCheck'] = "✅ ใช้ตามไฟล์"
+        
         return test_df_result, summary_df
     
     # ถ้าไม่มีคอลัมน์ Trip ให้จัดทริปใหม่
