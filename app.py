@@ -2865,7 +2865,15 @@ def predict_trips(test_df, model_data):
     
     # 🎯 Phase 2: เลือกรถที่เหมาะสม (เริ่มจาก 4W → JB → 6W หรือ 2 คัน) - Optimized
     vehicle_assignment_count = 0
-    region_changes = {'4w': 0, 'jb': 0, '6w': 0, 'split_2_vehicles': 0}
+    region_changes = {
+        '4w': 0, 
+        'jb': 0, 
+        '6w': 0, 
+        'split_2_vehicles': 0,
+        'nearby_6w_to_jb': 0,
+        'far_keep_6w': 0,
+        'other': 0
+    }
     
     # ⚡ Early stopping - ถ้าใช้เวลามากกว่า 55 วินาที
     if time.time() - start_time > 55:
