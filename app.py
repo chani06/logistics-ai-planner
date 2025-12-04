@@ -2865,6 +2865,7 @@ def predict_trips(test_df, model_data):
     
     # 🎯 Phase 2: เลือกรถที่เหมาะสม (เริ่มจาก 4W → JB → 6W หรือ 2 คัน) - Optimized
     vehicle_assignment_count = 0
+    downsize_count = 0
     region_changes = {
         '4w': 0, 
         'jb': 0, 
