@@ -811,7 +811,24 @@ def main():
         print(f"🎯 จัดทริปให้ไฟล์ Test")
         print(f"{'='*60}\n")
         
-        result_df = predict_trips_for_new_data(test_df, model, trip_pairs, branch_info)
+        # ⚡ Use optimized predict_trips from app.py instead
+        from app import predict_trips, load_master_data, load_booking_history_restrictions, load_learned_restrictions_fallback
+        
+        # Load required data
+        master_data = load_master_data()
+        branch_vehicles = load_booking_history_restrictions()  
+        learned_restrictions = load_learned_restrictions_fallback()
+        
+        # Combine into model_data
+        model_data = {
+            'master_data': master_data,
+            'branch_vehicles': branch_vehicles,
+            'learned_restrictions': learned_restrictions,
+            'trip_pairs': trip_pairs,
+            'branch_info': branch_info
+        }
+        
+        result_df, summary_df = predict_trips(test_df, model_data)
         
         if result_df is not None:
             # บันทึกผลลัพธ์
@@ -819,7 +836,12 @@ def main():
             result_df.to_excel(output_file, index=False)
             print(f"\n✅ บันทึกผลลัพธ์: {output_file}")
             print(f"   จำนวนสาขา: {len(result_df)}")
-            print(f"   จำนวนทริป: {result_df['Predicted_Trip'].nunique()}")
+            print(f"   จำนวนทริป: {result_df['Trip'].nunique()}")
+            
+            # บันทึก Summary ด้วย
+            summary_file = f"summary_trips_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            summary_df.to_excel(summary_file, index=False)
+            print(f"   Summary: {summary_file}")
     
     print(f"\n{'#'*60}")
     print(f"# เสร็จสิ้น")
