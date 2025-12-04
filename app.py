@@ -3868,7 +3868,13 @@ def predict_trips(test_df, model_data):
             max_vehicles.append(branch_max)
         
         vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
-        min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles)
+        
+        # ตรวจสอบว่า max_vehicles ไม่ว่าง
+        if max_vehicles:
+            min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles)
+        else:
+            min_max_size = 3  # default ถ้าไม่มีข้อมูล ให้ใช้ 6W ได้
+        
         max_allowed_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(min_max_size, '6W')
         
         # เลือกรถ: เช็คข้อจำกัดสาขาก่อน แล้วค่อยใช้ประวัติ/AI
