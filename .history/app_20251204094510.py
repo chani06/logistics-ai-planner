@@ -1249,6 +1249,9 @@ def predict_trips(test_df, model_data):
     trip_counter = 1
     trip_recommended_vehicles = {}  # เก็บรถที่แนะนำสำหรับแต่ละทริป
     
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
     total_codes = len(all_codes)
     processed = 0
     
@@ -1267,6 +1270,8 @@ def predict_trips(test_df, model_data):
         assigned_trips[seed_code] = trip_counter
         
         processed += 1
+        progress_bar.progress(processed / total_codes)
+        status_text.text(f"กำลังจัดทริป {trip_counter}... ({processed}/{total_codes} สาขา)")
         
         remaining = all_codes[:]
         recommended_vehicle = None  # รถที่แนะนำสำหรับทริปนี้
@@ -1656,6 +1661,9 @@ def predict_trips(test_df, model_data):
             trip_recommended_vehicles[trip_counter] = recommended_vehicle
         
         trip_counter += 1
+    
+    progress_bar.empty()
+    status_text.empty()
     
     test_df['Trip'] = test_df['Code'].map(assigned_trips)
     
@@ -2352,9 +2360,7 @@ def predict_trips(test_df, model_data):
         has_very_far_province = any(get_region_type(p) == 'very_far' for p in provinces) if provinces else False
         
         # 🚛 เช็คระยะทาง - ไกลมากพิเศษ (>300km) ต้องใช้ 6W
-        # ⚠️ แต่ถ้าทุกจังหวัดเป็น nearby (กรุงเทพ/ปริมณฑล) → ไม่ให้ใช้ 6W แม้ระยะทางไกล
-        very_far_by_distance = max_distance_from_dc > 300 and not all_nearby
-        very_far = has_very_far_province or very_far_by_distance
+        very_far = max_distance_from_dc > 300 or has_very_far_province
         
         # คำนวณ % การใช้รถแต่ละประเภท
         util_4w = max((total_w / LIMITS['4W']['max_w']) * 100, 

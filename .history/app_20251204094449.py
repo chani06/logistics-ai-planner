@@ -38,9 +38,9 @@ BUFFER = 1.05
 MAX_BRANCHES_PER_TRIP = 12  # สูงสุด 12 สาขาต่อทริปสำหรับ 4W/JB (6W ไม่จำกัด)
 TARGET_BRANCHES_PER_TRIP = 12  # เป้าหมาย 12 สาขาต่อทริป
 
-# Performance Config
-MAX_DETOUR_KM = 12  # ลดจาก 15km เป็น 12km เพื่อประมวลผลเร็วขึ้น
-MAX_MERGE_ITERATIONS = 25  # จำกัดรอบการรวมทริป (ลดจาก 50 เพื่อเร็วขึ้น)
+# Performance Config - ปรับให้เร็วขึ้น
+MAX_DETOUR_KM = 10  # ลดจาก 12km เป็น 10km เพื่อประมวลผลเร็วขึ้น
+MAX_MERGE_ITERATIONS = 15  # ลดจาก 25 เป็น 15 รอบ
 
 # รายการสาขาที่ไม่ต้องการจัดส่ง (ตัดออก)
 EXCLUDE_BRANCHES = ['DC011', 'PTDC', 'PTG DISTRIBUTION CENTER']
@@ -1249,6 +1249,9 @@ def predict_trips(test_df, model_data):
     trip_counter = 1
     trip_recommended_vehicles = {}  # เก็บรถที่แนะนำสำหรับแต่ละทริป
     
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
     total_codes = len(all_codes)
     processed = 0
     
@@ -1267,6 +1270,8 @@ def predict_trips(test_df, model_data):
         assigned_trips[seed_code] = trip_counter
         
         processed += 1
+        progress_bar.progress(processed / total_codes)
+        status_text.text(f"กำลังจัดทริป {trip_counter}... ({processed}/{total_codes} สาขา)")
         
         remaining = all_codes[:]
         recommended_vehicle = None  # รถที่แนะนำสำหรับทริปนี้
@@ -1656,6 +1661,9 @@ def predict_trips(test_df, model_data):
             trip_recommended_vehicles[trip_counter] = recommended_vehicle
         
         trip_counter += 1
+    
+    progress_bar.empty()
+    status_text.empty()
     
     test_df['Trip'] = test_df['Code'].map(assigned_trips)
     
@@ -2352,9 +2360,7 @@ def predict_trips(test_df, model_data):
         has_very_far_province = any(get_region_type(p) == 'very_far' for p in provinces) if provinces else False
         
         # 🚛 เช็คระยะทาง - ไกลมากพิเศษ (>300km) ต้องใช้ 6W
-        # ⚠️ แต่ถ้าทุกจังหวัดเป็น nearby (กรุงเทพ/ปริมณฑล) → ไม่ให้ใช้ 6W แม้ระยะทางไกล
-        very_far_by_distance = max_distance_from_dc > 300 and not all_nearby
-        very_far = has_very_far_province or very_far_by_distance
+        very_far = max_distance_from_dc > 300 or has_very_far_province
         
         # คำนวณ % การใช้รถแต่ละประเภท
         util_4w = max((total_w / LIMITS['4W']['max_w']) * 100, 
@@ -3489,23 +3495,7 @@ def main():
             df = process_dataframe(df)
             
             if df is not None and 'Code' in df.columns:
-                st.success(f"✅ อ่านข้อมูลสำเร็จ: **{len(df):,}** รายการ")
-                
-                # แสดงข้อมูลพื้นฐาน
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("📍 จำนวนสาขา", f"{df['Code'].nunique():,}")
-                with col2:
-                    st.metric("⚖️ น้ำหนักรวม", f"{df['Weight'].sum():,.0f} kg")
-                with col3:
-                    st.metric("📦 คิวรวม", f"{df['Cube'].sum():.1f} m³")
-                with col4:
-                    provinces = df['Province'].nunique() if 'Province' in df.columns else 0
-                    st.metric("🗺️ จังหวัด", f"{provinces}")
-                
-                # แสดงตัวอย่างข้อมูล
-                with st.expander("🔍 ดูข้อมูลตัวอย่าง"):
-                    st.dataframe(df.head(10), use_container_width=True)
+                st.success(f"✅ อ่านข้อมูลสำเร็จ: **{len(df):,}** รายการ, **{df['Code'].nunique():,}** สาขา, **{df['Weight'].sum():,.0f}** kg, **{df['Cube'].sum():.1f}** m³")
                 
                 st.markdown("---")
                 

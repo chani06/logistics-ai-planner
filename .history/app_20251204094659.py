@@ -2352,9 +2352,7 @@ def predict_trips(test_df, model_data):
         has_very_far_province = any(get_region_type(p) == 'very_far' for p in provinces) if provinces else False
         
         # 🚛 เช็คระยะทาง - ไกลมากพิเศษ (>300km) ต้องใช้ 6W
-        # ⚠️ แต่ถ้าทุกจังหวัดเป็น nearby (กรุงเทพ/ปริมณฑล) → ไม่ให้ใช้ 6W แม้ระยะทางไกล
-        very_far_by_distance = max_distance_from_dc > 300 and not all_nearby
-        very_far = has_very_far_province or very_far_by_distance
+        very_far = max_distance_from_dc > 300 or has_very_far_province
         
         # คำนวณ % การใช้รถแต่ละประเภท
         util_4w = max((total_w / LIMITS['4W']['max_w']) * 100, 
