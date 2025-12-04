@@ -26,9 +26,9 @@ MODEL_PATH = 'models/decision_tree_model.pkl'
 
 # ขีดจำกัดรถแต่ละประเภท
 LIMITS = {
-    '4W': {'max_w': 2500, 'max_c': 5.0},
-    'JB': {'max_w': 3500, 'max_c': 7.0},
-    '6W': {'max_w': 5500, 'max_c': 20.0}
+    '4W': {'max_w': 2500, 'max_c': 5.0},   # ไม่เกิน 12 จุด, Cube ≤ 5
+    'JB': {'max_w': 3500, 'max_c': 8.0},   # ไม่เกิน 12 จุด, Cube ≤ 8
+    '6W': {'max_w': 5500, 'max_c': 20.0}   # ไม่จำกัดจุด, Cube ต้องเต็ม
 }
 
 # เผื่อการใช้รถได้เกิน 5%
@@ -467,6 +467,117 @@ def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None):
     
     # ถ้าไม่มีรถที่เหมาะสม ใช้รถใหญ่สุดที่อนุญาต
     return max_allowed if max_allowed in LIMITS else '6W+'
+
+def calculate_optimal_vehicle_split(total_weight, total_cube, max_allowed='6W', branch_count=0):
+    """
+    🚛 คำนวณการแบ่งรถที่เหมาะสม
+    
+    เงื่อนไข:
+    - 4W: ≤12 จุด, Cube ≤ 5
+    - JB: ≤12 จุด, Cube ≤ 8  
+    - 6W: ไม่จำกัดจุด, Cube ต้องเต็ม ≥100%
+    
+    ลำดับการเลือก:
+    1. 4W (ถ้า cube ≤ 5)
+    2. JB (ถ้า cube ≤ 8)
+    3. JB + 4W (แยก 2 คัน, 75%-95% ต่อคัน)
+    4. JB + JB (แยก 2 คัน, 75%-95% ต่อคัน)
+    5. 6W + JB (แยก 2 คัน, 75%-95% ต่อคัน)
+    6. 4W + 4W (แยก 2 คัน, 75%-95% ต่อคัน)
+    7. 6W (cube ต้อง ≥100%)
+    
+    Returns: (vehicle_type, split_needed, split_config)
+    """
+    vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
+    max_priority = vehicle_priority.get(max_allowed, 3)
+    
+    # คำนวณ utilization สำหรับแต่ละรถ (ใช้ Cube เป็นหลัก)
+    cube_util_4w = (total_cube / LIMITS['4W']['max_c']) * 100  # max 5 cube
+    cube_util_jb = (total_cube / LIMITS['JB']['max_c']) * 100  # max 8 cube
+    cube_util_6w = (total_cube / LIMITS['6W']['max_c']) * 100  # max 20 cube
+    
+    weight_util_4w = (total_weight / LIMITS['4W']['max_w']) * 100
+    weight_util_jb = (total_weight / LIMITS['JB']['max_w']) * 100
+    weight_util_6w = (total_weight / LIMITS['6W']['max_w']) * 100
+    
+    # 🎯 เป้าหมาย: Utilization 75%-95% สำหรับการแยก, 95%-105% สำหรับคันเดียว
+    SPLIT_MIN = 75   # ขั้นต่ำสำหรับแต่ละคันเมื่อแยก
+    SPLIT_MAX = 95   # สูงสุดสำหรับแต่ละคันเมื่อแยก
+    SINGLE_MIN = 95  # ขั้นต่ำสำหรับคันเดียว
+    SINGLE_MAX = 105 # สูงสุดสำหรับคันเดียว
+    
+    # ตรวจสอบจำนวนสาขา (4W/JB ไม่เกิน 12 จุด)
+    branch_ok_for_small = branch_count <= 12 or branch_count == 0
+    
+    # 1. ลอง 4W ก่อน (ถ้า cube ≤ 5 และ ≤12 จุด)
+    if max_priority >= 1 and total_cube <= 5.0 and branch_ok_for_small:
+        if cube_util_4w <= 105 and weight_util_4w <= 105:
+            return ('4W', False, None)
+    
+    # 2. ลอง JB (ถ้า cube ≤ 8 และ ≤12 จุด)
+    if max_priority >= 2 and total_cube <= 8.0 and branch_ok_for_small:
+        if cube_util_jb <= 105 and weight_util_jb <= 105:
+            return ('JB', False, None)
+    
+    # 3. ถ้ารถเดียวไม่พอ ต้องแยก (cube > 8 หรือ จุด > 12)
+    need_split = total_cube > 8.0 or not branch_ok_for_small
+    
+    if need_split:
+        # 🔄 ลองแบบต่างๆ ตามลำดับ - เป้าหมาย 75%-95% ต่อคัน
+        
+        # JB + 4W (JB 8 cube + 4W 5 cube = 13 cube max)
+        if max_priority >= 2 and total_cube <= 13.0:
+            # แบ่ง: JB รับ cube มากกว่า, 4W รับส่วนที่เหลือ
+            jb_cube = min(total_cube * 0.6, 8.0)  # JB รับ 60% แต่ไม่เกิน 8
+            four_w_cube = total_cube - jb_cube
+            
+            jb_util = (jb_cube / LIMITS['JB']['max_c']) * 100
+            four_w_util = (four_w_cube / LIMITS['4W']['max_c']) * 100
+            
+            if SPLIT_MIN <= jb_util <= SPLIT_MAX and SPLIT_MIN <= four_w_util <= SPLIT_MAX:
+                return ('JB', True, {'split': ['JB', '4W'], 'ratio': [jb_cube/total_cube, four_w_cube/total_cube]})
+        
+        # JB + JB (JB 8 + JB 8 = 16 cube max)
+        if max_priority >= 2 and total_cube <= 16.0:
+            jb_util_half = (total_cube / 2 / LIMITS['JB']['max_c']) * 100
+            if SPLIT_MIN <= jb_util_half <= SPLIT_MAX:
+                return ('JB', True, {'split': ['JB', 'JB'], 'ratio': [0.5, 0.5]})
+        
+        # 6W + JB (6W 20 + JB 8 = 28 cube max)
+        if max_priority >= 3 and total_cube <= 28.0:
+            # แบ่ง: 6W รับส่วนใหญ่
+            six_w_cube = min(total_cube * 0.7, 20.0)
+            jb_cube = total_cube - six_w_cube
+            
+            six_w_util = (six_w_cube / LIMITS['6W']['max_c']) * 100
+            jb_util = (jb_cube / LIMITS['JB']['max_c']) * 100
+            
+            if six_w_util >= 75 and SPLIT_MIN <= jb_util <= SPLIT_MAX:
+                return ('6W', True, {'split': ['6W', 'JB'], 'ratio': [six_w_cube/total_cube, jb_cube/total_cube]})
+        
+        # 4W + 4W (4W 5 + 4W 5 = 10 cube max) - สำหรับสาขาที่จำกัด 4W
+        if max_priority == 1 and total_cube <= 10.0:
+            four_w_util_half = (total_cube / 2 / LIMITS['4W']['max_c']) * 100
+            if SPLIT_MIN <= four_w_util_half <= SPLIT_MAX:
+                return ('4W', True, {'split': ['4W', '4W'], 'ratio': [0.5, 0.5]})
+    
+    # 4. 6W (ไม่จำกัดจุด แต่ cube ต้อง ≥100%)
+    if max_priority >= 3:
+        if cube_util_6w >= 100:
+            return ('6W', False, None)
+        elif cube_util_6w >= 80:
+            # 6W ไม่เต็ม (80-99%) → ยังพอรับได้
+            return ('6W', False, None)
+        else:
+            # 6W ว่างมาก (<80%) → ลดเป็น JB ถ้าได้
+            if total_cube <= 8.0 and branch_ok_for_small and max_priority >= 2:
+                return ('JB', False, None)
+            # ถ้า JB ไม่ได้ ลดเป็น 4W
+            if total_cube <= 5.0 and branch_ok_for_small:
+                return ('4W', False, None)
+    
+    # Default: ใช้ max_allowed
+    return (max_allowed, False, None)
 
 def can_branch_use_vehicle(code, vehicle_type, branch_vehicles):
     """
@@ -1380,10 +1491,22 @@ def predict_trips(test_df, model_data):
     # 🎯 จัดกลุ่มตามพิกัดก่อน (เพิ่มรัศมีสูง - ขอบเขตใหญ่ขึ้น)
     spatial_clusters = create_distance_based_clusters(all_codes, max_distance_km=60)
     
+    # 🔄 เรียงสาขาจากใกล้ → ไกล จาก DC
+    def sort_by_distance_from_dc(codes):
+        """เรียงสาขาจากใกล้ DC ไปไกล DC"""
+        def get_distance_from_dc(code):
+            lat, lon = coord_cache.get(code, (None, None))
+            if lat and lon:
+                return calculate_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
+            return 9999  # ไม่มีพิกัด ให้ไว้ท้าย
+        return sorted(codes, key=get_distance_from_dc)
+    
     # แปลงกลุ่มเป็น list ของ codes ที่เรียงตาม nearest neighbor
     all_codes = []
     for cluster in spatial_clusters:
-        ordered_cluster = build_route_nearest_neighbor(cluster)
+        # 🔄 เรียงจากใกล้ DC ไปไกล ก่อน nearest neighbor
+        cluster_sorted = sort_by_distance_from_dc(cluster)
+        ordered_cluster = build_route_nearest_neighbor(cluster_sorted)
         all_codes.extend(ordered_cluster)
     
     while all_codes:
