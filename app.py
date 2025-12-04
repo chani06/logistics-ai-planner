@@ -2889,8 +2889,17 @@ def predict_trips(test_df, model_data):
         total_w = trip_data['Weight'].sum()
         total_c = trip_data['Cube'].sum()
         
-        # ⚡ Skip province calculations in Phase 2.1 for speed
-        all_nearby = True  # Assume nearby for speed optimization
+        # 🔒 เช็คจังหวัด - ห้าม 6W ในปริมณฑล!
+        provinces = set()
+        for code in trip_codes:
+            prov = get_province(code)
+            if prov and prov != 'UNKNOWN':
+                provinces.add(prov)
+        all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
+        
+        # 🔒 ปริมณฑล = บังคับ JB หรือ 4W (ห้าม 6W)
+        if all_nearby and max_allowed == '6W':
+            max_allowed = 'JB'
         
         # 🔒 เช็คว่ารถที่ใช้อยู่ใหญ่กว่าที่อนุญาตหรือไม่ (ห้ามข้ามขั้น!)
         vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
