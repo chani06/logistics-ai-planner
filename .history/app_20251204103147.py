@@ -1311,8 +1311,8 @@ def predict_trips(test_df, model_data):
                 continue
         province_cache[code] = 'UNKNOWN'
     
-    # 🎯 จัดกลุ่มตามพิกัดก่อน (เพิ่มรัศมีสูง - ขอบเขตใหญ่ขึ้น)
-    spatial_clusters = create_distance_based_clusters(all_codes, max_distance_km=60)
+    # 🎯 จัดกลุ่มตามพิกัดก่อน (เพื่อป้องกันรถทับซ้อนกัน)
+    spatial_clusters = create_distance_based_clusters(all_codes, max_distance_km=40)
     
     # แปลงกลุ่มเป็น list ของ codes ที่เรียงตาม nearest neighbor
     all_codes = []
@@ -2391,7 +2391,6 @@ def predict_trips(test_df, model_data):
         # ⚠️ สำคัช: ถ้าทุกจังหวัดเป็น nearby → ห้าม 6W เด็ดขาด!
         if all_nearby:
             very_far = False  # บังคับให้ไม่ใช้ 6W
-            max_allowed = 'JB' if max_allowed == '6W' else max_allowed  # บังคับขอบเขตเป็น JB
         else:
             # 🚛 เช็คระยะทาง - ไกลมากพิเศษ (>300km) ต้องใช้ 6W
             very_far_by_distance = max_distance_from_dc > 300
