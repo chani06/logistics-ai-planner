@@ -363,16 +363,16 @@ def get_max_vehicle_for_trip(trip_codes):
         str: '4W', 'JB', หรือ '6W'
     """
     vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
-    max_allowed = '6W'  # Default
-    max_priority = 3
+    max_allowed = '6W'  # เริ่มจากใหญ่สุด แล้วจำกัดตามข้อจำกัดสาขา
+    min_priority = 3  # ค่าใหญ่สุดคือไม่มีข้อจำกัด
     
     for code in trip_codes:
         branch_max = get_max_vehicle_for_branch(code)
         priority = vehicle_priority.get(branch_max, 3)
         
-        # เลือกรถที่เล็กที่สุด (ข้อจำกัดมากที่สุด)
-        if priority < max_priority:
-            max_priority = priority
+        # 🔒 เลือกรถที่เล็กที่สุด (ข้อจำกัดมากที่สุด) จากทุกสาขาในทริป
+        if priority < min_priority:
+            min_priority = priority
             max_allowed = branch_max
     
     return max_allowed
@@ -411,7 +411,7 @@ def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None):
     max_size = vehicle_sizes.get(max_allowed, 3)
     
     # ตรวจสอบข้อจำกัดของสาขาทั้งหมดในกลุ่ม
-    branch_max_vehicle = '6W'  # เริ่มต้นที่ใหญ่สุด
+    branch_max_vehicle = '4W'  # 🔒 เริ่มต้นที่ 4W (เล็กสุด) แล้วขยายเมื่อจำเป็น
     if trip_codes is not None and len(trip_codes) > 0:
         for code in trip_codes:
             branch_max = get_max_vehicle_for_branch(code)
@@ -2539,6 +2539,12 @@ def predict_trips(test_df, model_data):
         elif max_allowed == 'JB' and recommended == '6W':
             recommended = 'JB'
         
+        # 🔒 Triple check: กรุงเทพ+ปริมณฑล ห้าม 6W เด็ดขาด!
+        if all_nearby and recommended == '6W':
+            # บังคับเปลี่ยนเป็น JB
+            recommended = 'JB'
+            region_changes['nearby_6w_to_jb'] += 1
+        
         # บันทึกการปรับขนาด
         original_vehicle = trip_recommended_vehicles.get(trip_num, '6W')
         trip_recommended_vehicles[trip_num] = recommended
@@ -2566,7 +2572,7 @@ def predict_trips(test_df, model_data):
                 provinces.add(prov)
         
         all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
-        current_vehicle = trip_recommended_vehicles.get(trip_num, '6W')
+        current_vehicle = trip_recommended_vehicles.get(trip_num, '4W')  # Start with 4W
         
         if all_nearby and current_vehicle == '6W':
             # พยายามเปลี่ยนเป็น JB ก่อน
@@ -2635,7 +2641,7 @@ def predict_trips(test_df, model_data):
         
         trip_data = test_df[test_df['Trip'] == trip_num]
         trip_codes = list(trip_data['Code'].values)
-        current_vehicle = trip_recommended_vehicles.get(trip_num, '6W')
+        current_vehicle = trip_recommended_vehicles.get(trip_num, '4W')  # Start with 4W
         max_allowed = get_max_vehicle_for_trip(set(trip_codes))
         
         total_w = trip_data['Weight'].sum()
@@ -2922,7 +2928,7 @@ def predict_trips(test_df, model_data):
             continue
             
         trip_data = test_df[test_df['Trip'] == trip_num]
-        current_vehicle = trip_recommended_vehicles.get(trip_num, '6W')
+        current_vehicle = trip_recommended_vehicles.get(trip_num, '4W')  # Start with 4W
         
         total_w = trip_data['Weight'].sum()
         total_c = trip_data['Cube'].sum()
@@ -3013,7 +3019,7 @@ def predict_trips(test_df, model_data):
             continue
             
         trip_data = test_df[test_df['Trip'] == trip_num]
-        current_vehicle = trip_recommended_vehicles.get(trip_num, '6W')
+        current_vehicle = trip_recommended_vehicles.get(trip_num, '4W')  # Start with 4W
         
         if current_vehicle != '6W':
             continue
@@ -3177,7 +3183,7 @@ def predict_trips(test_df, model_data):
         
         trip_data = test_df[test_df['Trip'] == trip_num]
         trip_codes = set(trip_data['Code'].values)
-        current_vehicle = trip_recommended_vehicles.get(trip_num, '6W')
+        current_vehicle = trip_recommended_vehicles.get(trip_num, '4W')  # Start with 4W
         total_w = trip_data['Weight'].sum()
         total_c = trip_data['Cube'].sum()
         
