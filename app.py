@@ -1531,32 +1531,50 @@ def predict_trips(test_df, model_data):
         seed_province = get_province(seed_code)
         seed_name = test_df[test_df['Code'] == seed_code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
         
-        # จัดเรียง remaining ตามลำดับ: ชื่อคล้ายกัน แล้วตามลำดับในไฟล์
+        # จัดเรียง remaining ตามลำดับ: ชื่อคล้ายกัน → พิกัดใกล้กัน → ประวัติร่วม
         code_to_index = {row['Code']: idx for idx, row in test_df.iterrows()} if 'Code' in test_df.columns else {}
+        
+        # 🔒 คำนวณระยะทางจาก seed ไว้ล่วงหน้า
+        seed_lat, seed_lon = coord_cache.get(seed_code, (None, None))
         
         def get_priority(code):
             code_name = test_df[test_df['Code'] == code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
             code_index = code_to_index.get(code, 999999)
             seed_index = code_to_index.get(seed_code, 0)
             
-            # ลำดับ 0: ชื่อเดียวกันแท้จริง (สำคัชที่สุด)
-            if is_similar_name(seed_name, code_name):
-                return (0, abs(code_index - seed_index))
-            
-            # ลำดับ 1: มีประวัติร่วมกัน
-            pair = tuple(sorted([seed_code, code]))
-            if pair in trip_pairs:
-                return (1, code_index)
-            
-            # ลำดับ 2: พิกัดใกล้กัน (เรียงตามระยะทาง)
-            seed_lat, seed_lon = coord_cache.get(seed_code, (None, None))
+            # คำนวณระยะทางจาก seed
             code_lat, code_lon = coord_cache.get(code, (None, None))
+            dist_from_seed = 9999
             if seed_lat and code_lat:
-                dist = haversine_distance(seed_lat, seed_lon, code_lat, code_lon)
-                return (2, dist, code_index)
+                dist_from_seed = haversine_distance(seed_lat, seed_lon, code_lat, code_lon)
             
-            # ลำดับ 3: อื่นๆ
-            return (3, code_index)
+            # 🔒 ลำดับ 0: ชื่อเดียวกัน + อยู่ใกล้กัน (< 10km) - สำคัญที่สุด!
+            if is_similar_name(seed_name, code_name) and dist_from_seed < 10:
+                return (0, dist_from_seed, code_index)
+            
+            # ลำดับ 1: ชื่อคล้ายกัน (แม้ไกลกว่า)
+            if is_similar_name(seed_name, code_name):
+                return (1, dist_from_seed, code_index)
+            
+            # 🔒 ลำดับ 2: พิกัดใกล้กันมาก (< 5km) - ห้ามข้ามไปไกลกว่า!
+            if dist_from_seed < 5:
+                return (2, dist_from_seed, code_index)
+            
+            # ลำดับ 3: พิกัดใกล้กัน (< 15km)
+            if dist_from_seed < 15:
+                return (3, dist_from_seed, code_index)
+            
+            # ลำดับ 4: มีประวัติร่วมกัน + ไม่ไกลมาก (< 30km)
+            pair = tuple(sorted([seed_code, code]))
+            if pair in trip_pairs and dist_from_seed < 30:
+                return (4, dist_from_seed, code_index)
+            
+            # ลำดับ 5: พิกัดปานกลาง (< 30km)
+            if dist_from_seed < 30:
+                return (5, dist_from_seed, code_index)
+            
+            # 🔒 ลำดับ 6: ไกลกว่า 30km - ให้ความสำคัญต่ำ (ควรเป็นทริปใหม่)
+            return (6, dist_from_seed, code_index)
         
         remaining_sorted = sorted(remaining, key=get_priority)
         
@@ -2624,26 +2642,54 @@ def predict_trips(test_df, model_data):
             recommended = '6W'
             region_changes['far_keep_6w'] += 1
         else:
-            # 🎯 กลยุทธ์เลือกรถ (ปรับตามพื้นที่)
-            # เป้าหมาย: Cube 95-120%, น้ำหนัก ≤130%
+            # 🎯 พื้นที่ไกล (far) - ยืดหยุ่น ใช้ JB ได้ถ้าเหมาะสม
+            # เป้าหมาย: Cube 95-130%, ห้ามรถเหลือ % ต่ำ (< 75%)
             
-            # พื้นที่ไกล/ต่างจังหวัด (far) → ยืดหยุ่นได้
-            # ใช้ 6W เป็นหลัก แต่ถ้า JB เหมาะสมกว่าก็ใช้ได้
-                # 🎯 กลยุทธ์: เลือกรถที่ Cube พอดีที่สุด (95-120%)
-                # ถ้า 6W เต็มพอดี (95-130%) → ใช้ 6W
-                if 95 <= cube_util_6w <= 130 and weight_util_6w <= 130:
-                    recommended = '6W'
-                    region_changes['far_keep_6w'] += 1
-                # ถ้า JB พอดี (95-130%) และ 6W ไม่เต็ม (<95%) → ใช้ JB 
-                elif 95 <= cube_util_jb <= 130 and weight_util_jb <= 130 and cube_util_6w < 95:
+            MIN_UTIL = 75   # ขั้นต่ำ - ห้ามรถเหลือต่ำกว่านี้
+            TARGET_MIN = 95 # เป้าหมายขั้นต่ำ
+            TARGET_MAX = 130 # เป้าหมายสูงสุด
+            
+            # 🎯 กลยุทธ์: เลือกรถที่ Cube พอดีที่สุด (95-130%)
+            
+            # 1. ถ้า 6W เต็มพอดี (95-130%) → ใช้ 6W ✅
+            if TARGET_MIN <= cube_util_6w <= TARGET_MAX and weight_util_6w <= TARGET_MAX:
+                recommended = '6W'
+                region_changes['far_keep_6w'] += 1
+            
+            # 2. ถ้า JB พอดี (95-130%) และ 6W ไม่เต็ม (<95%) → ใช้ JB (พอดีกว่า) ✅
+            elif TARGET_MIN <= cube_util_jb <= TARGET_MAX and weight_util_jb <= TARGET_MAX and cube_util_6w < TARGET_MIN:
+                recommended = 'JB'
+                region_changes['other'] += 1
+            
+            # 3. ถ้า 6W ว่างมาก (<80%) → ใช้ JB 2 คันดีกว่า 6W ครึ่งคัน ✅
+            # เช่น 10 m³ = 50% 6W แต่ = 143% JB → แยกเป็น JB 2 คัน (71.5% ต่อคัน)
+            elif cube_util_6w < 80:
+                # คำนวณถ้าแยกเป็น JB 2 คัน
+                jb_split_util = cube_util_jb / 2
+                if MIN_UTIL <= jb_split_util <= TARGET_MAX:
+                    # JB 2 คันดีกว่า (แต่ละคัน 75-95%)
+                    recommended = 'JB'  # จะแยกเป็น JB 2 คันใน Phase 2.1
+                    region_changes['other'] += 1
+                elif cube_util_jb <= TARGET_MAX:
+                    # JB 1 คันพอ
                     recommended = 'JB'
                     region_changes['other'] += 1
-                # ถ้า JB 2 คันเหมาะกว่า 6W 1 คัน (เช่น 6W=60%, JB แต่ละคัน=90%)
-                elif cube_util_6w < 80 and cube_util_jb <= 130:
-                    recommended = 'JB'  # จะแยกเป็น JB หลายคันใน Phase 2.1
-                    region_changes['other'] += 1
-                # กรณีอื่นๆ → ใช้ 6W (เกิน 130% จะแยกใน Phase 2.5)
                 else:
+                    # ใช้ 6W (แม้ไม่เต็ม แต่ไม่มีทางเลือก)
+                    recommended = '6W'
+                    region_changes['far_keep_6w'] += 1
+            
+            # 4. กรณีอื่นๆ → ใช้ 6W (ห้ามให้รถเหลือ % ต่ำกว่า 75%)
+            else:
+                if cube_util_6w >= MIN_UTIL:
+                    recommended = '6W'
+                    region_changes['far_keep_6w'] += 1
+                elif cube_util_jb >= MIN_UTIL and cube_util_jb <= TARGET_MAX:
+                    # 6W ต่ำกว่า 75% แต่ JB พอดี
+                    recommended = 'JB'
+                    region_changes['other'] += 1
+                else:
+                    # ไม่มีทางเลือก → ใช้ 6W แล้วแยกภายหลัง
                     recommended = '6W'
                     region_changes['far_keep_6w'] += 1
         
