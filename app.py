@@ -1136,6 +1136,93 @@ def predict_trips(test_df, model_data):
         return test_df_result, summary_df
     
     # ถ้าไม่มีคอลัมน์ Trip ให้จัดทริปใหม่
+    
+    # 🗺️ จัดกลุ่มสาขาตามพิกัดก่อน (Spatial Clustering)
+    def create_distance_based_clusters(codes, max_distance_km=50):
+        """จัดกลุ่มสาขาที่อยู่ใกล้กัน (ไม่เกิน max_distance_km)"""
+        clusters = []
+        remaining = codes.copy()
+        
+        while remaining:
+            # เริ่มกลุ่มใหม่
+            seed = remaining.pop(0)
+            cluster = [seed]
+            seed_lat, seed_lon = get_lat_lon_from_master(seed)
+            
+            if seed_lat is None:
+                # ไม่มีพิกัด → ใส่คลัสเตอร์เดี่ยว
+                clusters.append(cluster)
+                continue
+            
+            # หาสาขาที่ใกล้กับ seed
+            to_remove = []
+            for code in remaining[:]:
+                lat, lon = get_lat_lon_from_master(code)
+                if lat and lon:
+                    dist = haversine_distance(seed_lat, seed_lon, lat, lon)
+                    if dist <= max_distance_km:
+                        cluster.append(code)
+                        to_remove.append(code)
+            
+            # ลบสาขาที่เพิ่มไปแล้ว
+            for code in to_remove:
+                if code in remaining:
+                    remaining.remove(code)
+            
+            clusters.append(cluster)
+        
+        return clusters
+    
+    def get_lat_lon_from_master(code):
+        """ดึงพิกัดจาก Master Data"""
+        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+            master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+            if len(master_row) > 0:
+                lat = master_row.iloc[0].get('ละติจูด', None)
+                lon = master_row.iloc[0].get('ลองติจูด', None)
+                if pd.notna(lat) and pd.notna(lon) and lat != 0 and lon != 0:
+                    try:
+                        return float(lat), float(lon)
+                    except:
+                        pass
+        return None, None
+    
+    def build_route_nearest_neighbor(codes):
+        """สร้างเส้นทางโดยเลือกสาขาที่ใกล้ที่สุดถัดไป (Nearest Neighbor)"""
+        if len(codes) <= 1:
+            return codes
+        
+        # เริ่มจาก DC
+        route = []
+        remaining = codes.copy()
+        current_lat, current_lon = DC_WANG_NOI_LAT, DC_WANG_NOI_LON
+        
+        while remaining:
+            # หาสาขาที่ใกล้ที่สุดจากตำแหน่งปัจจุบัน
+            min_dist = float('inf')
+            nearest_code = None
+            
+            for code in remaining:
+                lat, lon = get_lat_lon_from_master(code)
+                if lat and lon:
+                    dist = haversine_distance(current_lat, current_lon, lat, lon)
+                    if dist < min_dist:
+                        min_dist = dist
+                        nearest_code = code
+            
+            if nearest_code:
+                route.append(nearest_code)
+                remaining.remove(nearest_code)
+                current_lat, current_lon = get_lat_lon_from_master(nearest_code)
+                if current_lat is None:
+                    current_lat, current_lon = DC_WANG_NOI_LAT, DC_WANG_NOI_LON
+            else:
+                # ไม่มีพิกัด → ใส่ที่เหลือตามลำดับ
+                route.extend(remaining)
+                break
+        
+        return route
+    
     all_codes = test_df['Code'].unique().tolist()
     assigned_trips = {}
     trip_counter = 1
@@ -1146,6 +1233,17 @@ def predict_trips(test_df, model_data):
     
     total_codes = len(all_codes)
     processed = 0
+    
+    # 🎯 จัดกลุ่มตามพิกัดก่อน (เพื่อป้องกันรถทับซ้อนกัน)
+    st.text("จัดกลุ่มสาขาตามพิกัด...")
+    spatial_clusters = create_distance_based_clusters(all_codes, max_distance_km=40)
+    st.success(f"✅ จัดกลุ่มได้ {len(spatial_clusters)} กลุ่ม")
+    
+    # แปลงกลุ่มเป็น list ของ codes ที่เรียงตาม nearest neighbor
+    all_codes = []
+    for cluster in spatial_clusters:
+        ordered_cluster = build_route_nearest_neighbor(cluster)
+        all_codes.extend(ordered_cluster)
     
     while all_codes:
         seed_code = all_codes.pop(0)
