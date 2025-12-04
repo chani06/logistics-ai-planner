@@ -1100,9 +1100,9 @@ def predict_trips(test_df, model_data):
             # 1. Branch constraint (never allow 6W if any branch restricts to 4W/JB)
             if min_max_size < 3:  # 1=4W, 2=JB
                 # Only allow 4W/JB, never 6W
-                allowed = ['4W', 'JB'] if min_max_size == 2 else ['4W']
+                allowed = ['JB', '4W'] if min_max_size == 2 else ['4W']
             else:
-                allowed = ['4W', 'JB', '6W']
+                allowed = ['JB', '4W', '6W']
 
             if trip_num in trip_truck_map_file:
                 suggested = trip_truck_map_file[trip_num]
@@ -1121,33 +1121,59 @@ def predict_trips(test_df, model_data):
                 else:
                     suggested = ai_suggested
                     source = "🤖 AI"
-            
+
+            # Double check: If strict constraint, never allow 6W even if utilization >105%
+            if min_max_size < 3:
+                # Only JB or 4W allowed, never 6W
+                if suggested == '6W':
+                    # fallback to JB if possible, else 4W
+                    if 'JB' in allowed:
+                        suggested = 'JB'
+                        source = source + " (🔒 จำกัดสาขา)"
+                    else:
+                        suggested = '4W'
+                        source = source + " (🔒 จำกัดสาขา)"
+
             # ตรวจสอบว่ารถที่เลือกใส่ของได้จริงหรือไม่ (ห้ามเกิน 105%)
             if suggested in LIMITS:
                 w_util = (total_w / LIMITS[suggested]['max_w']) * 100
                 c_util = (total_c / LIMITS[suggested]['max_c']) * 100
                 max_util = max(w_util, c_util)
-                
+
                 # ถ้าเกิน 105% ต้องเพิ่มขนาดรถ
                 if max_util > 105:
-                    if suggested == '4W' and 'JB' in LIMITS:
-                        # ลองเปลี่ยนเป็น JB
-                        jb_w_util = (total_w / LIMITS['JB']['max_w']) * 100
-                        jb_c_util = (total_c / LIMITS['JB']['max_c']) * 100
-                        if max(jb_w_util, jb_c_util) <= 105:
-                            suggested = 'JB'
-                            source = source + " → JB"
-                            w_util, c_util = jb_w_util, jb_c_util
-                        else:
+                    # ถ้ามีข้อจำกัดสาขา ห้ามขยายเป็น 6W
+                    if min_max_size < 3:
+                        # บังคับ JB หรือ 4W เท่านั้น
+                        if 'JB' in allowed and suggested == '4W':
+                            jb_w_util = (total_w / LIMITS['JB']['max_w']) * 100
+                            jb_c_util = (total_c / LIMITS['JB']['max_c']) * 100
+                            if max(jb_w_util, jb_c_util) <= 105:
+                                suggested = 'JB'
+                                source = source + " → JB"
+                                w_util, c_util = jb_w_util, jb_c_util
+                        # ถ้า JB ก็ยังเกิน ให้เตือนว่าเกิน ไม่ขยายเป็น 6W
+                        elif suggested == 'JB':
+                            source = source + " (🚫 เกินขนาดแต่ห้ามใช้ 6W)"
+                    else:
+                        # ไม่มีข้อจำกัดสาขา สามารถขยายเป็น 6W ได้
+                        if suggested == '4W' and 'JB' in LIMITS:
+                            jb_w_util = (total_w / LIMITS['JB']['max_w']) * 100
+                            jb_c_util = (total_c / LIMITS['JB']['max_c']) * 100
+                            if max(jb_w_util, jb_c_util) <= 105:
+                                suggested = 'JB'
+                                source = source + " → JB"
+                                w_util, c_util = jb_w_util, jb_c_util
+                            else:
+                                suggested = '6W'
+                                source = source + " → 6W"
+                                w_util = (total_w / LIMITS['6W']['max_w']) * 100
+                                c_util = (total_c / LIMITS['6W']['max_c']) * 100
+                        elif suggested == 'JB' or suggested == '4W':
                             suggested = '6W'
                             source = source + " → 6W"
                             w_util = (total_w / LIMITS['6W']['max_w']) * 100
                             c_util = (total_c / LIMITS['6W']['max_c']) * 100
-                    elif suggested == 'JB' or suggested == '4W':
-                        suggested = '6W'
-                        source = source + " → 6W"
-                        w_util = (total_w / LIMITS['6W']['max_w']) * 100
-                        c_util = (total_c / LIMITS['6W']['max_c']) * 100
             else:
                 w_util = c_util = 0
             
