@@ -2138,255 +2138,136 @@ def predict_trips(test_df, model_data):
     # เรียงตามจังหวัดหลัก → ระยะทาง → จำนวนสาขา → utilization
     all_trips.sort(key=lambda x: (x['primary_province'], x['distance_from_dc'], x['count'], x['util']))
     
-    # 🎯 Phase 1: รวมทริปเล็ก (≤3 สาขา) กับทริปใกล้เคียง
+    # 🎯 Phase 1: รวมทริปเล็ก (≤3 สาขา) กับทริปใกล้เคียง (FAST VERSION)
     merged = True
     merge_count = 0
     iteration = 0
-    max_iterations = min(MAX_MERGE_ITERATIONS, len(all_trips) * 2)  # จำกัดตามจำนวนทริป
+    max_iterations = 2  # ⚡ ลดจาก len(all_trips)*2 เหลือแค่ 2 รอบ
     
     while merged and len(all_trips) > 1 and iteration < max_iterations:
         merged = False
+        iteration += 1
+        
+        # ⚡ Speed: สร้าง index ตามจังหวัดเพื่อหาทริปใกล้เคียงได้เร็ว
+        province_to_trips = {}
+        for idx, trip in enumerate(all_trips):
+            if trip is None:
+                continue
+            for prov in trip['provinces']:
+                if prov not in province_to_trips:
+                    province_to_trips[prov] = []
+                province_to_trips[prov].append(idx)
         
         # เริ่มจากทริปเล็กก่อน (เร็วกว่า)
-        all_trips_sorted = sorted([t for t in all_trips if t is not None], key=lambda x: x['count'])
-        indices = {id(t): i for i, t in enumerate(all_trips) if t is not None}
+        small_trips = [(idx, t) for idx, t in enumerate(all_trips) if t and t['count'] <= 3]
+        small_trips.sort(key=lambda x: x[1]['count'])
         
-        for trip1 in all_trips_sorted[:]:  # ทำ copy เพื่อไม่ให้มีปัญหาระหว่างลูป
-            if trip1 not in [t for t in all_trips if t is not None]:
-                continue
-                
-            i = indices.get(id(trip1))
-            if i is None or all_trips[i] is None:
-                continue
-            
-        for i in range(len(all_trips)):
+        for i, trip1 in small_trips:
             if all_trips[i] is None:
                 continue
             
-            trip1 = all_trips[i]
+            # ⚡ หาทริปที่จะรวมได้จากจังหวัดเดียวกันเท่านั้น
+            candidate_indices = set()
+            for prov in trip1['provinces']:
+                for idx in province_to_trips.get(prov, []):
+                    if idx != i and all_trips[idx] is not None:
+                        candidate_indices.add(idx)
             
-            # ลองรวมกับทริปอื่นที่อยู่ในจังหวัดเดียวกัน
-            for j in range(i + 1, len(all_trips)):
+            # ⚡ จำกัดแค่ 10 candidates ที่ใกล้ที่สุด (ตาม centroid)
+            if len(candidate_indices) > 10 and 'centroid_lat' in trip1:
+                candidates_with_dist = []
+                for idx in candidate_indices:
+                    trip2 = all_trips[idx]
+                    if 'centroid_lat' in trip2:
+                        dist = haversine_distance(
+                            trip1['centroid_lat'], trip1['centroid_lon'],
+                            trip2['centroid_lat'], trip2['centroid_lon']
+                        )
+                        candidates_with_dist.append((idx, dist))
+                candidates_with_dist.sort(key=lambda x: x[1])
+                candidate_indices = {x[0] for x in candidates_with_dist[:10]}
+            
+            for j in candidate_indices:
                 if all_trips[j] is None:
                     continue
                 
                 trip2 = all_trips[j]
                 
-                # เช็คว่าสาขาในทั้ง 2 ทริปอยู่ใกล้กันหรือไม่
-                can_merge = False
-                
-                # 🎯 เน้นรวมจังหวัดเดียวกันก่อน ค่อยข้ามจังหวัด
-                # เช็คว่ามีจังหวัดเดียวกันหรือไม่
-                same_province = bool(trip1['provinces'] & trip2['provinces'])
-                
-                # ถ้าจังหวัดเดียวกัน → รวมได้ง่าย
-                if same_province:
-                    can_merge = True
-                # ถ้าต่างจังหวัด → ต้องอยู่ใกล้กันมาก (centroid distance)
-                else:
-                    if 'centroid_lat' in trip1 and 'centroid_lat' in trip2:
-                        centroid_distance = haversine_distance(
-                            trip1['centroid_lat'], trip1['centroid_lon'],
-                            trip2['centroid_lat'], trip2['centroid_lon']
-                        )
-                        # ต่างจังหวัดต้องใกล้กันมาก (<60km) จึงจะรวมได้ (เพิ่มจาก 40km)
-                        can_merge = centroid_distance <= 60
-                    else:
-                        can_merge = False
-                
-                # เช็คระยะทางระหว่าง centroid ของ 2 ทริป (เร็วกว่าการเช็คทุกสาขา)
-                if can_merge:
-                    if 'centroid_lat' in trip1 and 'centroid_lat' in trip2:
-                        centroid_distance = haversine_distance(
-                            trip1['centroid_lat'], trip1['centroid_lon'],
-                            trip2['centroid_lat'], trip2['centroid_lon']
-                        )
-                        
-                        # ปรับระยะทางตามจำนวนสาขา
-                        # ทริปเล็ก (≤4) → ยืดหยุ่นกว่า (80km)
-                        # ทริปกลาง (5-8) → ปานกลาง (60km)
-                        # ทริปใหญ่ (≥9) → เข้มงวด (50km)
-                        if trip1['count'] <= 4 or trip2['count'] <= 4:
-                            max_allowed_distance = 80  # ทริปเล็ก
-                        elif trip1['count'] <= 8 or trip2['count'] <= 8:
-                            max_allowed_distance = 60  # ทริปกลาง
-                        else:
-                            max_allowed_distance = 50  # ทริปใหญ่
-                        
-                        if centroid_distance > max_allowed_distance:
-                            can_merge = False
-                
-                if not can_merge:
-                    continue  # ไม่สามารถรวมได้
+                # เช็คระยะทางระหว่าง centroid
+                if 'centroid_lat' in trip1 and 'centroid_lat' in trip2:
+                    centroid_distance = haversine_distance(
+                        trip1['centroid_lat'], trip1['centroid_lon'],
+                        trip2['centroid_lat'], trip2['centroid_lon']
+                    )
+                    if centroid_distance > 80:  # ไกลเกิน 80km ไม่รวม
+                        continue
                 
                 # 🚨 เช็คข้อจำกัดรถก่อนรวม
                 combined_codes = trip1['codes'] | trip2['codes']
                 max_allowed_combined = get_max_vehicle_for_trip(combined_codes)
-                
-                # ถ้ารวมแล้วมีสาขาจำกัด 4W → ห้ามรวมถ้าจะใช้ 6W
-                # (เพราะอาจจะใส่ 4W/JB ไม่ได้)
                 
                 # ลองรวมกัน
                 combined_w = trip1['weight'] + trip2['weight']
                 combined_c = trip1['cube'] + trip2['cube']
                 combined_count = trip1['count'] + trip2['count']
                 
-                # เช็คว่ารวมแล้วใส่รถ 6W ได้หรือไม่
-                if (combined_w <= LIMITS['6W']['max_w'] * BUFFER and 
-                    combined_c <= LIMITS['6W']['max_c'] * BUFFER and
-                    combined_count <= MAX_BRANCHES_PER_TRIP):
+                # เช็คว่ารวมแล้วใส่รถได้หรือไม่
+                if combined_count > MAX_BRANCHES_PER_TRIP:
+                    continue
+                
+                # คำนวณ % การใช้รถหลังรวม
+                combined_6w_util = max(
+                    (combined_w / LIMITS['6W']['max_w']) * 100,
+                    (combined_c / LIMITS['6W']['max_c']) * 100
+                )
+                
+                # เช็คว่าใส่รถที่อนุญาตได้หรือไม่
+                vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
+                allowed_priority = vehicle_priority.get(max_allowed_combined, 3)
+                
+                can_fit = False
+                if allowed_priority >= 3 and combined_6w_util <= 110:  # 6W
+                    can_fit = True
+                elif allowed_priority >= 2 and combined_c <= LIMITS['JB']['max_c'] * BUFFER:  # JB
+                    can_fit = True
+                elif allowed_priority >= 1 and combined_c <= LIMITS['4W']['max_c'] * BUFFER:  # 4W
+                    can_fit = True
+                
+                if can_fit:
+                    # รวมทริป
+                    for code in trip2['codes']:
+                        test_df.loc[test_df['Code'] == code, 'Trip'] = trip1['trip']
                     
-                    # คำนวณ % การใช้รถหลังรวม
-                    combined_6w_util = max(
-                        (combined_w / LIMITS['6W']['max_w']) * 100,
-                        (combined_c / LIMITS['6W']['max_c']) * 100
-                    )
+                    # อัปเดตข้อมูล trip1
+                    trip1['weight'] = combined_w
+                    trip1['cube'] = combined_c
+                    trip1['count'] = combined_count
+                    trip1['codes'] |= trip2['codes']
+                    trip1['provinces'] |= trip2['provinces']
+                    trip1['util'] = combined_6w_util
                     
-                    # คำนวณว่ารวมแล้วคุ้มหรือไม่ (เป้าหมาย: ใกล้ 100%)
-                    should_merge = False
+                    # อัพเดต centroid
+                    lats, lons = [], []
+                    for code in trip1['codes']:
+                        lat, lon = coord_cache.get(code, (None, None))
+                        if lat:
+                            lats.append(lat)
+                            lons.append(lon)
+                    if lats:
+                        trip1['centroid_lat'] = sum(lats) / len(lats)
+                        trip1['centroid_lon'] = sum(lons) / len(lons)
                     
-                    # 🎯 เช็คว่าถ้าแยกแล้วรถใหม่จะไม่เต็มหรือไม่ → ถ้าใช่ ยอมให้เกิน buffer
-                    def check_split_efficiency(trip_util_pct):
-                        """เช็คว่าถ้าแยกทริปออกไป รถใหม่จะคุ้มไหม"""
-                        # ถ้า util < 60% แยกแล้วไม่คุ้ม
-                        return trip_util_pct < 60
-                    
-                    # คำนวณ utilization ของแต่ละทริปหากแยก (ใช้รถที่เหมาะสม)
-                    trip1_would_waste = check_split_efficiency(trip1['util'])
-                    trip2_would_waste = check_split_efficiency(trip2['util'])
-                    
-                    # ถ้าแยกแล้วทริปใดทริปหนึ่งจะไม่คุ้ม → ยอมให้รวมแม้เกิน buffer
-                    allow_exceed_buffer = trip1_would_waste or trip2_would_waste
-                    
-                    # 🚨 Priority: ทริปเล็ก (≤3 สาขา) ต้องรวมก่อน
-                    if trip1['count'] <= 3 or trip2['count'] <= 3:
-                        # ถ้ามีทริปเล็ก → พยายามรวม (ยืดหยุ่นกว่า)
-                        if allow_exceed_buffer:
-                            # ยอมให้เกินได้มากถึง 130% ถ้าแยกแล้วไม่คุ้ม
-                            if combined_6w_util <= 130:
-                                should_merge = True
-                        elif combined_6w_util <= 110:  # ยอมให้เกิน 10%
-                            should_merge = True
-                        # หรือ ถ้ารวมแล้วได้ 4W/JB ที่เต็มกว่า 70%
-                        elif (combined_w <= LIMITS['JB']['max_w'] * BUFFER and 
-                              combined_c <= LIMITS['JB']['max_c'] * BUFFER):
-                            combined_jb_util = max(
-                                (combined_w / LIMITS['JB']['max_w']) * 100,
-                                (combined_c / LIMITS['JB']['max_c']) * 100
-                            )
-                            if combined_jb_util >= 70:
-                                should_merge = True
-                        elif (combined_w <= LIMITS['4W']['max_w'] * BUFFER and 
-                              combined_c <= LIMITS['4W']['max_c'] * BUFFER):
-                            combined_4w_util = max(
-                                (combined_w / LIMITS['4W']['max_w']) * 100,
-                                (combined_c / LIMITS['4W']['max_c']) * 100
-                            )
-                            if combined_4w_util >= 70:
-                                should_merge = True
-                    
-                    # เงื่อนไข 2: ทั้ง 2 ทริปใช้รถต่ำกว่า 50% และรวมแล้ว 60-130%
-                    elif trip1['util'] < 50 and trip2['util'] < 50:
-                        if allow_exceed_buffer and combined_6w_util <= 130:
-                            should_merge = True
-                        elif 60 <= combined_6w_util <= 105:
-                            should_merge = True
-                    
-                    # เงื่อนไข 2.5: ทริปใช้รถต่ำกว่า 30% (ไม่คุ้มมาก) รวมกันก่อน
-                    elif trip1['util'] < 30 or trip2['util'] < 30:
-                        if allow_exceed_buffer and combined_6w_util <= 130:
-                            should_merge = True
-                        elif combined_6w_util <= 115:  # ยืดหยุ่นกว่าเดิม (เพิ่มจาก 105%)
-                            should_merge = True
-                    
-                    # เงื่อนไข 3: รวมแล้วใช้รถ 80-105% (ใกล้ 100% มาก)
-                    elif combined_count <= 13 and 80 <= combined_6w_util <= 105:
-                        should_merge = True
-                    
-                    # เงื่อนไข 4: รวมแล้วได้สาขา ≤10 และใช้รถ 70-105%
-                    elif combined_count <= 10 and 70 <= combined_6w_util <= 105:
-                        should_merge = True
-                    
-                    # เงื่อนไข 5: ทริปเล็กมาก (≤3 สาขา) ให้รวมกับทริปใหญ่ในจังหวัดเดียวกัน
-                    # แม้รวมแล้วจะเกิน 105% นิดหน่อย (≤130% ถ้าแยกแล้วไม่คุ้ม)
-                    elif (trip1['count'] <= 3 or trip2['count'] <= 3):
-                        if allow_exceed_buffer and combined_6w_util <= 130:
-                            should_merge = True
-                        elif combined_6w_util <= 115:
-                            should_merge = True
-                    
-                    # เงื่อนไข 6: จังหวัดเดียวกันทั้งหมด → รวมได้ง่ายขึ้น
-                    elif same_province and combined_count <= MAX_BRANCHES_PER_TRIP:
-                        # จังหวัดเดียวกัน + รวมแล้ว 50-110%
-                        if 50 <= combined_6w_util <= 110:
-                            should_merge = True
-                        # หรือ ทั้ง 2 ทริปต่ำกว่า 60% และรวมแล้ว ≤115%
-                        elif trip1['util'] < 60 and trip2['util'] < 60 and combined_6w_util <= 115:
-                            should_merge = True
-                    
-                    if should_merge:
-                        # 🚨 เช็คอีกครั้งว่ารวมแล้วใส่รถที่อนุญาตได้หรือไม่
-                        vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
-                        
-                        # เช็คว่ารวมแล้วต้องใช้รถอะไร
-                        if combined_6w_util <= 105:
-                            needed_vehicle = '6W'
-                        else:
-                            # เกิน 6W → ไม่ควรรวม (ปล่อยให้แยก)
-                            needed_vehicle = None
-                        
-                        # ถ้ารถที่ต้องการใหญ่กว่าที่อนุญาต → ห้ามรวม
-                        if needed_vehicle:
-                            needed_priority = vehicle_priority.get(needed_vehicle, 3)
-                            allowed_priority = vehicle_priority.get(max_allowed_combined, 3)
-                            
-                            if needed_priority > allowed_priority:
-                                # รถที่ต้องการใหญ่เกินไป → ลองใช้ JB/4W แทน
-                                if max_allowed_combined == 'JB':
-                                    # ตรวจสอบว่าใส่ JB ได้ไหม
-                                    if combined_c <= LIMITS['JB']['max_c'] * BUFFER:
-                                        # ใส่ JB ได้ → รวมได้
-                                        pass
-                                    else:
-                                        # ใส่ JB ไม่ได้ → ไม่รวม
-                                        should_merge = False
-                                elif max_allowed_combined == '4W':
-                                    # ตรวจสอบว่าใส่ 4W ได้ไหม
-                                    if combined_c <= LIMITS['4W']['max_c'] * BUFFER:
-                                        # ใส่ 4W ได้ → รวมได้
-                                        pass
-                                    else:
-                                        # ใส่ 4W ไม่ได้ → ไม่รวม
-                                        should_merge = False
-                        
-                        if should_merge:
-                            # รวมทริป
-                            for code in trip2['codes']:
-                                test_df.loc[test_df['Code'] == code, 'Trip'] = trip1['trip']
-                        
-                        # อัปเดตข้อมูล trip1
-                        trip1['weight'] = combined_w
-                        trip1['cube'] = combined_c
-                        trip1['count'] = combined_count
-                        trip1['codes'] |= trip2['codes']
-                        trip1['provinces'] |= trip2['provinces']
-                        trip1['util'] = max(
-                            (combined_w / LIMITS['6W']['max_w']) * 100,
-                            (combined_c / LIMITS['6W']['max_c']) * 100
-                        )
-                        
-                        # ลบ trip2 ออก
-                        all_trips[j] = None
-                        merged = True
-                        merge_count += 1
-                        break
+                    # ลบ trip2 ออก
+                    all_trips[j] = None
+                    merged = True
+                    merge_count += 1
+                    break
             
             if merged:
                 break
         
         # ลบ None ออก
         all_trips = [t for t in all_trips if t is not None]
-        iteration += 1
     
     # 🎯 Phase 1.25: ย้ายสาขาเดียวที่ใช้รถเล็กไปยังทริปใกล้เคียงที่ใหญ่กว่า
     reassign_count = 0
