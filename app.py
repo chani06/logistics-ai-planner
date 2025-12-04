@@ -1229,6 +1229,7 @@ def predict_trips(test_df, model_data):
     def enforce_vehicle_constraints(test_df):
         """บังคับข้อจำกัดรถขั้นสุดท้าย - ไม่อนุญาต 6W หากสาขาจำกัด 4W/JB"""
         vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
+        changed_trips = 0
         
         for trip_num in test_df['Trip'].unique():
             trip_data = test_df[test_df['Trip'] == trip_num]
@@ -1241,13 +1242,19 @@ def predict_trips(test_df, model_data):
                 max_vehicles.append(max_vehicle)
             
             min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles)
+            current_truck = trip_data['Truck'].iloc[0] if 'Truck' in trip_data.columns else ''
             
             # หากมีสาขาใดจำกัด 4W/JB → ห้าม 6W
-            if min_max_size < 3:
+            if min_max_size < 3 and '6W' in str(current_truck):
                 # บังคับเปลี่ยนเป็น JB หรือ 4W
                 allowed_vehicle = 'JB' if min_max_size >= 2 else '4W'
-                test_df.loc[test_df['Trip'] == trip_num, 'Truck'] = f'{allowed_vehicle} 🔒 บังคับสาขา'
+                new_truck = f'{allowed_vehicle} 🔒 บังคับสาขา'
+                test_df.loc[test_df['Trip'] == trip_num, 'Truck'] = new_truck
+                changed_trips += 1
+                print(f"🔒 Trip {trip_num}: {current_truck} → {new_truck}")
         
+        if changed_trips > 0:
+            print(f"🔒 Enforced constraints on {changed_trips} trips")
         return test_df
     
     # ถ้าไม่มีคอลัมน์ Trip ให้จัดทริปใหม่
