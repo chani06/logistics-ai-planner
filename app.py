@@ -11,6 +11,15 @@ import glob
 from datetime import datetime, time
 import io
 
+# Fuzzy String Matching
+try:
+    from rapidfuzz import fuzz, process
+    FUZZY_AVAILABLE = True
+except ImportError:
+    FUZZY_AVAILABLE = False
+    # Fallback: ใช้ difflib
+    from difflib import SequenceMatcher
+
 # Auto-refresh component
 try:
     from streamlit_autorefresh import st_autorefresh
@@ -38,9 +47,14 @@ BUFFER = 1.05
 MAX_BRANCHES_PER_TRIP = 12  # สูงสุด 12 สาขาต่อทริปสำหรับ 4W/JB (6W ไม่จำกัด)
 TARGET_BRANCHES_PER_TRIP = 12  # เป้าหมาย 12 สาขาต่อทริป
 
-# Performance Config
-MAX_DETOUR_KM = 12  # ลดจาก 15km เป็น 12km เพื่อประมวลผลเร็วขึ้น
-MAX_MERGE_ITERATIONS = 25  # จำกัดรอบการรวมทริป (ลดจาก 50 เพื่อเร็วขึ้น)
+# Performance Config - Optimized for < 1 minute
+MAX_DETOUR_KM = 12  # ลดจาก 15km เป็น 12km
+MAX_MERGE_ITERATIONS = 10  # ลดจาก 25 เป็น 10 เพื่อเร็วขึ้น
+MAX_REBALANCE_ITERATIONS = 5  # จำกัดการ rebalance (ใหม่!)
+MAX_PROCESSING_TIME = 50  # วินาที - เหลือเวลา 10 วิสำหรับ Phase อื่น (ใหม่!)
+EARLY_STOP_UTIL = 95  # หยุดถ้าได้ utilization >= 95% (ใหม่!)
+MAX_REBALANCE_ITERATIONS = 5  # จำกัดการ rebalance (ใหม่!)
+EARLY_STOP_THRESHOLD = 0.95  # หยุดถ้าได้ utilization >= 95% (ใหม่!)
 
 # รายการสาขาที่ไม่ต้องการจัดส่ง (ตัดออก)
 EXCLUDE_BRANCHES = ['DC011', 'PTDC', 'PTG DISTRIBUTION CENTER']
@@ -632,66 +646,125 @@ def get_most_used_vehicle_for_branch(code, branch_vehicles):
     
     return max(vehicle_history, key=vehicle_history.get)
 
-def is_similar_name(name1, name2):
-    """เช็คว่าชื่อสาขาคล้ายกันหรือไม่ - รองรับทั้งไทยและอังกฤษ + ดูคำสำคัญ"""
+def is_similar_name(name1, name2, similarity_threshold=85):
+    """เช็คว่าชื่อสาขาคล้ายกันหรือไม่ - ใช้ Fuzzy Matching + คำสำคัญ
+    
+    Args:
+        name1: ชื่อสาขาที่ 1
+        name2: ชื่อสาขาที่ 2
+        similarity_threshold: ความคล้ายขั้นต่ำ (0-100, default=85)
+    
+    Returns:
+        True ถ้าชื่อคล้ายกัน
+    """
     def extract_keywords(name):
         """ดึงคำสำคัญจากชื่อสาขา"""
         if pd.isna(name) or name is None:
             return set(), "", ""
         s = str(name).strip().upper()
         
-        # คำสำคัญที่ต้องการจับคู่ (ไทย + อังกฤษ)
+        # คำสำคัญที่ต้องการจับคู่ (ไทย + อังกฤษ) - เพิ่มเติมคำเฉพาะของสาขา
         keywords = set()
         
         # เช็คคำสำคัญแบบ exact match
         important_words = [
-            'ฟิวเจอร์', 'FUTURE', 'รังสิต', 'RANGSIT',
+            # สถานที่สำคัญ
+            'ฟิวเจอร์', 'FUTURE', 'รังสิต', 'RANGSIT', 'คลองหลวง', 'KHLONGLUANG',
             'เซ็นทรัล', 'CENTRAL', 'เทสโก้', 'TESCO', 'โลตัส', 'LOTUS',
             'บิ๊กซี', 'BIGC', 'แม็คโคร', 'MAKRO', 'โฮมโปร', 'HOMEPRO',
             'ซีคอน', 'SEACON', 'เมกา', 'MEGA', 'พาราไดซ์', 'PARADISE',
-            'เทอร์มินอล', 'TERMINAL', 'สยามพารากอน', 'SIAM', 'PARAGON'
+            'เทอร์มินอล', 'TERMINAL', 'สยามพารากอน', 'SIAM', 'PARAGON',
+            # หมายเลขสาขา (คลองหลวง 3, 4, 8, 10 ฯลฯ)
+            'คลองหลวง3', 'คลองหลวง4', 'คลองหลวง8', 'คลองหลวง10',
         ]
         
         for word in important_words:
             if word in s:
                 keywords.add(word)
         
+        # ดึงชื่อพื้นฐาน (เช่น "คลองหลวง" จาก "คลองหลวง3")
+        import re
+        base_match = re.search(r'([ก-๙A-Z]+)\s*\d+', s)
+        if base_match:
+            base_name = base_match.group(1).strip()
+            if len(base_name) >= 3:
+                keywords.add(base_name)
+        
+        # Pattern 3: ดึงชื่อในวงเล็บ (เช่น "คลองหลวง4(ถ.พหลโยธิน กม.34)" → "คลองหลวง4")
+        paren_match = re.search(r'^([^(]+)', s)
+        if paren_match:
+            main_name = paren_match.group(1).strip()
+            if len(main_name) >= 3 and main_name != s:
+                keywords.add(main_name)  # "คลองหลวง4"
+        
         # ลบ prefix/suffix ที่พบบ่อย
-        prefixes = ['PTC-MRT-', 'FC PTF ', 'PTC-', 'PTC ', 'PUN-', 'PTF ', 
-                   'MAXMART', 'CW', 'FC', 'NW', 'MI', 'PI']
+        prefixes = ['PTC-MRT-', 'FC PTF ', 'PTC-', 'PTC ', 'PUN-', 'PTF ', 'FC ', 
+                   'MAXMART', 'CW', 'NW', 'MI', 'PI', 'MH', 'ME', 'SE', 'SG', 'SH', 'MG']
+        clean_s = s
         for prefix in prefixes:
-            if s.startswith(prefix):
-                s = s[len(prefix):].strip()
+            if clean_s.startswith(prefix):
+                clean_s = clean_s[len(prefix):].strip()
                 break
         
-        # ลบตัวอักษรเดี่ยวที่ขึ้นต้น (M, P, N) ถ้าตามด้วยตัวเลข
-        import re
-        if re.match(r'^[MPN]\d', s):
-            s = s[1:]
+        # ลบตัวอักษรเดี่ยวที่ขึ้นต้น (M, P, N, S) ถ้าตามด้วยตัวเลข
+        if re.match(r'^[MPNS]\d', clean_s):
+            clean_s = clean_s[1:]
         
         # แยกภาษาไทยและอังกฤษ
         thai_chars = ''.join([c for c in s if '\u0e01' <= c <= '\u0e5b'])
         eng_chars = ''.join([c for c in s if c.isalpha() and c.isascii()])
         
-        return keywords, thai_chars, eng_chars
+        return keywords, thai_chars, eng_chars, clean_s
     
-    keywords1, thai1, eng1 = extract_keywords(name1)
-    keywords2, thai2, eng2 = extract_keywords(name2)
+    keywords1, thai1, eng1, clean1 = extract_keywords(name1)
+    keywords2, thai2, eng2, clean2 = extract_keywords(name2)
     
-    # 🔥 ลำดับแรก: เช็คคำสำคัญก่อน (เช่น ฟิวเจอร์+รังสิต)
+    # 🔥 ลำดับแรก: เช็คคำสำคัญก่อน (เช่น ฟิวเจอร์+รังสิต, คลองหลวง)
     if keywords1 and keywords2:
-        # ถ้ามีคำสำคัญร่วมกัน >= 2 คำ → ถือว่าเหมือนกัน
         common_keywords = keywords1 & keywords2
+        
+        # ✅ Case 1: ชื่อพื้นฐานเดียวกัน (เช่น "คลองหลวง" ใน คลองหลวง3, คลองหลวง4, คลองหลวง6)
+        base_names = {k for k in common_keywords if len(k) >= 3 and not k.isdigit()}
+        if base_names:
+            # ถือว่าเป็นสาขาเดียวกัน (เช่น คลองหลวง 3, 4, 6, 8, 10)
+            return True
+        
+        # ✅ Case 1.5: เช็ค partial match ของชื่อพื้นฐาน (เช่น "KHLONG" ใน keywords1, "LUANG" ใน keywords1 + "KHLONG" ใน keywords2)
+        # → ถือว่าเป็น "KHLONG LUANG" เดียวกัน (รองรับภาษาอังกฤษ)
+        for k1 in keywords1:
+            for k2 in keywords2:
+                # ถ้า k1 เป็น substring ของ k2 หรือตรงกันข้าม
+                if len(k1) >= 4 and len(k2) >= 4:
+                    if k1 in k2 or k2 in k1:
+                        return True
+        
+        # ถ้ามีคำสำคัญร่วมกัน >= 2 คำ → ถือว่าเหมือนกัน
         if len(common_keywords) >= 2:
             return True
+        
         # ถ้ามีคำสำคัญร่วมกัน 1 คำ แต่เป็นคำเฉพาะ → ถือว่าเหมือนกัน
         if len(common_keywords) >= 1:
-            # เช็คว่ามีคำที่เป็นชื่อสถานที่เฉพาะ
-            specific_places = {'รังสิต', 'RANGSIT', 'เซ็นทรัล', 'CENTRAL', 'ซีคอน', 'SEACON'}
+            specific_places = {'รังสิต', 'RANGSIT', 'เซ็นทรัล', 'CENTRAL', 'ซีคอน', 'SEACON', 'คลองหลวง', 'KHLONGLUANG', 'ตลาดไท', 'TALADTHAI'}
             if common_keywords & specific_places:
-                # ต้องมีอีก 1 คำ หรือ ชื่อคล้ายกัน
                 if len(common_keywords) >= 2 or (thai1 and thai2 and len(thai1) >= 4 and thai1[:4] in thai2):
                     return True
+    
+    # 🎯 Fuzzy Matching - ใช้ rapidfuzz ถ้ามี หรือ difflib ถ้าไม่มี
+    if FUZZY_AVAILABLE:
+        # ใช้ rapidfuzz (เร็วและแม่นยำกว่า)
+        ratio = fuzz.token_sort_ratio(clean1, clean2)
+        if ratio >= similarity_threshold:
+            return True
+        
+        # เช็ค partial ratio สำหรับชื่อที่เป็น substring
+        partial_ratio = fuzz.partial_ratio(clean1, clean2)
+        if partial_ratio >= 90:  # ความคล้ายสูงมาก
+            return True
+    else:
+        # Fallback: ใช้ difflib
+        ratio = SequenceMatcher(None, clean1, clean2).ratio() * 100
+        if ratio >= similarity_threshold:
+            return True
     
     # ต้องมีความยาวพอสมควร
     if len(thai1) < 3 and len(eng1) < 3:
@@ -1382,15 +1455,59 @@ def predict_trips(test_df, model_data):
     
     # ถ้าไม่มีคอลัมน์ Trip ให้จัดทริปใหม่
     
-    # 🗺️ จัดกลุ่มสาขาตามพิกัดก่อน (Spatial Clustering)
+    # 🗺️ จัดกลุ่มสาขาตามพิกัดก่อน (Spatial Clustering) + จับคู่สาขาชื่อคล้ายกัน
     def create_distance_based_clusters(codes, max_distance_km=25):
-        """จัดกลุ่มสาขาที่อยู่ใกล้กัน (ไม่เกิน max_distance_km)"""
+        """จัดกลุ่มสาขาที่อยู่ใกล้กัน (ไม่เกิน max_distance_km) + บังคับรวมสาขาชื่อคล้ายกัน"""
         # ⚡ Speed: Skip clustering if too few codes
         if len(codes) < 10:
             return [codes]  # Return all as one cluster
         
+        # 🔥 Phase 0: จับคู่สาขาที่มีชื่อคล้ายกัน (เช่น คลองหลวง 3,4,8,10) ให้อยู่กลุ่มเดียวกันเสมอ
+        similar_groups = []  # เก็บกลุ่มสาขาที่ชื่อคล้ายกัน
+        grouped_codes = set()  # เก็บสาขาที่ถูกจัดกลุ่มแล้ว
+        
+        # ตรวจสอบทุกคู่สาขา
+        for i, code1 in enumerate(codes):
+            if code1 in grouped_codes:
+                continue
+            
+            # หาชื่อสาขา
+            name1 = test_df[test_df['Code'] == code1]['Name'].iloc[0] if 'Name' in test_df.columns and len(test_df[test_df['Code'] == code1]) > 0 else ''
+            
+            # หาสาขาที่ชื่อคล้ายกัน
+            similar_group = [code1]
+            for j, code2 in enumerate(codes):
+                if i >= j or code2 in grouped_codes:
+                    continue
+                
+                name2 = test_df[test_df['Code'] == code2]['Name'].iloc[0] if 'Name' in test_df.columns and len(test_df[test_df['Code'] == code2]) > 0 else ''
+                
+                # ถ้าชื่อคล้ายกัน (เช่น "คลองหลวง" ใน "คลองหลวง 3", "คลองหลวง 4")
+                if is_similar_name(name1, name2, similarity_threshold=75):  # ลดเกณฑ์เหลือ 75% เพื่อจับได้มากขึ้น
+                    # เช็คระยะทาง - ยอมให้ไกลได้ถึง 80km (เพราะสาขาชื่อเดียวกันอาจกระจาย)
+                    lat1, lon1 = get_lat_lon_from_master(code1)
+                    lat2, lon2 = get_lat_lon_from_master(code2)
+                    
+                    if lat1 and lat2:
+                        dist = haversine_distance(lat1, lon1, lat2, lon2)
+                        if dist < 80:  # เพิ่มจาก 50km → 80km
+                            similar_group.append(code2)
+                            grouped_codes.add(code2)
+                    else:
+                        # ถ้าไม่มีพิกัด → รวมเข้ากลุ่มเลย (ถือว่าชื่อเดียวกัน)
+                        similar_group.append(code2)
+                        grouped_codes.add(code2)
+            
+            if len(similar_group) > 1:
+                # มีสาขาชื่อคล้ายกัน → สร้างกลุ่ม
+                similar_groups.append(similar_group)
+                grouped_codes.add(code1)
+        
+        # สาขาที่เหลือ (ไม่มีชื่อคล้ายกัน)
+        remaining_codes = [c for c in codes if c not in grouped_codes]
+        
         clusters = []
-        remaining = codes.copy()
+        remaining = remaining_codes.copy()
         
         while remaining:
             # เริ่มกลุ่มใหม่
@@ -1420,7 +1537,10 @@ def predict_trips(test_df, model_data):
             
             clusters.append(cluster)
         
-        return clusters
+        # 🔥 เพิ่มกลุ่มสาขาชื่อคล้ายกันเข้าไป (จะอยู่ข้างหน้าสุด - ส่งก่อน)
+        all_clusters = similar_groups + clusters
+        
+        return all_clusters
     
     def get_lat_lon_from_master(code):
         """ดึงพิกัดจาก Master Data"""
@@ -1480,6 +1600,11 @@ def predict_trips(test_df, model_data):
     total_codes = len(all_codes)
     processed = 0
     
+    # ⏱️ Timer สำหรับ early stopping
+    import time
+    start_time = time.time()
+    MAX_PROCESSING_TIME = 50  # วินาที (เหลือเวลา 10 วิสำหรับ Phase อื่น)
+    
     # 🚀 Cache พิกัดและจังหวัดล่วงหน้า (ประหยัดเวลา 70%)
     coord_cache = {}
     province_cache = {}
@@ -1523,9 +1648,8 @@ def predict_trips(test_df, model_data):
         if not new_lat:
             return 9999, 9999, False
         
-        # ⚡ Speed: ถ้าทริปมีหลายสาขา ให้ sample แค่ 5 สาขา
-        sample_codes = trip_codes if len(trip_codes) <= 5 else trip_codes[:3] + trip_codes[-2:]
-        
+        # ⚡ Speed: ถ้าทริปมีหลายสาขา ให้ sample แค่ 3 สาขา (ลดจาก 5)
+        sample_codes = trip_codes if len(trip_codes) <= 3 else trip_codes[:2] + trip_codes[-1:]
         distances = []
         for code in sample_codes:
             code_lat, code_lon = coord_cache.get(code, (None, None))
@@ -1563,14 +1687,16 @@ def predict_trips(test_df, model_data):
     
     def find_closest_trip_for_branch(branch_code, all_trip_codes_dict, exclude_trip=None):
         """
-        หาทริปที่เหมาะสมที่สุดสำหรับสาขา (ใช้ centroid - เร็วมาก)
+        หาทริปที่เหมาะสมที่สุดสำหรับสาขา - เช็คระยะห่างจากทุกสาขาในทริป (ไม่ใช้ centroid)
+        เพื่อป้องกันการกระโดดข้ามสาขาที่ใกล้กว่า
         """
         branch_lat, branch_lon = coord_cache.get(branch_code, (None, None))
         if not branch_lat:
             return None, 9999
         
         best_trip = None
-        best_dist = 9999
+        best_avg_dist = 9999
+        best_max_dist = 9999
         
         for trip_num, codes in all_trip_codes_dict.items():
             if exclude_trip and trip_num == exclude_trip:
@@ -1578,19 +1704,27 @@ def predict_trips(test_df, model_data):
             if not codes:
                 continue
             
-            # ⚡ ใช้ centroid แทนการวนทุกสาขา
-            centroid = trip_centroids.get(trip_num)
-            if not centroid or not centroid[0]:
-                update_trip_centroid(trip_num, codes)
-                centroid = trip_centroids.get(trip_num)
+            # 🔒 เช็คระยะห่างจากทุกสาขาในทริป (ไม่ใช้ centroid)
+            distances = []
+            for code in codes:
+                code_lat, code_lon = coord_cache.get(code, (None, None))
+                if code_lat:
+                    dist = haversine_distance(branch_lat, branch_lon, code_lat, code_lon)
+                    distances.append(dist)
             
-            if centroid and centroid[0]:
-                dist = haversine_distance(branch_lat, branch_lon, centroid[0], centroid[1])
-                if dist < best_dist:
-                    best_dist = dist
-                    best_trip = trip_num
+            if not distances:
+                continue
+            
+            avg_dist = sum(distances) / len(distances)
+            max_dist = max(distances)
+            
+            # ⚡ เลือกทริปที่มีระยะเฉลี่ยต่ำสุด และระยะไกลสุดไม่เกิน 40km
+            if avg_dist < best_avg_dist and max_dist <= 40:
+                best_avg_dist = avg_dist
+                best_max_dist = max_dist
+                best_trip = trip_num
         
-        return best_trip, best_dist
+        return best_trip, best_avg_dist
     
     # 🔄 เรียงสาขาจากใกล้ → ไกล จาก DC
     def sort_by_distance_from_dc(codes):
@@ -1611,6 +1745,21 @@ def predict_trips(test_df, model_data):
         all_codes.extend(ordered_cluster)
     
     while all_codes:
+        # ⏱️ Early stopping - ถ้าใช้เวลามากกว่า 50 วินาที
+        if time.time() - start_time > MAX_PROCESSING_TIME:
+            # จัดส่งสาขาที่เหลือเข้าทริปที่ใกล้ที่สุด (แบบเร็ว)
+            for remaining_code in all_codes:
+                closest_trip, _ = find_closest_trip_for_branch(
+                    remaining_code, 
+                    {t: test_df[test_df['Trip'] == t]['Code'].tolist() for t in test_df['Trip'].unique()}
+                )
+                if closest_trip:
+                    test_df.loc[test_df['Code'] == remaining_code, 'Trip'] = closest_trip
+                else:
+                    test_df.loc[test_df['Code'] == remaining_code, 'Trip'] = trip_counter
+                    trip_counter += 1
+            break
+        
         seed_code = all_codes.pop(0)
         current_trip = [seed_code]
         assigned_trips[seed_code] = trip_counter
@@ -1639,6 +1788,7 @@ def predict_trips(test_df, model_data):
         seed_lat, seed_lon = coord_cache.get(seed_code, (None, None))
         
         def get_priority(code):
+            """คำนวณความสำคัญของสาขา - เน้นระยะทางเป็นหลัก เพื่อป้องกันการกระโดด"""
             code_name = test_df[test_df['Code'] == code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
             code_index = code_to_index.get(code, 999999)
             seed_index = code_to_index.get(seed_code, 0)
@@ -1649,33 +1799,42 @@ def predict_trips(test_df, model_data):
             if seed_lat and code_lat:
                 dist_from_seed = haversine_distance(seed_lat, seed_lon, code_lat, code_lon)
             
-            # 🔒 ลำดับ 0: ชื่อเดียวกัน + อยู่ใกล้กัน (< 10km) - สำคัญที่สุด!
-            if is_similar_name(seed_name, code_name) and dist_from_seed < 10:
+            # เช็คชื่อคล้ายกัน
+            names_similar = is_similar_name(seed_name, code_name, similarity_threshold=85)
+            
+            # 🎯 กลยุทธ์ใหม่: ระยะทางเป็นหลัก แล้วค่อยดูชื่อ (ป้องกันกระโดด)
+            
+            # ✅ ลำดับ 0: ชื่อเดียวกัน + ใกล้มาก (< 10km) - ควรอยู่ทริปเดียวกันแน่นอน
+            if names_similar and dist_from_seed < 10:
                 return (0, dist_from_seed, code_index)
             
-            # ลำดับ 1: ชื่อคล้ายกัน (แม้ไกลกว่า)
-            if is_similar_name(seed_name, code_name):
+            # ✅ ลำดับ 1: ใกล้มากๆ (< 5km) - ห้ามข้าม! ต้องส่งก่อน
+            if dist_from_seed < 5:
                 return (1, dist_from_seed, code_index)
             
-            # 🔒 ลำดับ 2: พิกัดใกล้กันมาก (< 5km) - ห้ามข้ามไปไกลกว่า!
-            if dist_from_seed < 5:
+            # ✅ ลำดับ 2: ใกล้พอสมควร (5-15km) - เส้นทางต่อเนื่อง
+            if dist_from_seed < 15:
                 return (2, dist_from_seed, code_index)
             
-            # ลำดับ 3: พิกัดใกล้กัน (< 15km)
-            if dist_from_seed < 15:
+            # ✅ ลำดับ 3: ชื่อคล้ายกัน + ไม่ไกลมาก (15-25km) - ยอมรับได้
+            if names_similar and dist_from_seed < 25:
                 return (3, dist_from_seed, code_index)
             
-            # ลำดับ 4: มีประวัติร่วมกัน + ไม่ไกลมาก (< 30km)
+            # ✅ ลำดับ 4: มีประวัติร่วมกัน + ระยะปานกลาง (< 30km)
             pair = tuple(sorted([seed_code, code]))
             if pair in trip_pairs and dist_from_seed < 30:
                 return (4, dist_from_seed, code_index)
             
-            # ลำดับ 5: พิกัดปานกลาง (< 30km)
+            # ✅ ลำดับ 5: ระยะปานกลาง (15-30km) แต่ไม่มีประวัติ
             if dist_from_seed < 30:
                 return (5, dist_from_seed, code_index)
             
-            # 🔒 ลำดับ 6: ไกลกว่า 30km - ให้ความสำคัญต่ำ (ควรเป็นทริปใหม่)
-            return (6, dist_from_seed, code_index)
+            # ⚠️ ลำดับ 6: ชื่อคล้ายกันแต่ไกลมาก (>25km) - ระวังให้ดี อาจควรแยกทริป
+            if names_similar and dist_from_seed >= 25:
+                return (6, dist_from_seed, code_index)
+            
+            # ❌ ลำดับ 7: ไกลมาก (>30km) - ควรเป็นทริปใหม่
+            return (7, dist_from_seed, code_index)
         
         remaining_sorted = sorted(remaining, key=get_priority)
         
@@ -1683,9 +1842,27 @@ def predict_trips(test_df, model_data):
             pair = tuple(sorted([seed_code, code]))
             code_province = get_province(code)
             
-            # เช็คจำนวนสาขาก่อน - ถ้าเกิน MAX แล้วไม่เพิ่ม
-            if len(current_trip) >= MAX_BRANCHES_PER_TRIP:
-                continue  # เกินจำนวนสูงสุดแล้ว
+            # 🔒 เช็คว่าสาขานี้ใกล้กับทริปปัจจุบันจริงๆ หรือมีทริปอื่นที่ใกล้กว่า
+            if len(current_trip) >= 3:  # เช็คเฉพาะเมื่อทริปมีสาขา >= 3
+                # หาระยะเฉลี่ยจากสาขานี้ไปยังสาขาในทริปปัจจุบัน
+                code_lat, code_lon = coord_cache.get(code, (None, None))
+                if code_lat:
+                    current_trip_distances = []
+                    for trip_code in current_trip:
+                        trip_lat, trip_lon = coord_cache.get(trip_code, (None, None))
+                        if trip_lat:
+                            dist = haversine_distance(code_lat, code_lon, trip_lat, trip_lon)
+                            current_trip_distances.append(dist)
+                    
+                    if current_trip_distances:
+                        avg_dist_current = sum(current_trip_distances) / len(current_trip_distances)
+                        max_dist_current = max(current_trip_distances)
+                        
+                        # 🚨 ถ้าระยะเฉลี่ย > 25km หรือ ระยะไกลสุด > 40km → ข้าม (ควรเป็นทริปอื่น)
+                        if avg_dist_current > 25 or max_dist_current > 40:
+                            continue
+            
+            # ⚡ Skip: ไม่เช็ค MAX_BRANCHES_PER_TRIP ที่นี่ (จะเช็คตอน Phase 2)
             
             # ดึงชื่อสาขาก่อนเพื่อใช้เช็คชื่อคล้ายกัน
             seed_name = test_df[test_df['Code'] == seed_code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
@@ -2501,137 +2678,211 @@ def predict_trips(test_df, model_data):
                 test_df.loc[test_df['Code'] == code, 'Trip'] = best_merge
             rebalance_count += 1
     
-    # 🎯 Phase 1.5: เก็บสาขาที่อยู่ในเส้นทาง (Route Pickup Optimization)
+    # 🎯 Phase 1.5: เก็บสาขาที่อยู่ในเส้นทาง (Route Pickup Optimization) - จำกัดเวลา
     pickup_count = 0
     MAX_DETOUR_KM_LOCAL = MAX_DETOUR_KM  # ใช้ค่าจาก config (12 กม.)
     
-    # วนลูปทุกทริปที่ยังไม่เต็ม (เป้าหมาย 95%)
-    for trip_num in sorted(test_df['Trip'].unique()):
-        trip_data = test_df[test_df['Trip'] == trip_num]
-        current_w = trip_data['Weight'].sum()
-        current_c = trip_data['Cube'].sum()
-        current_count = len(trip_data)
-        
-        # คำนวณ % การใช้รถปัจจุบัน (ใช้ 6W เป็นมาตรฐาน)
-        current_util = max(
-            (current_w / LIMITS['6W']['max_w']) * 100,
-            (current_c / LIMITS['6W']['max_c']) * 100
-        )
-        
-        # 🎯 เป้าหมาย: เก็บสาขาจนเต็มเกือบ 100% (คิวเต็ม)
-        TARGET_UTIL = 100  # เป้าหมาย utilization (เพิ่มจาก 95%)
-        MAX_PICKUP_UTIL = 130  # สูงสุดที่ยอมเก็บได้ (เพิ่มจาก 125%)
-        
-        # ถ้าเกิน 130% หรือมีสาขาเยอะแล้ว → ข้าม
-        if current_util >= MAX_PICKUP_UTIL or current_count >= MAX_BRANCHES_PER_TRIP:
-            continue
-        
-        # หาจังหวัดของทริปปัจจุบัน
-        trip_provinces = set()
-        trip_coords = []
-        for code in trip_data['Code'].values:
-            prov = get_province(code)
-            if prov != 'UNKNOWN':
-                trip_provinces.add(prov)
+    # ⚡ Skip ถ้ามีทริปมากเกิน 20 ทริป (ประหยัดเวลา)
+    unique_trips = test_df['Trip'].unique()
+    if len(unique_trips) > 20:
+        pass  # Skip Phase 1.5 เพื่อความเร็ว
+    else:
+        # วนลูปทุกทริปที่ยังไม่เต็ม (เป้าหมาย 95%) - จำกัดแค่ 15 ทริปแรก
+        for trip_num in sorted(unique_trips)[:15]:
+            trip_data = test_df[test_df['Trip'] == trip_num]
+            current_w = trip_data['Weight'].sum()
+            current_c = trip_data['Cube'].sum()
+            current_count = len(trip_data)
             
-            # เก็บพิกัด
-            lat, lon = get_lat_lon(code)
-            if lat and lon:
-                trip_coords.append((lat, lon))
-        
-        # ถ้าไม่มีพิกัด → ข้าม
-        if not trip_coords:
-            continue
-        
-        # หาสาขาที่ยังไม่ได้จัดทริป (Trip = 0)
-        unassigned = test_df[test_df['Trip'] == 0]
-        
-        for idx, row in unassigned.iterrows():
-            branch_code = row['Code']
-            branch_w = row['Weight']
-            branch_c = row['Cube']
-            branch_prov = get_province(branch_code)
-            branch_lat, branch_lon = get_lat_lon(branch_code)
+            # คำนวณ % การใช้รถปัจจุบัน (ใช้ 6W เป็นมาตรฐาน)
+            current_util = max(
+                (current_w / LIMITS['6W']['max_w']) * 100,
+                (current_c / LIMITS['6W']['max_c']) * 100
+            )
             
-            # ถ้าไม่มีพิกัด → ข้าม
-            if not branch_lat or not branch_lon:
+            # 🎯 เป้าหมาย: เก็บสาขาจนเต็มเกือบ 100% (คิวเต็ม)
+            TARGET_UTIL = 100  # เป้าหมาย utilization (เพิ่มจาก 95%)
+            MAX_PICKUP_UTIL = 130  # สูงสุดที่ยอมเก็บได้ (เพิ่มจาก 125%)
+            
+            # ถ้าเกิน 130% หรือมีสาขาเยอะแล้ว → ข้าม
+            if current_util >= MAX_PICKUP_UTIL or current_count >= MAX_BRANCHES_PER_TRIP:
                 continue
             
-            # เช็คว่าอยู่ในจังหวัดเดียวกันหรือใกล้เคียง
-            if branch_prov not in trip_provinces:
-                # เช็คระยะทางจากทุกสาขาในทริป
-                min_distance = float('inf')
-                for trip_lat, trip_lon in trip_coords:
-                    dist = haversine_distance(trip_lat, trip_lon, branch_lat, branch_lon)
-                    if dist < min_distance:
-                        min_distance = dist
+            # หาจังหวัดของทริปปัจจุบัน
+            trip_provinces = set()
+            trip_coords = []
+            for code in trip_data['Code'].values:
+                prov = get_province(code)
+                if prov != 'UNKNOWN':
+                    trip_provinces.add(prov)
                 
-                # ถ้าไม่ได้อยู่ในเส้นทาง (ไกลเกินจากทุกสาขา) → ข้าม
-                if min_distance > MAX_DETOUR_KM_LOCAL:
+                # เก็บพิกัด
+                lat, lon = get_lat_lon(code)
+                if lat and lon:
+                    trip_coords.append((lat, lon))
+            
+            # ถ้าไม่มีพิกัด → ข้าม
+            if not trip_coords:
+                continue
+            
+            # หาสาขาที่ยังไม่ได้จัดทริป (Trip = 0)
+            unassigned = test_df[test_df['Trip'] == 0]
+            
+            for idx, row in unassigned.iterrows():
+                branch_code = row['Code']
+                branch_w = row['Weight']
+                branch_c = row['Cube']
+                branch_prov = get_province(branch_code)
+                branch_lat, branch_lon = get_lat_lon(branch_code)
+                
+                # ถ้าไม่มีพิกัด → ข้าม
+                if not branch_lat or not branch_lon:
                     continue
-            
-            # คำนวณว่าเพิ่มสาขานี้แล้วเกินไหม
-            new_w = current_w + branch_w
-            new_c = current_c + branch_c
-            new_count = current_count + 1
-            
-            # คำนวณ % ใหม่ (เน้น Cube)
-            new_cube_util = (new_c / LIMITS['6W']['max_c']) * 100
-            new_weight_util = (new_w / LIMITS['6W']['max_w']) * 100
-            new_util = max(new_cube_util, new_weight_util)
-            
-            # 🎯 ถ้ารถไม่เต็ม (<95%) → ยอมให้เพิ่มแม้เกิน 105% ได้ แต่ไม่เกิน 130%
-            # เป้าหมาย: Cube 95-130%, น้ำหนัก ≤130%
-            if current_util < 95:
-                # รถยังไม่เต็ม → ยืดหยุ่นมาก (ยอมให้เกินได้ถึง 130%)
-                can_add = new_cube_util <= 130 and new_weight_util <= 130 and new_count <= MAX_BRANCHES_PER_TRIP
-            else:
-                # รถเต็มพอสมควรแล้ว → เข้มงวดขึ้น (ไม่เกิน 120%)
-                can_add = new_cube_util <= 120 and new_weight_util <= 130 and new_count <= MAX_BRANCHES_PER_TRIP
-            
-            if can_add:
-                # เช็คข้อจำกัดสาขา
-                test_trip_codes = set(trip_data['Code'].values) | {branch_code}
-                max_allowed = get_max_vehicle_for_trip(test_trip_codes)
                 
-                # ถ้าสาขานี้จำกัดรถเล็กกว่ารถปัจจุบัน → ต้องเช็คว่าใส่ได้ไหม
-                # (ปล่อยให้ Phase 2 จัดการ)
+                # เช็คว่าอยู่ในจังหวัดเดียวกันหรือใกล้เคียง
+                if branch_prov not in trip_provinces:
+                    # เช็คระยะทางจากทุกสาขาในทริป
+                    min_distance = float('inf')
+                    for trip_lat, trip_lon in trip_coords:
+                        dist = haversine_distance(trip_lat, trip_lon, branch_lat, branch_lon)
+                        if dist < min_distance:
+                            min_distance = dist
+                    
+                    # ถ้าไม่ได้อยู่ในเส้นทาง (ไกลเกินจากทุกสาขา) → ข้าม
+                    if min_distance > MAX_DETOUR_KM_LOCAL:
+                        continue
                 
-                # เพิ่มสาขาเข้าทริป
-                test_df.loc[test_df['Code'] == branch_code, 'Trip'] = trip_num
+                # คำนวณว่าเพิ่มสาขานี้แล้วเกินไหม
+                new_w = current_w + branch_w
+                new_c = current_c + branch_c
+                new_count = current_count + 1
                 
-                # อัปเดตข้อมูลปัจจุบัน
-                current_w = new_w
-                current_c = new_c
-                current_count = new_count
-                current_util = new_util
+                # คำนวณ % ใหม่ (เน้น Cube)
+                new_cube_util = (new_c / LIMITS['6W']['max_c']) * 100
+                new_weight_util = (new_w / LIMITS['6W']['max_w']) * 100
+                new_util = max(new_cube_util, new_weight_util)
                 
-                # เพิ่มพิกัดใหม่
-                trip_coords.append((branch_lat, branch_lon))
-                if branch_prov != 'UNKNOWN':
-                    trip_provinces.add(branch_prov)
+                # 🎯 ถ้ารถไม่เต็ม (<95%) → ยอมให้เพิ่มแม้เกิน 105% ได้ แต่ไม่เกิน 130%
+                # เป้าหมาย: Cube 95-130%, น้ำหนัก ≤130%
+                if current_util < 95:
+                    # รถยังไม่เต็ม → ยืดหยุ่นมาก (ยอมให้เกินได้ถึง 130%)
+                    can_add = new_cube_util <= 130 and new_weight_util <= 130 and new_count <= MAX_BRANCHES_PER_TRIP
+                else:
+                    # รถเต็มพอสมควรแล้ว → เข้มงวดขึ้น (ไม่เกิน 120%)
+                    can_add = new_cube_util <= 120 and new_weight_util <= 130 and new_count <= MAX_BRANCHES_PER_TRIP
                 
-                pickup_count += 1
-                
-                # ถ้าเต็มเกินไปแล้ว (Cube >120% หรือสาขาเกิน MAX) → หยุดเพิ่มสาขา
-                current_cube_util = (current_c / LIMITS['6W']['max_c']) * 100
-                if current_cube_util >= 120 or current_count >= MAX_BRANCHES_PER_TRIP:
-                    break
+                if can_add:
+                    # เช็คข้อจำกัดสาขา
+                    test_trip_codes = set(trip_data['Code'].values) | {branch_code}
+                    max_allowed = get_max_vehicle_for_trip(test_trip_codes)
+                    
+                    # ถ้าสาขานี้จำกัดรถเล็กกว่ารถปัจจุบัน → ต้องเช็คว่าใส่ได้ไหม
+                    # (ปล่อยให้ Phase 2 จัดการ)
+                    
+                    # เพิ่มสาขาเข้าทริป
+                    test_df.loc[test_df['Code'] == branch_code, 'Trip'] = trip_num
+                    
+                    # อัปเดตข้อมูลปัจจุบัน
+                    current_w = new_w
+                    current_c = new_c
+                    current_count = new_count
+                    current_util = new_util
+                    
+                    # เพิ่มพิกัดใหม่
+                    trip_coords.append((branch_lat, branch_lon))
+                    if branch_prov != 'UNKNOWN':
+                        trip_provinces.add(branch_prov)
+                    
+                    pickup_count += 1
+                    
+                    # ถ้าเต็มเกินไปแล้ว (Cube >120% หรือสาขาเกิน MAX) → หยุดเพิ่มสาขา
+                    current_cube_util = (current_c / LIMITS['6W']['max_c']) * 100
+                    if current_cube_util >= 120 or current_count >= MAX_BRANCHES_PER_TRIP:
+                        break
     
-    # 🎯 Phase 2: ปรับขนาดรถตามพื้นที่และประสิทธิภาพ
-    downsize_count = 0
-    region_changes = {'nearby_6w_to_jb': 0, 'far_keep_6w': 0, 'other': 0}
+    # 🚨 Phase 1.75: แยกสาขาที่มีข้อจำกัดรถ (4W/JB) ออกจากทริปที่ใช้รถใหญ่
+    restriction_split_count = 0
     
-    # เก็บข้อมูลทริปที่เหลือ
-    for trip_num in test_df['Trip'].unique():
+    # หาทริปที่มีสาขาที่มีข้อจำกัดรถผสมกับสาขาไม่จำกัด
+    for trip_num in sorted(test_df['Trip'].unique()):
+        if trip_num == 0:
+            continue
+        
         trip_data = test_df[test_df['Trip'] == trip_num]
-        branch_count = len(trip_data)
-        total_w = trip_data['Weight'].sum()
-        total_c = trip_data['Cube'].sum()
         trip_codes = set(trip_data['Code'].values)
         
-        # 🔒 เช็คจังหวัด - สำคัญมาก! ห้าม 6W ในปริมณฑล
-        provinces = set()
+        # แยกสาขาตามข้อจำกัดรถ
+        codes_4w_only = set()  # สาขาที่ต้องใช้ 4W เท่านั้น
+        codes_jb_or_less = set()  # สาขาที่ใช้ได้แค่ JB หรือเล็กกว่า
+        codes_no_limit = set()  # สาขาที่ไม่มีข้อจำกัด (ใช้ 6W ได้)
+        
+        for code in trip_codes:
+            max_vehicle = get_max_vehicle_for_trip({code})
+            if max_vehicle == '4W':
+                codes_4w_only.add(code)
+            elif max_vehicle == 'JB':
+                codes_jb_or_less.add(code)
+            else:
+                codes_no_limit.add(code)
+        
+        # 🚨 ถ้าทริปมีสาขาที่จำกัดรถผสมกับสาขาไม่จำกัด → ต้องแยก
+        has_restrictions = len(codes_4w_only) > 0 or len(codes_jb_or_less) > 0
+        has_no_limits = len(codes_no_limit) > 0
+        
+        if has_restrictions and has_no_limits:
+            # แยกเป็น 2 กลุ่ม: 1) สาขาที่มีข้อจำกัด 2) สาขาที่ไม่มีข้อจำกัด
+            restricted_codes = codes_4w_only | codes_jb_or_less
+            unrestricted_codes = codes_no_limit
+            
+            # เก็บทริปเดิมให้กับกลุ่มที่มีสาขามากกว่า
+            if len(restricted_codes) >= len(unrestricted_codes):
+                # restricted ใช้ทริปเดิม
+                keep_trip = trip_num
+                new_trip = test_df['Trip'].max() + 1
+                
+                # ย้าย unrestricted ไปทริปใหม่
+                for code in unrestricted_codes:
+                    test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip
+            else:
+                # unrestricted ใช้ทริปเดิม
+                keep_trip = trip_num
+                new_trip = test_df['Trip'].max() + 1
+                
+                # ย้าย restricted ไปทริปใหม่
+                for code in restricted_codes:
+                    test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip
+            
+            restriction_split_count += 1
+    
+    # 🎯 Phase 2: เลือกรถที่เหมาะสม (เริ่มจาก 4W → JB → 6W หรือ 2 คัน) - Optimized
+    vehicle_assignment_count = 0
+    region_changes = {'4w': 0, 'jb': 0, '6w': 0, 'split_2_vehicles': 0}
+    
+    # ⚡ Early stopping - ถ้าใช้เวลามากกว่า 55 วินาที
+    if time.time() - start_time > 55:
+        # Skip Phase 2 complex logic, ใช้ logic เร็ว
+        for trip_num in test_df['Trip'].unique():
+            trip_data = test_df[test_df['Trip'] == trip_num]
+            total_c = trip_data['Cube'].sum()
+            
+            # เลือกรถแบบเร็ว (ไม่มี optimization)
+            if total_c <= 5:
+                trip_recommended_vehicles[trip_num] = '4W'
+            elif total_c <= 8:
+                trip_recommended_vehicles[trip_num] = 'JB'
+            else:
+                trip_recommended_vehicles[trip_num] = '6W'
+    else:
+        # เก็บข้อมูลทริปที่เหลือ
+        for trip_num in test_df['Trip'].unique():
+            trip_data = test_df[test_df['Trip'] == trip_num]
+            branch_count = len(trip_data)
+            total_w = trip_data['Weight'].sum()
+            total_c = trip_data['Cube'].sum()
+            trip_codes = set(trip_data['Code'].values)
+            
+            # 🔒 เช็คจังหวัด - สำคัญมาก! ห้าม 6W ในปริมณฑล
+            provinces = set()
         for code in trip_codes:
             prov = get_province(code)
             if prov and prov != 'UNKNOWN':
@@ -2639,7 +2890,8 @@ def predict_trips(test_df, model_data):
         
         # เช็คว่าทุกจังหวัดเป็นพื้นที่ใกล้หรือไม่
         all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
-        has_very_far_province = any(get_region_type(p) == 'very_far' for p in provinces) if provinces else False
+        has_north = any(get_region_type(p) == 'north' for p in provinces) if provinces else False
+        has_south = any(get_region_type(p) == 'south' for p in provinces) if provinces else False
         
         # คำนวณระยะทาง max จาก DC
         max_distance_from_dc = 0
@@ -2657,10 +2909,13 @@ def predict_trips(test_df, model_data):
             very_far = False  # บังคับให้ไม่ใช้ 6W
             if max_allowed == '6W':
                 max_allowed = 'JB'  # บังคับขอบเขตเป็น JB
+        # ⚠️ ภาคเหนือและภาคใต้ → บังคับใช้ 6W
+        elif has_north or has_south:
+            very_far = True  # บังคับให้ใช้ 6W
         else:
             # 🚛 เช็คระยะทาง - ไกลมากพิเศษ (>300km) ต้องใช้ 6W
             very_far_by_distance = max_distance_from_dc > 300
-            very_far = has_very_far_province or very_far_by_distance
+            very_far = very_far_by_distance
         
         # คำนวณ % การใช้รถแต่ละประเภท
         util_4w = max((total_w / LIMITS['4W']['max_w']) * 100, 
@@ -2672,7 +2927,7 @@ def predict_trips(test_df, model_data):
         
         # 🔒 ไม่ต้องเรียก get_max_vehicle_for_trip อีก - ใช้ค่าที่บังคับ all_nearby แล้ว
         
-        # 🎯 กลยุทธ์เลือกรถ (เน้น Cube ต้องเต็ม + เคารพข้อจำกัดสาขา)
+        # 🎯 กลยุทธ์เลือกรถ (เริ่มจาก 4W → JB → แยก 2 คัน/6W)
         recommended = None
         cube_util_4w = (total_c / LIMITS['4W']['max_c']) * 100
         cube_util_jb = (total_c / LIMITS['JB']['max_c']) * 100
@@ -2683,19 +2938,36 @@ def predict_trips(test_df, model_data):
         
         # 🚨 ตรวจสอบข้อจำกัดสาขาก่อน
         if max_allowed == '4W':
-            # ถ้า 4W ใส่ได้ → ใช้ 4W
-            if util_4w <= 130:
+            # ลำดับ 1: ลอง 4W ก่อน (95-130%)
+            if 95 <= cube_util_4w <= 130 and weight_util_4w <= 130 and branch_count <= 12:
                 recommended = '4W'
-            # ถ้าใส่ไม่ได้ → ทำเครื่องหมายให้แยก (ใช้ 4W ไว้ก่อน)
+            # ลำดับ 2: ถ้า 4W ไม่พอดี → แยกเป็น 4W + 4W (75-95% ต่อคัน)
+            elif cube_util_4w > 130:
+                # จะแยกใน Phase 2.5
+                recommended = '4W+4W'
             else:
-                recommended = '4W'  # จะแยกใน Phase 2.1
+                # ต่ำกว่า 95% → ใช้ 4W (แต่อาจรวมกับทริปอื่นภายหลัง)
+                recommended = '4W'
         elif max_allowed == 'JB':
-            # ถ้า JB ใส่ได้ → ใช้ JB
-            if util_jb <= 130:
+            # ลำดับ 1: ลอง 4W ก่อน (95-130%)
+            if 95 <= cube_util_4w <= 130 and weight_util_4w <= 130 and branch_count <= 12:
+                recommended = '4W'
+            # ลำดับ 2: ลอง JB (95-130%)
+            elif 95 <= cube_util_jb <= 130 and weight_util_jb <= 130 and branch_count <= 12:
                 recommended = 'JB'
-            # ถ้าใส่ไม่ได้ → ทำเครื่องหมายให้แยก
+            # ลำดับ 3: แยกเป็น JB + 4W หรือ JB + JB (75-95% ต่อคัน)
+            elif cube_util_jb > 130:
+                # ลองแยกเป็น JB + 4W (13 cube max)
+                if total_c <= 13:
+                    recommended = 'JB+4W'
+                else:
+                    recommended = 'JB+JB'  # 16 cube max
             else:
-                recommended = 'JB'  # จะแยกใน Phase 2.1
+                # ต่ำกว่า 95% → ใช้ JB หรือ 4W
+                if cube_util_jb >= 75:
+                    recommended = 'JB'
+                else:
+                    recommended = '4W'
         # 🚛 กรุงเทพ+ปริมณฑล (nearby) → บังคับห้าม 6W (ลำดับแรกสุด!)
         elif all_nearby:
             # ลอง 4W ก่อน
@@ -2709,8 +2981,12 @@ def predict_trips(test_df, model_data):
             else:
                 recommended = 'JB'  # กำหนดไว้ก่อน จะแยกภายหลัง
                 region_changes['nearby_6w_to_jb'] += 1
-        # 🚛 พื้นที่ไกลมากๆ (ภาคเหนือตอนบน/ใต้ลึก หรือ >300km) → ต้องใช้ 6W เท่านั้น
-        elif very_far:
+        # 🚛 ภาคเหนือทั้งหมด → บังคับใช้ 6W เท่านั้น
+        elif has_north:
+            recommended = '6W'
+            region_changes['far_keep_6w'] += 1
+        # 🚛 ภาคใต้ทั้งหมด → บังคับใช้ 6W เท่านั้น
+        elif has_south:
             recommended = '6W'
             region_changes['far_keep_6w'] += 1
         else:
@@ -3424,23 +3700,27 @@ def predict_trips(test_df, model_data):
                             trip_recommended_vehicles[new_trip_num] = new_trip_info['vehicle']
                             split_count += 1
     
-    # 🔄 Phase 4: บังคับเปลี่ยน nearby จาก 6W → JB/4W และกระจายทริปน้อย (เฉพาะที่จำเป็น)
+    # 🔄 Phase 4: บังคับเปลี่ยน nearby จาก 6W → JB/4W และกระจายทริปน้อย (เฉพาะที่จำเป็น) - Optimized
     low_util_trips = []
     
-    for trip_num in test_df['Trip'].unique():
-        if trip_num == 0:
-            continue
-        
-        trip_data = test_df[test_df['Trip'] == trip_num]
-        trip_codes = set(trip_data['Code'].values)
-        current_vehicle = trip_recommended_vehicles.get(trip_num, '4W')  # Start with 4W
-        total_w = trip_data['Weight'].sum()
-        total_c = trip_data['Cube'].sum()
-        
-        # เช็คว่าเป็น nearby หรือไม่
-        provinces = set()
-        for code in trip_codes:
-            prov = get_province(code)
+    # ⚡ Skip ถ้าใช้เวลามากกว่า 58 วินาที
+    if time.time() - start_time > 58:
+        pass  # Skip Phase 4 เพื่อความเร็ว
+    else:
+        for trip_num in test_df['Trip'].unique():
+            if trip_num == 0:
+                continue
+            
+            trip_data = test_df[test_df['Trip'] == trip_num]
+            trip_codes = set(trip_data['Code'].values)
+            current_vehicle = trip_recommended_vehicles.get(trip_num, '4W')  # Start with 4W
+            total_w = trip_data['Weight'].sum()
+            total_c = trip_data['Cube'].sum()
+            
+            # เช็คว่าเป็น nearby หรือไม่
+            provinces = set()
+            for code in trip_codes:
+                prov = get_province(code)
             if prov != 'UNKNOWN':
                 provinces.add(prov)
         
