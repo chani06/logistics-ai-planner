@@ -811,24 +811,25 @@ def main():
         print(f"🎯 จัดทริปให้ไฟล์ Test")
         print(f"{'='*60}\n")
         
-        # ⚡ Use optimized predict_trips from app.py instead
-        from app import predict_trips, load_master_data, load_booking_history_restrictions, load_learned_restrictions_fallback
+        # ⚡ Use optimized predict_trips from app.py for speed
+        print("⚡ กำลังใช้ predict_trips ที่ปรับปรุงแล้ว...")
+        import time
+        start_time = time.time()
         
-        # Load required data
-        master_data = load_master_data()
-        branch_vehicles = load_booking_history_restrictions()  
-        learned_restrictions = load_learned_restrictions_fallback()
+        from app import predict_trips
         
-        # Combine into model_data
+        # Simple model_data - just pass minimal required info
         model_data = {
-            'master_data': master_data,
-            'branch_vehicles': branch_vehicles,
-            'learned_restrictions': learned_restrictions,
             'trip_pairs': trip_pairs,
-            'branch_info': branch_info
+            'branch_info': branch_info,
+            'trip_vehicles': trip_vehicles,
+            'branch_vehicles': branch_vehicles
         }
         
         result_df, summary_df = predict_trips(test_df, model_data)
+        
+        elapsed = time.time() - start_time
+        print(f"⚡ เสร็จใน {elapsed:.1f} วินาที")
         
         if result_df is not None:
             # บันทึกผลลัพธ์
