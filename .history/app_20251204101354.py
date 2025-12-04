@@ -1252,33 +1252,6 @@ def predict_trips(test_df, model_data):
     total_codes = len(all_codes)
     processed = 0
     
-    # 🚀 Cache พิกัดและจังหวัดล่วงหน้า (ประหยัดเวลา 70%)
-    coord_cache = {}
-    province_cache = {}
-    for code in all_codes:
-        lat, lon = get_lat_lon_from_master(code)
-        coord_cache[code] = (lat, lon)
-        
-        # Cache จังหวัด
-        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
-            master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
-            if len(master_row) > 0:
-                prov = master_row.iloc[0].get('จังหวัด', '')
-                if prov and str(prov).strip() and prov != 'UNKNOWN':
-                    province_cache[code] = str(prov).strip()
-                    continue
-        if 'Province' in test_df.columns:
-            prov = test_df[test_df['Code'] == code]['Province'].iloc[0] if len(test_df[test_df['Code'] == code]) > 0 else None
-            if prov and prov != 'UNKNOWN' and str(prov).strip():
-                province_cache[code] = prov
-                continue
-        if code in branch_info:
-            prov = branch_info[code].get('province', 'UNKNOWN')
-            if prov and prov != 'UNKNOWN' and str(prov).strip():
-                province_cache[code] = prov
-                continue
-        province_cache[code] = 'UNKNOWN'
-    
     # 🎯 จัดกลุ่มตามพิกัดก่อน (เพื่อป้องกันรถทับซ้อนกัน)
     spatial_clusters = create_distance_based_clusters(all_codes, max_distance_km=40)
     
@@ -1298,13 +1271,44 @@ def predict_trips(test_df, model_data):
         remaining = all_codes[:]
         recommended_vehicle = None  # รถที่แนะนำสำหรับทริปนี้
         
-        # ฟังก์ชันดึงจังหวัดจาก cache
+        # ฟังก์ชันดึงจังหวัดจากหลายแหล่ง (Master → ไฟล์อัปโหลด → ประวัติ)
         def get_province(branch_code):
-            return province_cache.get(branch_code, 'UNKNOWN')
+            # 1. ลองดึงจาก Master ก่อน (ข้อมูลแม่นที่สุด)
+            if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == branch_code]
+                if len(master_row) > 0:
+                    prov = master_row.iloc[0].get('จังหวัด', '')
+                    if prov and str(prov).strip() and prov != 'UNKNOWN':
+                        return str(prov).strip()
+            
+            # 2. ลองดึงจากไฟล์อัปโหลด
+            if 'Province' in test_df.columns:
+                prov = test_df[test_df['Code'] == branch_code]['Province'].iloc[0] if len(test_df[test_df['Code'] == branch_code]) > 0 else None
+                if prov and prov != 'UNKNOWN' and str(prov).strip():
+                    return prov
+            
+            # 3. ถ้าไม่มี ลองดึงจาก branch_info (ประวัติการเทรน)
+            if branch_code in branch_info:
+                prov = branch_info[branch_code].get('province', 'UNKNOWN')
+                if prov and prov != 'UNKNOWN' and str(prov).strip():
+                    return prov
+            
+            return 'UNKNOWN'
         
-        # ฟังก์ชันดึงพิกัดจาก cache
+        # ฟังก์ชันดึงพิกัด (lat, lon) จาก Master Data
         def get_lat_lon(branch_code):
-            return coord_cache.get(branch_code, (None, None))
+            if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == branch_code]
+                if len(master_row) > 0:
+                    lat = master_row.iloc[0].get('ละติจูด', None)
+                    lon = master_row.iloc[0].get('ลองติจูด', None)
+                    # เช็คว่าเป็นตัวเลขและไม่ใช่ 0
+                    if pd.notna(lat) and pd.notna(lon) and lat != 0 and lon != 0:
+                        try:
+                            return float(lat), float(lon)
+                        except (ValueError, TypeError):
+                            pass
+            return None, None
         
         # ข้อมูลจังหวัดของ seed
         seed_province = get_province(seed_code)
@@ -3152,16 +3156,16 @@ def predict_trips(test_df, model_data):
             if low_trip['trip_num'] in trip_recommended_vehicles:
                 del trip_recommended_vehicles[low_trip['trip_num']]
     
-    # 🗺️ เรียงลำดับสาขาตาม Nearest Neighbor (แบบเร็ว - เฉพาะทริปใหญ่)
+    # 🗺️ เรียงลำดับสาขาตาม Nearest Neighbor (แบบเร็ว)
     for trip_num in test_df['Trip'].unique():
         if trip_num == 0:
             continue
         
         trip_codes = list(test_df[test_df['Trip'] == trip_num]['Code'].values)
-        if len(trip_codes) <= 2:  # Skip ถ้าน้อยกว่า 3 สาขา
+        if len(trip_codes) <= 1:
             continue
         
-        # เรียงตาม Nearest Neighbor แบบเร็ว (ใช้ cache)
+        # เรียงตาม Nearest Neighbor แบบเร็ว
         ordered = []
         remaining = trip_codes.copy()
         current_lat, current_lon = DC_WANG_NOI_LAT, DC_WANG_NOI_LON
@@ -3171,7 +3175,7 @@ def predict_trips(test_df, model_data):
             min_dist = float('inf')
             
             for code in remaining:
-                lat, lon = coord_cache.get(code, (None, None))
+                lat, lon = get_lat_lon(code)
                 if lat:
                     dist = haversine_distance(current_lat, current_lon, lat, lon)
                     if dist < min_dist:
@@ -3181,7 +3185,7 @@ def predict_trips(test_df, model_data):
             if nearest:
                 ordered.append(nearest)
                 remaining.remove(nearest)
-                lat, lon = coord_cache.get(nearest, (None, None))
+                lat, lon = get_lat_lon(nearest)
                 if lat:
                     current_lat, current_lon = lat, lon
             else:
