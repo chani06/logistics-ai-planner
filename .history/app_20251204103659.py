@@ -3204,13 +3204,13 @@ def predict_trips(test_df, model_data):
                 if low_trip['trip_num'] in trip_recommended_vehicles:
                     del trip_recommended_vehicles[low_trip['trip_num']]
     
-    # 🗺️ เรียงลำดับสาขาตาม Nearest Neighbor (เฉพาะทริปใหญ่ ≥ 6 สาขา - เพิ่มความเร็ว)
+    # 🗺️ เรียงลำดับสาขาตาม Nearest Neighbor (เฉพาะทริปใหญ่ ≥ 4 สาขา)
     for trip_num in test_df['Trip'].unique():
         if trip_num == 0:
             continue
         
         trip_codes = list(test_df[test_df['Trip'] == trip_num]['Code'].values)
-        if len(trip_codes) < 6:  # Skip ถ้าน้อยกว่า 6 สาขา
+        if len(trip_codes) < 4:  # Skip ถ้าน้อยกว่า 4 สาขา
             continue
         
         # เรียงตาม Nearest Neighbor แบบเร็ว (ใช้ cache)

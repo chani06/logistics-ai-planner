@@ -2568,11 +2568,11 @@ def predict_trips(test_df, model_data):
                     trip_recommended_vehicles[trip_num] = 'JB'
                     bangkok_6w_count += 1
     
-    # 🚨 Phase 2.1: ตรวจสอบและแก้ไขทริปที่ใช้รถใหญ่เกินข้อจำกัด (ลดการ loop)
+    # 🚨 Phase 2.1: ตรวจสอบและแก้ไขทริปที่ใช้รถใหญ่เกินข้อจำกัด
     fix_count = 0
     split_count = 0
     
-    for trip_num in test_df['Trip'].unique():
+    for trip_num in sorted(test_df['Trip'].unique()):
         if trip_num == 0:
             continue
         
@@ -3148,11 +3148,11 @@ def predict_trips(test_df, model_data):
                 trip_recommended_vehicles[trip_num] = 'JB'
                 current_vehicle = 'JB'
         
-        # หาทริปที่ใช้รถน้อยเกินไป (<65% และ ≤ 2 สาขา - เฉพาะที่จำเป็นจริงๆ)
+        # หาทริปที่ใช้รถน้อยเกินไป (<75% และ ≤ 3 สาขา)
         util = max((total_w / LIMITS[current_vehicle]['max_w']) * 100,
                    (total_c / LIMITS[current_vehicle]['max_c']) * 100)
         
-        if util < 65 and len(trip_data) <= 2:
+        if util < 75 and len(trip_data) <= 3:
             low_util_trips.append({
                 'trip_num': trip_num,
                 'codes': list(trip_codes),
@@ -3161,11 +3161,7 @@ def predict_trips(test_df, model_data):
                 'vehicle': current_vehicle
             })
     
-    # กระจายทริปที่น้อยเกินไป (Skip ถ้ามีมาก - เพื่อความเร็ว)
-    if len(low_util_trips) > 15:
-        low_util_trips = []  # Skip เพื่อความเร็ว
-    
-    # กระจายเฉพาะที่จำเป็น
+    # กระจายทริปที่น้อยเกินไปเฉพาะที่จำเป็น
     if len(low_util_trips) == 0:
         pass  # Skip ถ้าไม่มีทริปน้อย
     else:
@@ -3204,13 +3200,13 @@ def predict_trips(test_df, model_data):
                 if low_trip['trip_num'] in trip_recommended_vehicles:
                     del trip_recommended_vehicles[low_trip['trip_num']]
     
-    # 🗺️ เรียงลำดับสาขาตาม Nearest Neighbor (เฉพาะทริปใหญ่ ≥ 6 สาขา - เพิ่มความเร็ว)
+    # 🗺️ เรียงลำดับสาขาตาม Nearest Neighbor (เฉพาะทริปใหญ่ ≥ 4 สาขา)
     for trip_num in test_df['Trip'].unique():
         if trip_num == 0:
             continue
         
         trip_codes = list(test_df[test_df['Trip'] == trip_num]['Code'].values)
-        if len(trip_codes) < 6:  # Skip ถ้าน้อยกว่า 6 สาขา
+        if len(trip_codes) < 4:  # Skip ถ้าน้อยกว่า 4 สาขา
             continue
         
         # เรียงตาม Nearest Neighbor แบบเร็ว (ใช้ cache)
