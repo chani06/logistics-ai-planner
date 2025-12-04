@@ -564,23 +564,8 @@ def is_similar_name(name1, name2):
         
         return keywords, thai_chars, eng_chars
     
-    keywords1, thai1, eng1 = extract_keywords(name1)
-    keywords2, thai2, eng2 = extract_keywords(name2)
-    
-    # 🔥 ลำดับแรก: เช็คคำสำคัญก่อน (เช่น ฟิวเจอร์+รังสิต)
-    if keywords1 and keywords2:
-        # ถ้ามีคำสำคัญร่วมกัน >= 2 คำ → ถือว่าเหมือนกัน
-        common_keywords = keywords1 & keywords2
-        if len(common_keywords) >= 2:
-            return True
-        # ถ้ามีคำสำคัญร่วมกัน 1 คำ แต่เป็นคำเฉพาะ → ถือว่าเหมือนกัน
-        if len(common_keywords) >= 1:
-            # เช็คว่ามีคำที่เป็นชื่อสถานที่เฉพาะ
-            specific_places = {'รังสิต', 'RANGSIT', 'เซ็นทรัล', 'CENTRAL', 'ซีคอน', 'SEACON'}
-            if common_keywords & specific_places:
-                # ต้องมีอีก 1 คำ หรือ ชื่อคล้ายกัน
-                if len(common_keywords) >= 2 or (thai1 and thai2 and len(thai1) >= 4 and thai1[:4] in thai2):
-                    return True
+    thai1, eng1 = clean_name(name1)
+    thai2, eng2 = clean_name(name2)
     
     # ต้องมีความยาวพอสมควร
     if len(thai1) < 3 and len(eng1) < 3:
