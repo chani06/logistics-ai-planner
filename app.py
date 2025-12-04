@@ -2763,6 +2763,9 @@ def predict_trips(test_df, model_data):
         total_c = trip_data['Cube'].sum()
         
         # คำนวณ Cube utilization
+        should_split = False
+        target_vehicle = current_vehicle
+        
         if current_vehicle == '4W':
             cube_util = (total_c / LIMITS['4W']['max_c']) * 100
             weight_util = (total_w / LIMITS['4W']['max_w']) * 100
@@ -2777,18 +2780,8 @@ def predict_trips(test_df, model_data):
             if cube_util > 130 and len(trip_data) >= 4:
                 should_split = True
                 target_vehicle = 'JB'  # แยกเป็น JB อีกคัน
-            else:
-                should_split = False
-        elif current_vehicle == 'JB':
-            cube_util = (total_c / LIMITS['JB']['max_c']) * 100
-            weight_util = (total_w / LIMITS['JB']['max_w']) * 100
-            # JB Cube เกิน 120% → แยก
-            if cube_util > 120 and len(trip_data) >= 4:
-                should_split = True
-                target_vehicle = 'JB'
-            else:
-                should_split = False
-        else:
+        elif current_vehicle == '6W':
+            # 🚛 6W ไม่จำกัดคิว - ใส่ได้เต็มที่ไม่ต้องแยก
             should_split = False
         
         if should_split:
@@ -2845,7 +2838,8 @@ def predict_trips(test_df, model_data):
     if cube_split_count > 0:
         st.success(f"✅ Phase 2.5: แยกทริป Cube เต็มเกินสำเร็จ {cube_split_count} ทริป")
     
-    # 🎯 Phase 3: แยกทริป 6W ที่ไม่เต็ม → JB 2 คัน
+    # 🎯 Phase 3: แยกทริป 6W ที่ไม่เต็ม (<65%) → JB 2 คัน (เพิ่มประสิทธิภาพ)
+    # หมายเหตุ: 6W ไม่จำกัดคิว แต่ถ้า util ต่ำเกินไป (<65%) ควรใช้รถเล็กแทน
     st.text("Phase 3: เพิ่มประสิทธิภาพ 6W...")
     split_count = 0
     
