@@ -1,0 +1,4 @@
+*.xlsx
+!Dc/Master*.xlsx
+*.csv
+__pycache__/.history/
