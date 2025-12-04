@@ -1491,6 +1491,88 @@ def predict_trips(test_df, model_data):
     # 🎯 จัดกลุ่มตามพิกัดก่อน (เพิ่มรัศมีสูง - ขอบเขตใหญ่ขึ้น)
     spatial_clusters = create_distance_based_clusters(all_codes, max_distance_km=60)
     
+    # 🔒 ฟังก์ชันเช็คระยะทางจากสาขาใหม่ไปยังทุกสาขาในทริป (FAST VERSION)
+    def check_distance_to_all_trip_branches(new_code, trip_codes, max_dist=40):
+        """
+        เช็คว่าสาขาใหม่ใกล้กับทุกสาขาในทริปหรือไม่ (ใช้ sampling ถ้าทริปใหญ่)
+        คืนค่า: (avg_distance, max_distance, all_within_limit)
+        """
+        if not trip_codes:
+            return 0, 0, True
+        
+        new_lat, new_lon = coord_cache.get(new_code, (None, None))
+        if not new_lat:
+            return 9999, 9999, False
+        
+        # ⚡ Speed: ถ้าทริปมีหลายสาขา ให้ sample แค่ 5 สาขา
+        sample_codes = trip_codes if len(trip_codes) <= 5 else trip_codes[:3] + trip_codes[-2:]
+        
+        distances = []
+        for code in sample_codes:
+            code_lat, code_lon = coord_cache.get(code, (None, None))
+            if code_lat:
+                dist = haversine_distance(new_lat, new_lon, code_lat, code_lon)
+                distances.append(dist)
+        
+        if not distances:
+            return 9999, 9999, False
+        
+        avg_dist = sum(distances) / len(distances)
+        max_dist_found = max(distances)
+        all_within = max_dist_found <= max_dist
+        
+        return avg_dist, max_dist_found, all_within
+    
+    # ⚡ Speed: Pre-compute trip centroids for fast lookup
+    trip_centroids = {}  # {trip_num: (lat, lon)}
+    
+    def update_trip_centroid(trip_num, codes):
+        """อัพเดต centroid ของทริป"""
+        if not codes:
+            trip_centroids[trip_num] = (None, None)
+            return
+        lats, lons = [], []
+        for code in codes:
+            lat, lon = coord_cache.get(code, (None, None))
+            if lat:
+                lats.append(lat)
+                lons.append(lon)
+        if lats:
+            trip_centroids[trip_num] = (sum(lats)/len(lats), sum(lons)/len(lons))
+        else:
+            trip_centroids[trip_num] = (None, None)
+    
+    def find_closest_trip_for_branch(branch_code, all_trip_codes_dict, exclude_trip=None):
+        """
+        หาทริปที่เหมาะสมที่สุดสำหรับสาขา (ใช้ centroid - เร็วมาก)
+        """
+        branch_lat, branch_lon = coord_cache.get(branch_code, (None, None))
+        if not branch_lat:
+            return None, 9999
+        
+        best_trip = None
+        best_dist = 9999
+        
+        for trip_num, codes in all_trip_codes_dict.items():
+            if exclude_trip and trip_num == exclude_trip:
+                continue
+            if not codes:
+                continue
+            
+            # ⚡ ใช้ centroid แทนการวนทุกสาขา
+            centroid = trip_centroids.get(trip_num)
+            if not centroid or not centroid[0]:
+                update_trip_centroid(trip_num, codes)
+                centroid = trip_centroids.get(trip_num)
+            
+            if centroid and centroid[0]:
+                dist = haversine_distance(branch_lat, branch_lon, centroid[0], centroid[1])
+                if dist < best_dist:
+                    best_dist = dist
+                    best_trip = trip_num
+        
+        return best_trip, best_dist
+    
     # 🔄 เรียงสาขาจากใกล้ → ไกล จาก DC
     def sort_by_distance_from_dc(codes):
         """เรียงสาขาจากใกล้ DC ไปไกล DC"""
@@ -1825,6 +1907,15 @@ def predict_trips(test_df, model_data):
                     # สาขาใหม่จำกัดรถเล็กกว่า → ข้ามสาขานี้
                     continue
                 
+                # 🔒 เช็คระยะทางจากสาขาใหม่ไปยังทุกสาขาในทริป (ไม่ใช่แค่ seed)
+                avg_dist_to_trip, max_dist_to_trip, all_within_limit = check_distance_to_all_trip_branches(code, current_trip, max_dist=40)
+                
+                # ถ้าสาขาใหม่ไกลจากสาขาใดๆ ในทริปเกิน 40km → ข้ามไป (ยกเว้นชื่อคล้ายกัน)
+                if not all_within_limit and not names_are_similar and not has_history:
+                    # เช็คว่าระยะทางเฉลี่ยพอรับได้หรือไม่ (< 25km)
+                    if avg_dist_to_trip > 25:
+                        continue  # ไกลเกินไป - ควรไปทริปอื่น
+                
                 # เช็คว่าเกินขีดจำกัดหรือไม่
                 can_fit = trip_weight <= max_w and trip_cube <= max_c
                 
@@ -1902,6 +1993,71 @@ def predict_trips(test_df, model_data):
         trip_counter += 1
     
     test_df['Trip'] = test_df['Code'].map(assigned_trips)
+    
+    # ===============================================
+    # 🔒 Post-processing: สลับสาขาให้อยู่ทริปที่ใกล้กันที่สุด (FAST)
+    # ===============================================
+    def optimize_branch_placement():
+        """สลับสาขาระหว่างทริปให้อยู่กับกลุ่มที่ใกล้กันที่สุด (เวอร์ชันเร็ว)"""
+        # สร้าง dict ของ trip → codes
+        trip_codes_dict = {}
+        for trip_num in test_df['Trip'].unique():
+            codes = test_df[test_df['Trip'] == trip_num]['Code'].tolist()
+            trip_codes_dict[trip_num] = codes
+            update_trip_centroid(trip_num, codes)
+        
+        # ⚡ Speed: เช็คเฉพาะสาขาที่อยู่ไกลจาก centroid ของทริปตัวเอง
+        outliers = []  # (code, trip_num, dist_from_centroid)
+        
+        for trip_num, codes in trip_codes_dict.items():
+            if len(codes) <= 2:
+                continue
+            
+            centroid = trip_centroids.get(trip_num)
+            if not centroid or not centroid[0]:
+                continue
+            
+            for code in codes:
+                code_lat, code_lon = coord_cache.get(code, (None, None))
+                if code_lat:
+                    dist = haversine_distance(code_lat, code_lon, centroid[0], centroid[1])
+                    # ถ้าไกลจาก centroid มากกว่า 20km → อาจเป็น outlier
+                    if dist > 20:
+                        outliers.append((code, trip_num, dist))
+        
+        # เรียง outlier จากไกลสุดก่อน และจำกัดแค่ 50 ตัว
+        outliers.sort(key=lambda x: -x[2])
+        outliers = outliers[:50]
+        
+        # ลองย้าย outliers ไปทริปที่ใกล้กว่า
+        for code, trip_num, dist_current in outliers:
+            if code not in trip_codes_dict.get(trip_num, []):
+                continue
+            
+            best_trip, best_dist = find_closest_trip_for_branch(code, trip_codes_dict, exclude_trip=trip_num)
+            
+            # ถ้ามีทริปอื่นที่ใกล้กว่าอย่างมีนัยสำคัญ (> 15km ดีกว่า)
+            if best_trip and best_dist < dist_current - 15:
+                # เช็คข้อจำกัดรถ
+                code_max_vehicle = get_max_vehicle_for_branch(code)
+                target_trip_codes = trip_codes_dict.get(best_trip, [])
+                target_max_vehicle = get_max_vehicle_for_trip(set(target_trip_codes + [code]))
+                
+                vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
+                if vehicle_priority.get(code_max_vehicle, 3) >= vehicle_priority.get(target_max_vehicle, 3):
+                    # ย้ายสาขา
+                    trip_codes_dict[trip_num].remove(code)
+                    trip_codes_dict[best_trip].append(code)
+                    assigned_trips[code] = best_trip
+                    # อัพเดต centroids
+                    update_trip_centroid(trip_num, trip_codes_dict[trip_num])
+                    update_trip_centroid(best_trip, trip_codes_dict[best_trip])
+        
+        # อัพเดต test_df
+        test_df['Trip'] = test_df['Code'].map(assigned_trips)
+    
+    # เรียกใช้งาน optimization
+    optimize_branch_placement()
     
     # ===============================================
     # Post-processing: รวมทริปเล็กและปรับขนาดรถ
