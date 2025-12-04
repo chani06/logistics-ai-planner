@@ -32,7 +32,7 @@ TARGET_BRANCHES_PER_TRIP = 12  # เป้าหมาย 12 สาขาต่�
 
 # Performance Config
 MAX_DETOUR_KM = 12  # ลดจาก 15km เป็น 12km เพื่อประมวลผลเร็วขึ้น
-MAX_MERGE_ITERATIONS = 50  # จำกัดรอบการรวมทริป
+MAX_MERGE_ITERATIONS = 25  # จำกัดรอบการรวมทริป (ลดจาก 50 เพื่อเร็วขึ้น)
 
 # รายการสาขาที่ไม่ต้องการจัดส่ง (ตัดออก)
 EXCLUDE_BRANCHES = ['DC011', 'PTDC', 'PTG DISTRIBUTION CENTER']
@@ -1634,8 +1634,23 @@ def predict_trips(test_df, model_data):
     merged = True
     merge_count = 0
     iteration = 0
-    while merged and len(all_trips) > 1 and iteration < MAX_MERGE_ITERATIONS:
+    max_iterations = min(MAX_MERGE_ITERATIONS, len(all_trips) * 2)  # จำกัดตามจำนวนทริป
+    
+    while merged and len(all_trips) > 1 and iteration < max_iterations:
         merged = False
+        
+        # เริ่มจากทริปเล็กก่อน (เร็วกว่า)
+        all_trips_sorted = sorted([t for t in all_trips if t is not None], key=lambda x: x['count'])
+        indices = {id(t): i for i, t in enumerate(all_trips) if t is not None}
+        
+        for trip1 in all_trips_sorted[:]:  # ทำ copy เพื่อไม่ให้มีปัญหาระหว่างลูป
+            if trip1 not in [t for t in all_trips if t is not None]:
+                continue
+                
+            i = indices.get(id(trip1))
+            if i is None or all_trips[i] is None:
+                continue
+            
         for i in range(len(all_trips)):
             if all_trips[i] is None:
                 continue
@@ -2330,14 +2345,16 @@ def predict_trips(test_df, model_data):
         if region_changes['far_keep_6w'] > 0:
             st.info(f"   🚛 คง 6W ในพื้นที่ไกล: {region_changes['far_keep_6w']} ทริป")
     
-    # 🚨 ตรวจสอบอีกครั้ง: ห้ามกรุงเทพ+ปริมณฑลใช้ 6W
+    # 🚨 ตรวจสอบอีกครั้ง: ห้ามกรุงเทพ+ปริมณฑล+ภาคกลางใช้ 6W (เข้มงวด)
     bangkok_6w_count = 0
+    bangkok_6w_splits = 0
+    
     for trip_num in test_df['Trip'].unique():
         if trip_num == 0:
             continue
         
         trip_data = test_df[test_df['Trip'] == trip_num]
-        trip_codes = set(trip_data['Code'].values)
+        trip_codes = list(trip_data['Code'].values)
         
         # เช็คว่าทุกจังหวัดเป็นพื้นที่ใกล้หรือไม่
         provinces = set()
@@ -2350,9 +2367,64 @@ def predict_trips(test_df, model_data):
         current_vehicle = trip_recommended_vehicles.get(trip_num, '6W')
         
         if all_nearby and current_vehicle == '6W':
-            # บังคับเปลี่ยนเป็น JB (ไม่แสดง warning)
-            trip_recommended_vehicles[trip_num] = 'JB'
-            bangkok_6w_count += 1
+            # พยายามเปลี่ยนเป็น JB ก่อน
+            total_w = trip_data['Weight'].sum()
+            total_c = trip_data['Cube'].sum()
+            jb_util = max((total_w / LIMITS['JB']['max_w']) * 100, (total_c / LIMITS['JB']['max_c']) * 100)
+            
+            if jb_util <= 140:
+                # JB ใส่ได้ → เปลี่ยนเป็น JB
+                trip_recommended_vehicles[trip_num] = 'JB'
+                bangkok_6w_count += 1
+            else:
+                # JB เต็ม → แยกเป็น JB หลายคัน
+                new_trips = []
+                current_group = []
+                current_group_w = 0
+                current_group_c = 0
+                
+                sorted_data = trip_data.sort_values('Weight', ascending=False)
+                
+                for _, row in sorted_data.iterrows():
+                    code = row['Code']
+                    w = row['Weight']
+                    c = row['Cube']
+                    
+                    test_w = current_group_w + w
+                    test_c = current_group_c + c
+                    test_util = max((test_w / LIMITS['JB']['max_w']) * 100, (test_c / LIMITS['JB']['max_c']) * 100)
+                    
+                    if test_util <= 120 or len(current_group) == 0:
+                        current_group.append(code)
+                        current_group_w += w
+                        current_group_c += c
+                    else:
+                        new_trips.append(current_group.copy())
+                        current_group = [code]
+                        current_group_w = w
+                        current_group_c = c
+                
+                if current_group:
+                    new_trips.append(current_group)
+                
+                # อัพเดททริป
+                if len(new_trips) > 1:
+                    for code in new_trips[0]:
+                        test_df.loc[test_df['Code'] == code, 'Trip'] = trip_num
+                    trip_recommended_vehicles[trip_num] = 'JB'
+                    
+                    for group in new_trips[1:]:
+                        new_trip_num = test_df['Trip'].max() + 1
+                        for code in group:
+                            test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip_num
+                        trip_recommended_vehicles[new_trip_num] = 'JB'
+                        bangkok_6w_splits += 1
+                else:
+                    trip_recommended_vehicles[trip_num] = 'JB'
+                    bangkok_6w_count += 1
+    
+    if bangkok_6w_splits > 0:
+        st.success(f"✅ แยกทริป 6W ในกรุงเทพ/ปริมณฑล: {bangkok_6w_splits} ทริป → JB")
     
     # 🚨 Phase 2.1: ตรวจสอบและแก้ไขทริปที่ใช้รถใหญ่เกินข้อจำกัด
     st.text("Phase 2.1: ตรวจสอบข้อจำกัดรถ...")
