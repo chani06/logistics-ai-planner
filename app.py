@@ -8,8 +8,16 @@ import numpy as np
 import pickle
 import os
 import glob
-from datetime import datetime
+from datetime import datetime, time
 import io
+
+# Auto-refresh component
+try:
+    from streamlit_autorefresh import st_autorefresh
+    AUTOREFRESH_AVAILABLE = True
+except ImportError:
+    AUTOREFRESH_AVAILABLE = False
+    st.warning("⚠️ ติดตั้ง streamlit-autorefresh: pip install streamlit-autorefresh")
 
 # ==========================================
 # CONFIG
@@ -3256,6 +3264,32 @@ def main():
         layout="wide",
         initial_sidebar_state="collapsed"
     )
+    
+    # 🔄 Auto-refresh ทุกเที่ยงคืน (ล้างแคช)
+    if AUTOREFRESH_AVAILABLE:
+        now = datetime.now()
+        # คำนวณเวลาถึงเที่ยงคืน (00:00:00)
+        midnight = datetime.combine(now.date(), time(0, 0, 0))
+        
+        # ถ้ายังไม่ถึงเที่ยงคืน เอาเที่ยงคืนวันถัดไป
+        if now < midnight:
+            next_midnight = midnight
+        else:
+            from datetime import timedelta
+            next_midnight = midnight + timedelta(days=1)
+        
+        # คำนวณเวลาที่เหลือ (วินาที)
+        seconds_until_midnight = int((next_midnight - now).total_seconds())
+        
+        # Refresh ทุกเที่ยงคืน
+        if seconds_until_midnight > 0:
+            # เช็คในช่วง 5 นาทีก่อนเที่ยงคืน (หลัง 23:55)
+            if seconds_until_midnight <= 300:  # 5 minutes
+                st.info(f"🔄 ระบบจะ Refresh อัตโนมัติใน {seconds_until_midnight // 60} นาที")
+                st_autorefresh(interval=seconds_until_midnight * 1000, key="midnight_refresh")
+            else:
+                # ตรวจสอบทุก 1 ชั่วโมง
+                st_autorefresh(interval=3600000, limit=24, key="hourly_check")
     
     # Header
     col1, col2 = st.columns([3, 1])

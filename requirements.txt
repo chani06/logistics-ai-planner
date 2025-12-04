@@ -155,6 +155,7 @@ soupsieve==2.7
 SQLAlchemy==2.0.42
 starlette==0.47.2
 streamlit==1.47.0
+streamlit-autorefresh==1.0.1
 streamlit-drawable-canvas==0.9.3
 StrEnum==0.4.15
 sympy==1.14.0
