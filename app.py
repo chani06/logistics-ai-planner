@@ -1338,12 +1338,25 @@ def predict_trips(test_df, model_data):
     
     # 🔒 Final enforcement of vehicle constraints
     def enforce_vehicle_constraints(test_df):
-        """บังคับข้อจำกัดรถขั้นสุดท้าย - ไม่อนุญาต 6W หากสาขาจำกัด 4W/JB"""
+        """บังคับข้อจำกัดรถขั้นสุดท้าย - ไม่อนุญาต 6W หากสาขาจำกัด 4W/JB หรืออยู่ในปริมณฑล"""
         vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
         
         for trip_num in test_df['Trip'].unique():
             trip_data = test_df[test_df['Trip'] == trip_num]
             trip_codes = trip_data['Code'].unique()
+            
+            # 🔒 เช็คจังหวัด - ห้าม 6W ในปริมณฑล!
+            provinces = set()
+            for code in trip_codes:
+                prov = get_province(code) if 'get_province' in dir() else None
+                if not prov and not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                    master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                    if len(master_row) > 0:
+                        prov = master_row.iloc[0].get('จังหวัด', '')
+                if prov and prov != 'UNKNOWN':
+                    provinces.add(prov)
+            
+            all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
             
             # ตรวจสอบข้อจำกัดที่เข้มงวดที่สุดในทริป
             max_vehicles = []
@@ -1353,11 +1366,17 @@ def predict_trips(test_df, model_data):
             
             min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles)
             
-            # หากมีสาขาใดจำกัด 4W/JB → ห้าม 6W
+            # 🔒 ปริมณฑล = บังคับ JB หรือเล็กกว่า (ห้าม 6W)
+            if all_nearby and min_max_size == 3:
+                min_max_size = 2  # บังคับลงมาเป็น JB
+            
+            # หากมีสาขาใดจำกัด 4W/JB หรืออยู่ในปริมณฑล → ห้าม 6W
             if min_max_size < 3:
                 # บังคับเปลี่ยนเป็น JB หรือ 4W
                 allowed_vehicle = 'JB' if min_max_size >= 2 else '4W'
-                test_df.loc[test_df['Trip'] == trip_num, 'Truck'] = f'{allowed_vehicle} 🔒 บังคับสาขา'
+                current_truck = test_df.loc[test_df['Trip'] == trip_num, 'Truck'].iloc[0] if len(test_df[test_df['Trip'] == trip_num]) > 0 else ''
+                if '6W' in str(current_truck):
+                    test_df.loc[test_df['Trip'] == trip_num, 'Truck'] = f'{allowed_vehicle} 🔒 {"ปริมณฑล" if all_nearby else "บังคับสาขา"}'
         
         return test_df
     
@@ -2611,16 +2630,33 @@ def predict_trips(test_df, model_data):
         total_c = trip_data['Cube'].sum()
         trip_codes = set(trip_data['Code'].values)
         
-        # ⚡ Skip province calculations for speed - focus on weight/cube only
-        max_distance_from_dc = 0
-        all_nearby = True  # Assume nearby for speed
-        has_far = False
-        has_very_far_province = False
+        # 🔒 เช็คจังหวัด - สำคัญมาก! ห้าม 6W ในปริมณฑล
+        provinces = set()
+        for code in trip_codes:
+            prov = get_province(code)
+            if prov and prov != 'UNKNOWN':
+                provinces.add(prov)
         
-        # ⚠️ สำคัช: ถ้าทุกจังหวัดเป็น nearby → ห้าม 6W เด็ดขาด!
+        # เช็คว่าทุกจังหวัดเป็นพื้นที่ใกล้หรือไม่
+        all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
+        has_very_far_province = any(get_region_type(p) == 'very_far' for p in provinces) if provinces else False
+        
+        # คำนวณระยะทาง max จาก DC
+        max_distance_from_dc = 0
+        for code in trip_codes:
+            lat, lon = coord_cache.get(code, (None, None))
+            if lat and lon:
+                dist = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
+                max_distance_from_dc = max(max_distance_from_dc, dist)
+        
+        # ตรวจสอบข้อจำกัดสาขา
+        max_allowed = get_max_vehicle_for_trip(trip_codes)
+        
+        # ⚠️ สำคัญ: ถ้าทุกจังหวัดเป็น nearby → ห้าม 6W เด็ดขาด!
         if all_nearby:
             very_far = False  # บังคับให้ไม่ใช้ 6W
-            max_allowed = 'JB' if max_allowed == '6W' else max_allowed  # บังคับขอบเขตเป็น JB
+            if max_allowed == '6W':
+                max_allowed = 'JB'  # บังคับขอบเขตเป็น JB
         else:
             # 🚛 เช็คระยะทาง - ไกลมากพิเศษ (>300km) ต้องใช้ 6W
             very_far_by_distance = max_distance_from_dc > 300
