@@ -1634,9 +1634,18 @@ def predict_trips(test_df, model_data):
     # 🚀 Cache พิกัดและจังหวัดล่วงหน้า (ประหยัดเวลา 70%)
     coord_cache = {}
     province_cache = {}
+    distance_from_dc_cache = {}  # 🔄 NEW: Cache ระยะห่างจาก DC
+    
     for code in all_codes:
         lat, lon = get_lat_lon_from_master(code)
         coord_cache[code] = (lat, lon)
+        
+        # 🔄 NEW: คำนวณระยะห่างจาก DC
+        if lat and lon:
+            distance_from_dc = calculate_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
+            distance_from_dc_cache[code] = distance_from_dc
+        else:
+            distance_from_dc_cache[code] = 9999  # ไม่มีพิกัด ให้ไว้ท้ายสุด
         
         # Cache จังหวัด
         if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
@@ -1657,6 +1666,13 @@ def predict_trips(test_df, model_data):
                 province_cache[code] = prov
                 continue
         province_cache[code] = 'UNKNOWN'
+    
+    # 🔄 NEW: เรียงสาขาตามระยะห่างจาก DC (ใกล้ → ไกล)
+    all_codes = sorted(all_codes, key=lambda code: distance_from_dc_cache.get(code, 9999))
+    
+    # 🔄 NEW: อัพเดต test_df ให้เรียงตามลำดับเดียวกัน (เพื่อให้ UI แสดงผลตามลำดับ)
+    test_df['distance_from_dc'] = test_df['Code'].map(distance_from_dc_cache)
+    test_df = test_df.sort_values('distance_from_dc').reset_index(drop=True)
     
     # 🎯 จัดกลุ่มตามพิกัดก่อน (เพิ่มรัศมีสูง - ขอบเขตใหญ่ขึ้น)
     spatial_clusters = create_distance_based_clusters(all_codes, max_distance_km=60)
@@ -2053,6 +2069,10 @@ def predict_trips(test_df, model_data):
                 trip_weight = test_df[test_df['Code'].isin(current_trip + [code])]['Weight'].sum()
                 trip_cube = test_df[test_df['Code'].isin(current_trip + [code])]['Cube'].sum()
                 
+                # 🔄 NEW: คำนวณ utilization ปัจจุบันก่อนเพิ่มสาขา
+                current_weight = test_df[test_df['Code'].isin(current_trip)]['Weight'].sum()
+                current_cube = test_df[test_df['Code'].isin(current_trip)]['Cube'].sum()
+                
                 # ถ้ามีรถแนะนำจากประวัติ ใช้ขีดจำกัดของรถนั้น
                 if recommended_vehicle and recommended_vehicle in LIMITS:
                     max_w = LIMITS[recommended_vehicle]['max_w'] * BUFFER
@@ -2063,6 +2083,44 @@ def predict_trips(test_df, model_data):
                     max_w = LIMITS['6W']['max_w'] * BUFFER
                     max_c = LIMITS['6W']['max_c'] * BUFFER
                     vehicle_type = '6W'
+                
+                # 🔄 NEW: เช็คว่าทริปปัจจุบันถึง 95-130% แล้วหรือยัง
+                current_w_util = (current_weight / LIMITS[vehicle_type]['max_w']) * 100
+                current_c_util = (current_cube / LIMITS[vehicle_type]['max_c']) * 100
+                current_util = max(current_w_util, current_c_util)
+                
+                # คำนวณ utilization หลังเพิ่มสาขาใหม่
+                new_w_util = (trip_weight / LIMITS[vehicle_type]['max_w']) * 100
+                new_c_util = (trip_cube / LIMITS[vehicle_type]['max_c']) * 100
+                new_util = max(new_w_util, new_c_util)
+                
+                # 🎯 NEW: กลยุทธ์การตัดสินใจใหม่ - ตามเป้า 95-130%
+                # 1. ถ้าปัจจุบัน < 95% → เพิ่มสาขาต่อไปเพื่อให้ถึง 95%
+                # 2. ถ้าปัจจุบัน 95-130% → เพิ่มได้ถ้าไม่เกิน 130%
+                # 3. ถ้าปัจจุบัน > 130% → ห้ามเพิ่ม (แต่ไม่น่าเกิด เพราะเช็คไว้แล้ว)
+                # 4. ถ้าเพิ่มแล้วเกิน 140% → ห้ามเด็ดขาด
+                
+                should_start_new_trip = False
+                
+                # ห้ามเกิน 140% (absolute max)
+                if new_util > 140:
+                    should_start_new_trip = True
+                # ถ้าปัจจุบันอยู่ใน 95-130% และเพิ่มแล้วเกิน 130% → เริ่มทริปใหม่
+                elif current_util >= 95 and new_util > 130:
+                    should_start_new_trip = True
+                # ถ้าปัจจุบันยังไม่ถึง 95% → เพิ่มสาขาต่อไป
+                elif current_util < 95:
+                    should_start_new_trip = False
+                # ถ้าปัจจุบันอยู่ใน 95-130% และเพิ่มแล้วยังอยู่ใน 95-130% → เพิ่มได้
+                elif current_util >= 95 and current_util <= 130 and new_util <= 130:
+                    should_start_new_trip = False
+                else:
+                    # กรณีอื่นๆ ตัดสินใจตามระยะทางและประวัติ
+                    should_start_new_trip = False
+                
+                # 🔄 ถ้าควรเริ่มทริปใหม่ → ข้ามสาขานี้
+                if should_start_new_trip:
+                    continue
                 
                 # ฟังก์ชันเช็คว่าสาขาอยู่ใกล้กันหรือไม่ (ตำบล/อำเภอเดียวกัน)
                 def branches_are_close(code1, code2):
@@ -2139,74 +2197,35 @@ def predict_trips(test_df, model_data):
                         continue  # ไกลเกินไป - ควรไปทริปอื่น
                 
                 # เช็คว่าเกินขีดจำกัดหรือไม่
-                can_fit = trip_weight <= max_w and trip_cube <= max_c
                 
-                # 🚨 กรณีพิเศษ: ถ้ารถไม่เต็ม ให้พิจารณารับสาขาใกล้เคียงเพิ่ม
-                if not can_fit:
-                    # คำนวณ % การใช้รถปัจจุบัน (ก่อนเพิ่มสาขาใหม่)
-                    current_weight = test_df[test_df['Code'].isin(current_trip)]['Weight'].sum()
-                    current_cube = test_df[test_df['Code'].isin(current_trip)]['Cube'].sum()
-                    
-                    # คำนวณ utilization ของรถที่จะใช้
-                    if recommended_vehicle and recommended_vehicle in LIMITS:
-                        vehicle_for_calc = recommended_vehicle
-                    else:
-                        vehicle_for_calc = vehicle_type
-                    
-                    w_util = (current_weight / LIMITS[vehicle_for_calc]['max_w']) * 100
-                    c_util = (current_cube / LIMITS[vehicle_for_calc]['max_c']) * 100
-                    current_util = max(w_util, c_util)
-                    
-                    # ถ้ารถไม่เต็ม (< 70%) ให้พิจารณาเพิ่มสาขาใกล้เคียง
-                    if current_util < 70:
-                        # เช็คระยะทางจากสาขาสุดท้าย
-                        distance_from_last = get_distance_from_last_branch(current_trip, code)
-                        
-                        # ถ้าระยะทาง ≤ 30km จากจุดสุดท้าย → รวมได้
-                        if distance_from_last > 0 and distance_from_last <= 30:
-                            # เช็คว่าเกินมากเกินไปไหม (ไม่เกิน 15%)
-                            weight_exceed = (trip_weight - max_w) / max_w if max_w > 0 else 0
-                            cube_exceed = (trip_cube - max_c) / max_c if max_c > 0 else 0
-                            
-                            if weight_exceed <= 0.15 and cube_exceed <= 0.15:
-                                can_fit = True  # รับสาขานี้เพื่อประหยัดรถ
+                # 🔄 NEW: ตรวจสอบเงื่อนไขทางภูมิศาสตร์และประวัติ
+                # เช็คระยะทางจากทุกสาขาในทริป
+                avg_dist_to_trip, max_dist_to_trip, all_within_limit = check_distance_to_all_trip_branches(code, current_trip, max_dist=40)
                 
-                # ถ้ายังเกิน → เช็คว่าเกินนิดหน่อยและอยู่ใกล้กันไหม
-                if not can_fit:
-                    # เกินเล็กน้อย = เกินไม่เกิน 10%
-                    weight_exceed = (trip_weight - max_w) / max_w if max_w > 0 else 0
-                    cube_exceed = (trip_cube - max_c) / max_c if max_c > 0 else 0
-                    
-                    slightly_exceed = weight_exceed <= 0.10 or cube_exceed <= 0.10
-                    
-                    if slightly_exceed:
-                        # เช็คว่าสาขาอยู่ใกล้กันหรือไม่
-                        all_branches_close = True
-                        for existing_code in current_trip:
-                            if not branches_are_close(existing_code, code):
-                                all_branches_close = False
-                                break
-                        
-                        if all_branches_close:
-                            # คำนวณว่าถ้าแยก สาขาที่แยกออกไปจะใช้รถเล็กหรือไม่เต็ม
-                            code_weight = test_df[test_df['Code'] == code]['Weight'].sum()
-                            code_cube = test_df[test_df['Code'] == code]['Cube'].sum()
-                            
-                            # ลองดูว่าถ้าแยกออกไป รถเล็กจะไม่เต็มหรือไม่
-                            # ใช้รถเล็กสุด (4W) เป็นตัวอ้างอิง
-                            small_vehicle_fill = max(
-                                code_weight / LIMITS['4W']['max_w'],
-                                code_cube / LIMITS['4W']['max_c']
-                            ) if vehicle_type != '4W' else 0
-                            
-                            # ถ้ารถเล็กไม่เต็ม 50% = สิ้นเปลือง → ยอมรับให้รวมกันแม้เกิน
-                            if small_vehicle_fill < 0.5:
-                                can_fit = True  # ยอมรับเกินเพื่อประหยัดรถ
+                # ถ้าสาขาใหม่ไกลจากสาขาใดๆ ในทริปเกิน 40km → ข้ามไป (ยกเว้นชื่อคล้ายกัน)
+                if not all_within_limit and not names_are_similar and not has_history:
+                    # เช็คว่าระยะทางเฉลี่ยพอรับได้หรือไม่ (< 25km)
+                    if avg_dist_to_trip > 25:
+                        continue  # ไกลเกินไป - ควรไปทริปอื่น
                 
-                if can_fit:
-                    current_trip.append(code)
-                    assigned_trips[code] = trip_counter
-                    all_codes.remove(code)
+                # 🚨 เช็คข้อจำกัดรถของสาขาใหม่
+                code_max_vehicle = get_max_vehicle_for_branch(code)
+                current_trip_with_new = current_trip + [code]
+                trip_max_vehicle = get_max_vehicle_for_trip(set(current_trip_with_new))
+                
+                # ถ้าสาขาใหม่จำกัดรถเล็กกว่ารถปัจจุบัน → ห้ามเพิ่ม
+                vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
+                current_priority = vehicle_priority.get(vehicle_type, 3)
+                new_priority = vehicle_priority.get(trip_max_vehicle, 3)
+                
+                if new_priority < current_priority:
+                    # สาขาใหม่จำกัดรถเล็กกว่า → ข้ามสาขานี้
+                    continue
+                
+                # ✅ ทุกเงื่อนไขผ่าน → เพิ่มสาขาเข้าทริป
+                current_trip.append(code)
+                assigned_trips[code] = trip_counter
+                all_codes.remove(code)
         
         # บันทึกรถที่แนะนำสำหรับทริปนี้
         if recommended_vehicle:
@@ -2217,10 +2236,10 @@ def predict_trips(test_df, model_data):
     test_df['Trip'] = test_df['Code'].map(assigned_trips)
     
     # ===============================================
-    # 🔒 Post-processing: สลับสาขาให้อยู่ทริปที่ใกล้กันที่สุด (FAST)
+    # 🔒 Post-processing: สลับสาขาให้อยู่ทริปที่ใกล้กันที่สุด (COMPREHENSIVE)
     # ===============================================
     def optimize_branch_placement():
-        """สลับสาขาระหว่างทริปให้อยู่กับกลุ่มที่ใกล้กันที่สุด (เวอร์ชันเร็ว)"""
+        """สลับสาขาระหว่างทริปให้อยู่กับกลุ่มที่ใกล้กันที่สุด - เช็คทุกสาขาในทุกทริป"""
         # สร้าง dict ของ trip → codes
         trip_codes_dict = {}
         for trip_num in test_df['Trip'].unique():
@@ -2228,55 +2247,117 @@ def predict_trips(test_df, model_data):
             trip_codes_dict[trip_num] = codes
             update_trip_centroid(trip_num, codes)
         
-        # ⚡ Speed: เช็คเฉพาะสาขาที่อยู่ไกลจาก centroid ของทริปตัวเอง
-        outliers = []  # (code, trip_num, dist_from_centroid)
+        max_iterations = 3  # จำนวนรอบที่จะเช็คและสลับ
+        total_swaps = 0
         
-        for trip_num, codes in trip_codes_dict.items():
-            if len(codes) <= 2:
-                continue
+        for iteration in range(max_iterations):
+            swaps_this_round = 0
             
-            centroid = trip_centroids.get(trip_num)
-            if not centroid or not centroid[0]:
-                continue
-            
-            for code in codes:
-                code_lat, code_lon = coord_cache.get(code, (None, None))
-                if code_lat:
-                    dist = haversine_distance(code_lat, code_lon, centroid[0], centroid[1])
-                    # ถ้าไกลจาก centroid มากกว่า 20km → อาจเป็น outlier
-                    if dist > 20:
-                        outliers.append((code, trip_num, dist))
-        
-        # เรียง outlier จากไกลสุดก่อน และจำกัดแค่ 50 ตัว
-        outliers.sort(key=lambda x: -x[2])
-        outliers = outliers[:50]
-        
-        # ลองย้าย outliers ไปทริปที่ใกล้กว่า
-        for code, trip_num, dist_current in outliers:
-            if code not in trip_codes_dict.get(trip_num, []):
-                continue
-            
-            best_trip, best_dist = find_closest_trip_for_branch(code, trip_codes_dict, exclude_trip=trip_num)
-            
-            # ถ้ามีทริปอื่นที่ใกล้กว่าอย่างมีนัยสำคัญ (> 15km ดีกว่า)
-            if best_trip and best_dist < dist_current - 15:
-                # เช็คข้อจำกัดรถ
-                code_max_vehicle = get_max_vehicle_for_branch(code)
-                target_trip_codes = trip_codes_dict.get(best_trip, [])
-                target_max_vehicle = get_max_vehicle_for_trip(set(target_trip_codes + [code]))
+            # 🔄 เช็คทุกสาขาในทุกทริป
+            for trip_num, codes in list(trip_codes_dict.items()):
+                if len(codes) == 0:
+                    continue
                 
-                vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
-                if vehicle_priority.get(code_max_vehicle, 3) >= vehicle_priority.get(target_max_vehicle, 3):
-                    # ย้ายสาขา
-                    trip_codes_dict[trip_num].remove(code)
-                    trip_codes_dict[best_trip].append(code)
-                    assigned_trips[code] = best_trip
-                    # อัพเดต centroids
-                    update_trip_centroid(trip_num, trip_codes_dict[trip_num])
-                    update_trip_centroid(best_trip, trip_codes_dict[best_trip])
+                for code in list(codes):
+                    # หาระยะเฉลี่ยจากสาขานี้ไปยังทริปปัจจุบัน
+                    current_distances = []
+                    for other_code in codes:
+                        if other_code == code:
+                            continue
+                        code_lat, code_lon = coord_cache.get(code, (None, None))
+                        other_lat, other_lon = coord_cache.get(other_code, (None, None))
+                        if code_lat and other_lat:
+                            dist = haversine_distance(code_lat, code_lon, other_lat, other_lon)
+                            current_distances.append(dist)
+                    
+                    if not current_distances:
+                        current_avg_dist = 0
+                    else:
+                        current_avg_dist = sum(current_distances) / len(current_distances)
+                    
+                    # หาทริปที่ใกล้ที่สุด (เช็คทุกทริปอื่น)
+                    best_trip = None
+                    best_avg_dist = current_avg_dist
+                    
+                    for other_trip_num, other_codes in trip_codes_dict.items():
+                        if other_trip_num == trip_num or len(other_codes) == 0:
+                            continue
+                        
+                        # คำนวณระยะเฉลี่ยไปยังทริปอื่น
+                        distances_to_other = []
+                        for other_code in other_codes:
+                            code_lat, code_lon = coord_cache.get(code, (None, None))
+                            other_lat, other_lon = coord_cache.get(other_code, (None, None))
+                            if code_lat and other_lat:
+                                dist = haversine_distance(code_lat, code_lon, other_lat, other_lon)
+                                distances_to_other.append(dist)
+                        
+                        if distances_to_other:
+                            avg_dist = sum(distances_to_other) / len(distances_to_other)
+                            max_dist = max(distances_to_other)
+                            
+                            # ถ้าใกล้กว่าอย่างมีนัยสำคัญ (> 10km) และไม่มีสาขาไหนไกลเกิน 40km
+                            if avg_dist < best_avg_dist - 10 and max_dist <= 40:
+                                best_avg_dist = avg_dist
+                                best_trip = other_trip_num
+                    
+                    # ถ้าพบทริปที่ดีกว่า → ลองย้าย
+                    if best_trip and best_avg_dist < current_avg_dist - 10:
+                        # เช็คข้อจำกัดรถ
+                        code_max_vehicle = get_max_vehicle_for_branch(code)
+                        target_trip_codes = trip_codes_dict.get(best_trip, [])
+                        target_max_vehicle = get_max_vehicle_for_trip(set(target_trip_codes + [code]))
+                        
+                        vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
+                        can_move = vehicle_priority.get(code_max_vehicle, 3) >= vehicle_priority.get(target_max_vehicle, 3)
+                        
+                        # เช็คว่าย้ายแล้ว utilization ของทั้งสองทริปยังอยู่ในขอบเขตหรือไม่
+                        if can_move:
+                            # คำนวณ utilization หลังย้าย
+                            code_weight = test_df[test_df['Code'] == code]['Weight'].sum()
+                            code_cube = test_df[test_df['Code'] == code]['Cube'].sum()
+                            
+                            # ทริปเดิม (หลังลบสาขานี้)
+                            old_trip_weight = test_df[test_df['Code'].isin(codes)]['Weight'].sum() - code_weight
+                            old_trip_cube = test_df[test_df['Code'].isin(codes)]['Cube'].sum() - code_cube
+                            
+                            # ทริปใหม่ (หลังเพิ่มสาขานี้)
+                            new_trip_weight = test_df[test_df['Code'].isin(target_trip_codes)]['Weight'].sum() + code_weight
+                            new_trip_cube = test_df[test_df['Code'].isin(target_trip_codes)]['Cube'].sum() + code_cube
+                            
+                            # เช็ค utilization (ใช้รถ 6W เป็นมาตรฐาน)
+                            old_util = max(old_trip_weight / LIMITS['6W']['max_w'], 
+                                         old_trip_cube / LIMITS['6W']['max_c']) * 100
+                            new_util = max(new_trip_weight / LIMITS['6W']['max_w'], 
+                                         new_trip_cube / LIMITS['6W']['max_c']) * 100
+                            
+                            # ยอมให้ย้ายถ้า utilization ไม่เกิน 140% และไม่ต่ำกว่า 50%
+                            if new_util <= 140 and (len(codes) <= 1 or old_util >= 50):
+                                # ย้ายสาขา
+                                trip_codes_dict[trip_num].remove(code)
+                                trip_codes_dict[best_trip].append(code)
+                                assigned_trips[code] = best_trip
+                                swaps_this_round += 1
+                                
+                                # อัพเดต centroids
+                                update_trip_centroid(trip_num, trip_codes_dict[trip_num])
+                                update_trip_centroid(best_trip, trip_codes_dict[best_trip])
+            
+            total_swaps += swaps_this_round
+            # ถ้าไม่มีการสลับในรอบนี้ = เสร็จแล้ว
+            if swaps_this_round == 0:
+                break
+        
+        # ลบทริปที่ว่าง
+        for trip_num in list(trip_codes_dict.keys()):
+            if len(trip_codes_dict[trip_num]) == 0:
+                del trip_codes_dict[trip_num]
         
         # อัพเดต test_df
         test_df['Trip'] = test_df['Code'].map(assigned_trips)
+        
+        if total_swaps > 0:
+            print(f"\n✅ สลับสาขาระหว่างทริปสำเร็จ: {total_swaps} สาขา")
     
     # เรียกใช้งาน optimization
     optimize_branch_placement()
@@ -3996,9 +4077,43 @@ def predict_trips(test_df, model_data):
                 total_distance += calculate_distance(branch_coords[-1][0], branch_coords[-1][1],
                                                     DC_WANG_NOI_LAT, DC_WANG_NOI_LON)
         
+        # 🗺️ เพิ่มข้อมูลพื้นที่ (จังหวัด อำเภอ ตำบล)
+        provinces_list = []
+        districts_list = []
+        subdistricts_list = []
+        
+        for code in trip_codes:
+            if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                if len(master_row) > 0:
+                    row_data = master_row.iloc[0]
+                    
+                    # จังหวัด
+                    prov = row_data.get('จังหวัด', '') if 'จังหวัด' in row_data.index else ''
+                    if prov and str(prov).strip() and prov != 'UNKNOWN':
+                        provinces_list.append(str(prov).strip())
+                    
+                    # อำเภอ
+                    dist = row_data.get('อำเภอ', '') if 'อำเภอ' in row_data.index else ''
+                    if dist and str(dist).strip():
+                        districts_list.append(str(dist).strip())
+                    
+                    # ตำบล
+                    subdist = row_data.get('ตำบล', '') if 'ตำบล' in row_data.index else ''
+                    if subdist and str(subdist).strip():
+                        subdistricts_list.append(str(subdist).strip())
+        
+        # สร้างข้อความสรุป (แสดงแบบ unique)
+        provinces_str = ', '.join(sorted(set(provinces_list))) if provinces_list else '-'
+        districts_str = ', '.join(sorted(set(districts_list))) if districts_list else '-'
+        subdistricts_str = ', '.join(sorted(set(subdistricts_list))) if subdistricts_list else '-'
+        
         summary_data.append({
             'Trip': trip_num,
             'Branches': len(trip_data),
+            'Province': provinces_str,
+            'District': districts_str,
+            'Subdistrict': subdistricts_str,
             'Weight': total_w,
             'Cube': total_c,
             'Truck': f"{suggested} {source}",
@@ -4063,6 +4178,30 @@ def predict_trips(test_df, model_data):
             return 'ต่างจังหวัด'
     
     test_df['Region'] = test_df['Code'].apply(get_region_name)
+    
+    # 🗺️ เพิ่มข้อมูลอำเภอและตำบลในรายละเอียดรายสาขา
+    def get_district_info(code):
+        """ดึงข้อมูลอำเภอจาก Master Data"""
+        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+            master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+            if len(master_row) > 0:
+                district = master_row.iloc[0].get('อำเภอ', '')
+                if district and str(district).strip():
+                    return str(district).strip()
+        return '-'
+    
+    def get_subdistrict_info(code):
+        """ดึงข้อมูลตำบลจาก Master Data"""
+        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+            master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+            if len(master_row) > 0:
+                subdistrict = master_row.iloc[0].get('ตำบล', '')
+                if subdistrict and str(subdistrict).strip():
+                    return str(subdistrict).strip()
+        return '-'
+    
+    test_df['District'] = test_df['Code'].apply(get_district_info)
+    test_df['Subdistrict'] = test_df['Code'].apply(get_subdistrict_info)
     
     # เพิ่มคอลัมน์ระยะทางระหว่างสาขาในทริป และเรียงลำดับ
     def add_distance_and_sort(df):
@@ -4374,52 +4513,116 @@ def main():
                             
                             # ตารางสรุปแต่ละทริป
                             st.markdown("### 🚛 รายละเอียดแต่ละทริป")
+                            
+                            # เตรียม DataFrame สำหรับแสดงผล
+                            display_summary = summary.copy()
+                            
+                            # เรียงคอลัมน์ให้สวยงาม
+                            col_order = ['Trip', 'Branches', 'Province', 'District', 'Subdistrict', 
+                                        'Weight', 'Cube', 'Truck', 'Weight_Use%', 'Cube_Use%', 'Total_Distance']
+                            col_order = [c for c in col_order if c in display_summary.columns]
+                            display_summary = display_summary[col_order]
+                            
+                            # ตั้งชื่อคอลัมน์ภาษาไทย
+                            col_names = {
+                                'Trip': 'ทริป',
+                                'Branches': 'สาขา',
+                                'Province': 'จังหวัด',
+                                'District': 'อำเภอ',
+                                'Subdistrict': 'ตำบล',
+                                'Weight': 'น้ำหนัก(kg)',
+                                'Cube': 'ปริมาตร(m³)',
+                                'Truck': 'รถ',
+                                'Weight_Use%': '%น้ำหนัก',
+                                'Cube_Use%': '%ปริมาตร',
+                                'Total_Distance': 'ระยะทาง(km)'
+                            }
+                            display_summary.columns = [col_names.get(c, c) for c in display_summary.columns]
+                            
+                            # สร้างฟังก์ชันสี utilization
+                            def color_utilization(val):
+                                """ใช้สีตามช่วง utilization: เขียว (95-130), ชมพู (<95), เหลือง (>130)"""
+                                try:
+                                    v = float(val)
+                                    if 95 <= v <= 130:
+                                        return 'background-color: #90EE90; color: black; font-weight: bold'  # เขียวอ่อน
+                                    elif v < 95:
+                                        return 'background-color: #FFB6C1; color: black'  # ชมพู
+                                    else:
+                                        return 'background-color: #FFD700; color: black'  # เหลือง
+                                except:
+                                    return ''
+                            
                             st.dataframe(
-                                summary.style.format({
-                                    'Weight': '{:.2f}',
-                                    'Cube': '{:.2f}',
-                                    'Weight_Use%': '{:.1f}%',
-                                    'Cube_Use%': '{:.1f}%',
-                                    'Total_Distance': '{:.1f} km'
-                                }).background_gradient(
-                                    subset=['Weight_Use%', 'Cube_Use%'],
-                                    cmap='RdYlGn',
-                                    vmin=0,
-                                    vmax=100
+                                display_summary.style.format({
+                                    'น้ำหนัก(kg)': '{:,.0f}',
+                                    'ปริมาตร(m³)': '{:.2f}',
+                                    '%น้ำหนัก': '{:.1f}',
+                                    '%ปริมาตร': '{:.1f}',
+                                    'ระยะทาง(km)': '{:.1f}'
+                                }).applymap(
+                                    color_utilization,
+                                    subset=['%น้ำหนัก', '%ปริมาตร']
                                 ),
                                 use_container_width=True,
-                                height=400
+                                height=500
                             )
                             
-                            # ตารางรายละเอียดทั้งหมด (มีคอลัมน์รถและระยะทาง)
-                            with st.expander("📋 ดูรายละเอียดรายสาขา (เรียงตามน้ำหนัก)"):
+                            # ตารางรายละเอียดทั้งหมด (เพิ่มอำเภอ ตำบล)
+                            with st.expander("📋 ดูรายละเอียดรายสาขา (ทั้งหมด)", expanded=False):
                                 # จัดเรียงคอลัมน์ที่สำคัญ
                                 display_cols = ['Trip', 'Code', 'Name']
                                 if 'Province' in result_df.columns:
                                     display_cols.append('Province')
+                                if 'District' in result_df.columns:
+                                    display_cols.append('District')
+                                if 'Subdistrict' in result_df.columns:
+                                    display_cols.append('Subdistrict')
                                 if 'Region' in result_df.columns:
                                     display_cols.append('Region')
-                                display_cols.extend(['Max_Distance_in_Trip', 'Weight', 'Cube', 'Truck', 'VehicleCheck'])
+                                display_cols.extend(['Weight', 'Cube', 'Truck'])
+                                if 'Distance_from_DC' in result_df.columns:
+                                    display_cols.append('Distance_from_DC')
+                                if 'VehicleCheck' in result_df.columns:
+                                    display_cols.append('VehicleCheck')
                                 
                                 # กรองคอลัมน์ที่มีอยู่จริง
                                 display_cols = [col for col in display_cols if col in result_df.columns]
                                 display_df = result_df[display_cols].copy()
                                 
                                 # ตั้งชื่อคอลัมน์ภาษาไทย
-                                col_names = {'Trip': 'ทริป', 'Code': 'รหัส', 'Name': 'ชื่อสาขา', 'Province': 'จังหวัด', 
-                                           'Region': 'ภาค', 'Max_Distance_in_Trip': 'ระยะทาง Max(km)', 
-                                           'Weight': 'น้ำหนัก(kg)', 'Cube': 'คิว(m³)', 'Truck': 'รถ', 'VehicleCheck': 'ตรวจสอบรถ'}
+                                col_names = {
+                                    'Trip': 'ทริป', 
+                                    'Code': 'รหัสสาขา', 
+                                    'Name': 'ชื่อสาขา', 
+                                    'Province': 'จังหวัด',
+                                    'District': 'อำเภอ',
+                                    'Subdistrict': 'ตำบล',
+                                    'Region': 'ภาค', 
+                                    'Weight': 'น้ำหนัก(kg)', 
+                                    'Cube': 'ปริมาตร(m³)', 
+                                    'Truck': 'รถ',
+                                    'Distance_from_DC': 'ระยะจาก DC(km)',
+                                    'VehicleCheck': 'สถานะ'
+                                }
                                 display_df.columns = [col_names.get(c, c) for c in display_cols]
                                 
-                                # จัดรูปแบบคอลัมน์ระยะทาง
+                                # สร้างสีพื้นหลังสำหรับแต่ละทริป (สลับสี)
+                                def highlight_trips(row):
+                                    if row.name % 2 == 0:
+                                        return ['background-color: #f0f8ff'] * len(row)
+                                    else:
+                                        return ['background-color: #ffffff'] * len(row)
+                                
+                                # จัดรูปแบบ
                                 st.dataframe(
                                     display_df.style.format({
-                                        'ระยะทาง(km)': '{:.1f}',
-                                        'น้ำหนัก(kg)': '{:.2f}',
-                                        'คิว(m³)': '{:.2f}'
-                                    }),
+                                        'น้ำหนัก(kg)': '{:,.0f}',
+                                        'ปริมาตร(m³)': '{:.2f}',
+                                        'ระยะจาก DC(km)': '{:.1f}'
+                                    }).apply(highlight_trips, axis=1),
                                     use_container_width=True, 
-                                    height=400
+                                    height=600
                                 )
                             
                             # แสดงสาขาที่มีคำเตือน
