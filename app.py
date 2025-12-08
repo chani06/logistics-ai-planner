@@ -2510,6 +2510,82 @@ def predict_trips(test_df, model_data):
         print(f"\n✂️ แยกทริปที่เกิน 130% สำเร็จ: {split_count} ทริป")
     
     # ===============================================
+    # Phase 2.75: จัดสาขาที่ยังไม่มีทริป (Trip = 0) เข้าทริปใหม่
+    # ===============================================
+    unassigned_count = len(test_df[test_df['Trip'] == 0])
+    if unassigned_count > 0:
+        print(f"\n🔍 พบสาขาที่ยังไม่ได้จัดทริป: {unassigned_count} สาขา")
+        
+        # สร้างทริปใหม่สำหรับสาขาที่เหลือ
+        max_trip = test_df['Trip'].max()
+        if max_trip == 0:
+            max_trip = 0
+        
+        unassigned = test_df[test_df['Trip'] == 0].copy()
+        
+        # เรียงตามปริมาตร (มาก → น้อย) เพื่อจัดทริปแบบ bin packing
+        unassigned = unassigned.sort_values('Cube', ascending=False)
+        
+        current_trip = max_trip + 1
+        current_weight = 0
+        current_cube = 0
+        current_count = 0
+        
+        for idx, row in unassigned.iterrows():
+            code = row['Code']
+            weight = row['Weight']
+            cube = row['Cube']
+            
+            # คำนวณ utilization ถ้าเพิ่มสาขานี้
+            new_w = current_weight + weight
+            new_c = current_cube + cube
+            new_count = current_count + 1
+            
+            # ใช้เกณฑ์ยืดหยุ่น (ยอมให้ถึง 130%)
+            new_util = max(
+                (new_w / LIMITS['6W']['max_w']) * 100,
+                (new_c / LIMITS['6W']['max_c']) * 100
+            )
+            
+            # ถ้าเกิน 130% หรือเกิน max branches → เริ่มทริปใหม่
+            if new_util > 130 or new_count > MAX_BRANCHES_PER_TRIP:
+                # เริ่มทริปใหม่
+                current_trip += 1
+                current_weight = weight
+                current_cube = cube
+                current_count = 1
+                test_df.loc[test_df['Code'] == code, 'Trip'] = current_trip
+            else:
+                # เพิ่มเข้าทริปปัจจุบัน
+                test_df.loc[test_df['Code'] == code, 'Trip'] = current_trip
+                current_weight = new_w
+                current_cube = new_c
+                current_count = new_count
+        
+        # นับสาขาที่จัดเรียบร้อย
+        final_unassigned = len(test_df[test_df['Trip'] == 0])
+        assigned = unassigned_count - final_unassigned
+        if assigned > 0:
+            print(f"✅ จัดสาขาที่เหลือเข้าทริปสำเร็จ: {assigned} สาขา")
+        if final_unassigned > 0:
+            print(f"⚠️  ยังมีสาขาที่ไม่สามารถจัดได้: {final_unassigned} สาขา")
+    
+    # ===============================================
+    # Phase 2.8: แปลง Trip เป็น int และเริ่มจาก 1
+    # ===============================================
+    test_df['Trip'] = test_df['Trip'].astype(int)
+    
+    # เรียงเลขทริปใหม่ให้ต่อเนื่อง (1, 2, 3, ...)
+    trip_mapping = {}
+    new_trip_num = 1
+    for old_trip in sorted(test_df[test_df['Trip'] > 0]['Trip'].unique()):
+        trip_mapping[old_trip] = new_trip_num
+        new_trip_num += 1
+    
+    # อัพเดตเลขทริป
+    test_df['Trip'] = test_df['Trip'].map(lambda x: trip_mapping.get(x, 0) if x > 0 else 0)
+    
+    # ===============================================
     # Post-processing: รวมทริปเล็กและปรับขนาดรถ
     # ===============================================
     # กำลังปรับปรุงการจัดทริป
