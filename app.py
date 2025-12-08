@@ -2048,7 +2048,7 @@ def predict_trips(test_df, model_data):
         seed_lat, seed_lon = coord_cache.get(seed_code, (None, None))
         
         def get_priority(code):
-            """คำนวณความสำคัญของสาขา - เน้นระยะทางเป็นหลัก เพื่อป้องกันการกระโดด"""
+            """คำนวณความสำคัญของสาขา - เน้นตำบล+อำเภอ+ชื่อ+ระยะทาง"""
             code_name = test_df[test_df['Code'] == code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
             code_index = code_to_index.get(code, 999999)
             seed_index = code_to_index.get(seed_code, 0)
@@ -2062,39 +2062,75 @@ def predict_trips(test_df, model_data):
             # เช็คชื่อคล้ายกัน
             names_similar = is_similar_name(seed_name, code_name, similarity_threshold=85)
             
-            # 🎯 กลยุทธ์ใหม่: ระยะทางเป็นหลัก แล้วค่อยดูชื่อ (ป้องกันกระโดด)
+            # 🆕 เช็คตำบล+อำเภอจาก Master
+            same_subdistrict = False
+            same_district = False
+            if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                seed_master = MASTER_DATA[MASTER_DATA['Plan Code'] == seed_code]
+                code_master = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                
+                if len(seed_master) > 0 and len(code_master) > 0:
+                    seed_m = seed_master.iloc[0]
+                    code_m = code_master.iloc[0]
+                    
+                    code_subdistrict = str(code_m['ตำบล']).strip() if 'ตำบล' in code_m.index and pd.notna(code_m['ตำบล']) else ''
+                    code_district = str(code_m['อำเภอ']).strip() if 'อำเภอ' in code_m.index and pd.notna(code_m['อำเภอ']) else ''
+                    
+                    # เปรียบเทียบกับ seed ที่ดึงไว้แล้ว
+                    if seed_subdistrict and code_subdistrict and seed_subdistrict == code_subdistrict:
+                        same_subdistrict = True
+                    if seed_district and code_district and seed_district == code_district:
+                        same_district = True
             
-            # ✅ ลำดับ 0: ชื่อเดียวกัน + ใกล้มาก (< 10km) - ควรอยู่ทริปเดียวกันแน่นอน
-            if names_similar and dist_from_seed < 10:
+            # 🎯 ลำดับความสำคัญ: ตำบล → ชื่อ+ระยะทาง → ระยะทาง
+            
+            # ✅ ลำดับ 0: ตำบลเดียวกัน + ชื่อเดียวกัน - ต้องอยู่ด้วยกันแน่นอน
+            if same_subdistrict and names_similar:
                 return (0, dist_from_seed, code_index)
             
-            # ✅ ลำดับ 1: ใกล้มากๆ (< 5km) - ห้ามข้าม! ต้องส่งก่อน
-            if dist_from_seed < 5:
+            # ✅ ลำดับ 1: ตำบลเดียวกัน (แม้ชื่อต่างกัน)
+            if same_subdistrict:
                 return (1, dist_from_seed, code_index)
             
-            # ✅ ลำดับ 2: ใกล้พอสมควร (5-15km) - เส้นทางต่อเนื่อง
-            if dist_from_seed < 15:
+            # ✅ ลำดับ 2: ชื่อเดียวกัน + อำเภอเดียวกัน
+            if names_similar and same_district:
                 return (2, dist_from_seed, code_index)
             
-            # ✅ ลำดับ 3: ชื่อคล้ายกัน + ไม่ไกลมาก (15-25km) - ยอมรับได้
-            if names_similar and dist_from_seed < 25:
+            # ✅ ลำดับ 3: ชื่อเดียวกัน + ใกล้มาก (< 10km)
+            if names_similar and dist_from_seed < 10:
                 return (3, dist_from_seed, code_index)
             
-            # ✅ ลำดับ 4: มีประวัติร่วมกัน + ระยะปานกลาง (< 30km)
-            pair = tuple(sorted([str(seed_code), str(code)]))  # Convert to str for comparison
-            if pair in trip_pairs and dist_from_seed < 30:
+            # ✅ ลำดับ 4: อำเภอเดียวกัน + ใกล้มาก (< 10km)
+            if same_district and dist_from_seed < 10:
                 return (4, dist_from_seed, code_index)
             
-            # ✅ ลำดับ 5: ระยะปานกลาง (15-30km) แต่ไม่มีประวัติ
-            if dist_from_seed < 30:
+            # ✅ ลำดับ 5: ใกล้มากๆ (< 5km) - ห้ามข้าม!
+            if dist_from_seed < 5:
                 return (5, dist_from_seed, code_index)
             
-            # ⚠️ ลำดับ 6: ชื่อคล้ายกันแต่ไกลมาก (>25km) - ระวังให้ดี อาจควรแยกทริป
-            if names_similar and dist_from_seed >= 25:
+            # ✅ ลำดับ 6: ใกล้พอสมควร (5-15km) - เส้นทางต่อเนื่อง
+            if dist_from_seed < 15:
                 return (6, dist_from_seed, code_index)
             
-            # ❌ ลำดับ 7: ไกลมาก (>30km) - ควรเป็นทริปใหม่
-            return (7, dist_from_seed, code_index)
+            # ✅ ลำดับ 7: ชื่อคล้ายกัน + ไม่ไกลมาก (15-25km)
+            if names_similar and dist_from_seed < 25:
+                return (7, dist_from_seed, code_index)
+            
+            # ✅ ลำดับ 8: มีประวัติร่วมกัน + ระยะปานกลาง (< 30km)
+            pair = tuple(sorted([str(seed_code), str(code)]))
+            if pair in trip_pairs and dist_from_seed < 30:
+                return (8, dist_from_seed, code_index)
+            
+            # ✅ ลำดับ 9: ระยะปานกลาง (15-30km)
+            if dist_from_seed < 30:
+                return (9, dist_from_seed, code_index)
+            
+            # ⚠️ ลำดับ 10: ชื่อคล้ายกันแต่ไกลมาก (>25km)
+            if names_similar and dist_from_seed >= 25:
+                return (10, dist_from_seed, code_index)
+            
+            # ❌ ลำดับ 11: ไกลมาก (>30km)
+            return (11, dist_from_seed, code_index)
         
         remaining_sorted = sorted(remaining, key=get_priority)
         
