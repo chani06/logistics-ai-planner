@@ -1204,9 +1204,10 @@ def predict_trips(test_df, model_data):
     trip_vehicles = model_data.get('trip_vehicles', {}).copy()
     branch_vehicles = model_data.get('branch_vehicles', {})
     
-    if model is None:
-        st.error("❌ ไม่พบโมเดล กรุณาเทรนโมเดลก่อน")
-        return test_df, []
+    # ⚡ อนุญาตให้ทำงานโดยไม่มี model (ใช้กฎและประวัติเท่านั้น)
+    # if model is None:
+    #     st.error("❌ ไม่พบโมเดล กรุณาเทรนโมเดลก่อน")
+    #     return test_df, []
     
     # ★ ถ้าไฟล์อัปโหลดมีคอลัมน์ Trip ให้ใช้เป็นข้อมูลอ้างอิงหลัก
     # เพราะเป็นแผนงานที่ใช้จริงมาแล้ว
@@ -1980,9 +1981,6 @@ def predict_trips(test_df, model_data):
         
         processed += 1
         
-        remaining = all_codes[:]
-        recommended_vehicle = None  # รถที่แนะนำสำหรับทริปนี้
-        
         # ฟังก์ชันดึงจังหวัดจาก cache
         def get_province(branch_code):
             return province_cache.get(branch_code, 'UNKNOWN')
@@ -1991,8 +1989,56 @@ def predict_trips(test_df, model_data):
         def get_lat_lon(branch_code):
             return coord_cache.get(branch_code, (None, None))
         
-        # ข้อมูลจังหวัดของ seed
+        # 🎯 STRICT GROUPING: หาสาขาที่มี name+subdistrict+district+province เหมือนกับ seed_code
+        # และเพิ่มเข้าทริปก่อนที่จะพิจารณาสาขาอื่น
+        seed_base_name = get_base_name(test_df[test_df['Code'] == seed_code]['Name'].iloc[0] if 'Name' in test_df.columns else '')
         seed_province = get_province(seed_code)
+        
+        # ดึงข้อมูล subdistrict และ district ของ seed
+        seed_subdistrict = ''
+        seed_district = ''
+        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+            seed_master = MASTER_DATA[MASTER_DATA['Plan Code'] == seed_code]
+            if len(seed_master) > 0:
+                seed_m = seed_master.iloc[0]
+                seed_subdistrict = str(seed_m['ตำบล']).strip() if 'ตำบล' in seed_m.index and pd.notna(seed_m['ตำบล']) else ''
+                seed_district = str(seed_m['อำเภอ']).strip() if 'อำเภอ' in seed_m.index and pd.notna(seed_m['อำเภอ']) else ''
+        
+        # หาสาขาที่ตรงกันทั้งหมดและเพิ่มเข้าทริปทันที
+        matching_codes = []
+        for code in all_codes[:]:  # iterate over copy
+            code_base_name = get_base_name(test_df[test_df['Code'] == code]['Name'].iloc[0] if 'Name' in test_df.columns else '')
+            code_province = get_province(code)
+            
+            # ดึงข้อมูล subdistrict และ district ของ code
+            code_subdistrict = ''
+            code_district = ''
+            if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                code_master = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                if len(code_master) > 0:
+                    code_m = code_master.iloc[0]
+                    code_subdistrict = str(code_m['ตำบล']).strip() if 'ตำบล' in code_m.index and pd.notna(code_m['ตำบล']) else ''
+                    code_district = str(code_m['อำเภอ']).strip() if 'อำเภอ' in code_m.index and pd.notna(code_m['อำเภอ']) else ''
+            
+            # เช็คว่าตรงกันทั้งหมดหรือไม่ (name + subdistrict + district + province)
+            if (code_base_name == seed_base_name and 
+                code_subdistrict == seed_subdistrict and 
+                code_district == seed_district and 
+                code_province == seed_province and
+                code_subdistrict != '' and  # ต้องมีข้อมูลตำบล
+                code_district != ''):  # ต้องมีข้อมูลอำเภอ
+                matching_codes.append(code)
+        
+        # เพิ่มสาขาที่ตรงกันทั้งหมดเข้าทริปก่อน
+        for code in matching_codes:
+            current_trip.append(code)
+            assigned_trips[code] = trip_counter
+            all_codes.remove(code)
+        
+        remaining = all_codes[:]
+        recommended_vehicle = None  # รถที่แนะนำสำหรับทริปนี้
+        
+        # ข้อมูลจังหวัดของ seed
         seed_name = test_df[test_df['Code'] == seed_code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
         
         # จัดเรียง remaining ตามลำดับ: ชื่อคล้ายกัน → พิกัดใกล้กัน → ประวัติร่วม
@@ -2035,7 +2081,7 @@ def predict_trips(test_df, model_data):
                 return (3, dist_from_seed, code_index)
             
             # ✅ ลำดับ 4: มีประวัติร่วมกัน + ระยะปานกลาง (< 30km)
-            pair = tuple(sorted([seed_code, code]))
+            pair = tuple(sorted([str(seed_code), str(code)]))  # Convert to str for comparison
             if pair in trip_pairs and dist_from_seed < 30:
                 return (4, dist_from_seed, code_index)
             
@@ -2053,7 +2099,7 @@ def predict_trips(test_df, model_data):
         remaining_sorted = sorted(remaining, key=get_priority)
         
         for code in remaining_sorted:
-            pair = tuple(sorted([seed_code, code]))
+            pair = tuple(sorted([str(seed_code), str(code)]))  # Convert to str for comparison
             code_province = get_province(code)
             
             # 🔒 เช็คว่าสาขานี้ใกล้กับทริปปัจจุบันจริงๆ หรือมีทริปอื่นที่ใกล้กว่า
