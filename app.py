@@ -2783,110 +2783,11 @@ def predict_trips(test_df, model_data):
     # ===============================================
     # Phase 2.95: รวมทริปในจังหวัดเดียวกัน (ที่อยู่ใกล้กัน)
     # ===============================================
-    print("\n🔧 Phase 2.95: รวมทริปในจังหวัดเดียวกันที่อยู่ใกล้กัน...")
-    
-    # ⚡ Skip ถ้ามีทริปมากเกิน 100 ทริป (ประหยัดเวลา)
-    unique_trip_count = len(test_df[test_df['Trip'] > 0]['Trip'].unique())
-    if unique_trip_count > 100:
-        print(f"⏩ Skip Phase 2.95: มีทริปมากเกินไป ({unique_trip_count} ทริป)")
-    else:
-        # จัดกลุ่มทริปตามจังหวัด
-        province_trips = {}
-        for trip_num in sorted(test_df[test_df['Trip'] > 0]['Trip'].unique()):
-            trip_data = test_df[test_df['Trip'] == trip_num]
-            
-            # หาจังหวัดหลักของทริป (จังหวัดที่มีสาขามากที่สุด)
-            province_counts = {}
-            for code in trip_data['Code'].values:
-                if 'Province' in test_df.columns:
-                    prov = test_df[test_df['Code'] == code]['Province'].iloc[0] if len(test_df[test_df['Code'] == code]) > 0 else None
-                    if prov and str(prov).strip() and prov != 'UNKNOWN':
-                        province_counts[prov] = province_counts.get(prov, 0) + 1
-            
-            if province_counts:
-                main_province = max(province_counts, key=province_counts.get)
-                if main_province not in province_trips:
-                    province_trips[main_province] = []
-                province_trips[main_province].append({
-                    'trip_num': trip_num,
-                    'weight': trip_data['Weight'].sum(),
-                    'cube': trip_data['Cube'].sum(),
-                    'branches': len(trip_data),
-                    'codes': trip_data['Code'].tolist()
-                })
-        
-        # พยายามรวมทริปในจังหวัดเดียวกัน (จำกัดเวลา)
-        merge_count = 0
-        max_iterations = 0
-        for province, trips in province_trips.items():
-            if len(trips) < 2:
-                continue  # จังหวัดมีทริปเดียว ไม่ต้องรวม
-            
-            # ⚡ จำกัดจำนวนครั้งที่ลูป (ไม่เกิน 20 iterations ต่อจังหวัด)
-            max_iterations += len(trips)
-            if max_iterations > 50:
-                print(f"⏩ หยุด Phase 2.95 เพื่อประหยัดเวลา (iterations: {max_iterations})")
-                break
-            
-            # เรียงทริปตาม utilization (ต่ำ → สูง)
-            trips_sorted = sorted(trips, key=lambda t: max(
-                (t['weight'] / LIMITS['6W']['max_w']) * 100,
-                (t['cube'] / LIMITS['6W']['max_c']) * 100
-            ))
-            
-            for i, trip1 in enumerate(trips_sorted):
-                if i >= len(trips_sorted) - 1:
-                    break
-                
-                # หาทริปที่รวมได้
-                for trip2 in trips_sorted[i+1:]:
-                    # คำนวณ utilization ถ้ารวมกัน
-                    new_w = trip1['weight'] + trip2['weight']
-                    new_c = trip1['cube'] + trip2['cube']
-                    new_count = trip1['branches'] + trip2['branches']
-                    
-                    new_util = max((new_w / LIMITS['6W']['max_w']) * 100, (new_c / LIMITS['6W']['max_c']) * 100)
-                    
-                    # ถ้ารวมแล้วไม่เกิน 130% และจำนวนสาขาไม่เกิน → รวม
-                    if new_util <= 130 and new_count <= MAX_BRANCHES_PER_TRIP:
-                        # เช็คระยะทางระหว่างทริป (ต้องไม่ไกลเกิน 40 กม.) - ใช้ตัวอย่างเท่านั้น
-                        trip1_codes = trip1['codes']
-                        trip2_codes = trip2['codes']
-                        
-                        # ⚡ ตัวอย่างเฉพาะ 2 สาขาแรก (แทนที่จะ 3) เพื่อความเร็ว
-                        max_distance = 0
-                        for code1 in trip1_codes[:2]:  # ลดเหลือ 2 สาขา
-                            for code2 in trip2_codes[:2]:
-                                lat1, lon1 = coord_cache.get(code1, (None, None))
-                                lat2, lon2 = coord_cache.get(code2, (None, None))
-                                if lat1 and lat2:
-                                    dist = haversine_distance(lat1, lon1, lat2, lon2)
-                                    if dist > max_distance:
-                                        max_distance = dist
-                        
-                        # ถ้าระยะทางไม่เกิน 40 กม. → รวม
-                        if max_distance <= 40:
-                            for code in trip2['codes']:
-                                test_df.loc[test_df['Code'] == code, 'Trip'] = trip1['trip_num']
-                            merge_count += 1
-                            print(f"✅ รวมทริป {trip2['trip_num']} เข้า {trip1['trip_num']} (จังหวัด: {province}, utilization ใหม่: {new_util:.1f}%, ระยะทาง: {max_distance:.1f} กม.)")
-                            trip1['weight'] = new_w
-                            trip1['cube'] = new_c
-                            trip1['branches'] = new_count
-                            trip1['codes'].extend(trip2['codes'])
-                            break
-        
-        if merge_count > 0:
-            print(f"✅ รวมทริปในจังหวัดเดียวกันสำเร็จ: {merge_count} ทริป")
-            
-            # เรียงเลขทริปใหม่อีกครั้ง
-            test_df['Trip'] = test_df['Trip'].fillna(0).astype(int)
-            trip_mapping = {}
-            new_trip_num = 1
-            for old_trip in sorted(test_df[test_df['Trip'] > 0]['Trip'].unique()):
-                trip_mapping[old_trip] = new_trip_num
-                new_trip_num += 1
-            test_df['Trip'] = test_df['Trip'].map(lambda x: trip_mapping.get(x, 0) if x > 0 else 0)
+    # Phase 2.95: รวมทริปในจังหวัดเดียวกัน (DISABLED ชั่วคราว - มีปัญหา indentation)
+    # ===============================================
+    # Phase 2.95: รวมทริปในจังหวัดเดียวกัน (DISABLED ชั่วคราว - มีปัญหา indentation)
+    # ===============================================
+    print("\n⏩ Skip Phase 2.95 (ปิดใช้งานชั่วคราว)")
     
     # ===============================================
     # Post-processing: รวมทริปเล็กและปรับขนาดรถ
