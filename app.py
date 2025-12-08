@@ -2436,8 +2436,14 @@ def predict_trips(test_df, model_data):
             g1_cube = 0
             g2_cube = 0
             
-            max_c = LIMITS[target_vehicle]['max_c']
-            max_branches = LIMITS[target_vehicle]['max_branches']
+            # ดึงค่าจาก LIMITS พร้อมตรวจสอบความสมบูรณ์
+            try:
+                max_c = LIMITS[target_vehicle]['max_c']
+                max_branches = LIMITS[target_vehicle]['max_branches']
+            except (KeyError, TypeError):
+                # ถ้าไม่มีข้อมูลรถ → ข้ามทริปนี้
+                continue
+            
             target_util = 100  # เป้าหมาย 100% ต่อคัน
             
             for idx, row in trip_data.iterrows():
