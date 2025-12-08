@@ -1840,11 +1840,46 @@ def predict_trips(test_df, model_data):
         import re
         if not name:
             return ""
+        
+        # แปลงเป็น lowercase และตัด whitespace
+        name_lower = str(name).strip().lower()
+        
+        # 🆕 Normalize ชื่อสาขาที่คล้ายกัน
+        # Future/ฟิวเจอร์
+        if 'future' in name_lower or 'ฟิวเจอร์' in name_lower or 'ฟิวเจอ' in name_lower:
+            if 'rangsit' in name_lower or 'รังสิต' in name_lower:
+                return "ฟิวเจอร์รังสิต"  # รวมเป็นชื่อเดียว
+        
+        # Lotus/โลตัส
+        if 'lotus' in name_lower or 'โลตัส' in name_lower:
+            # ตัดเลขท้ายออก เช่น โลตัส 1 -> โลตัส
+            base = re.sub(r'\s*\d+\s*$', '', name_lower)
+            return base.strip()
+        
+        # Big C/บิ๊กซี
+        if 'big c' in name_lower or 'bigc' in name_lower or 'บิ๊กซี' in name_lower or 'บิ๊กซ' in name_lower:
+            base = re.sub(r'\s*\d+\s*$', '', name_lower)
+            return base.strip()
+        
+        # Makro/แม็คโคร
+        if 'makro' in name_lower or 'แม็คโคร' in name_lower or 'แมคโคร' in name_lower:
+            base = re.sub(r'\s*\d+\s*$', '', name_lower)
+            return base.strip()
+        
+        # คลอง (คลอง 1, คลอง 2, คลอง 3, ...)
+        if 'คลอง' in name_lower:
+            # ถ้ามีตัวเลข เช่น "คลอง 3" -> "คลอง"
+            if re.search(r'คลอง\s*\d+', name_lower):
+                return "คลอง"
+        
         # ตัดตัวเลขท้ายชื่อและ whitespace
         base = re.sub(r'\s*\d+\s*$', '', str(name).strip())
         # ตัด "สาขา" ออก
         base = re.sub(r'^สาขา\s*', '', base)
-        return base.strip()
+        # ตัด FC_, _FC ออก
+        base = re.sub(r'_FC\d+$', '', base)
+        base = re.sub(r'^FC\s*', '', base)
+        return base.strip().lower()
     
     # 🆕 จัดกลุ่มสาขาตามชื่อเดียวกัน + ตำบลเดียวกัน
     def group_by_name_and_subdistrict(codes):
