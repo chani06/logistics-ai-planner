@@ -2037,16 +2037,17 @@ def predict_trips(test_df, model_data):
         # ⏱️ Early stopping - ถ้าใช้เวลามากกว่า 50 วินาที
         if time.time() - start_time > MAX_PROCESSING_TIME:
             # จัดส่งสาขาที่เหลือเข้าทริปที่ใกล้ที่สุด (แบบเร็ว)
-            for remaining_code in all_codes:
-                closest_trip, _ = find_closest_trip_for_branch(
-                    remaining_code, 
-                    {t: test_df[test_df['Trip'] == t]['Code'].tolist() for t in test_df['Trip'].unique()}
-                )
-                if closest_trip:
-                    test_df.loc[test_df['Code'] == remaining_code, 'Trip'] = closest_trip
-                else:
-                    test_df.loc[test_df['Code'] == remaining_code, 'Trip'] = trip_counter
-                    trip_counter += 1
+            if 'Trip' in test_df.columns:
+                for remaining_code in all_codes:
+                    closest_trip, _ = find_closest_trip_for_branch(
+                        remaining_code, 
+                        {t: test_df[test_df['Trip'] == t]['Code'].tolist() for t in test_df['Trip'].unique() if pd.notna(t)}
+                    )
+                    if closest_trip:
+                        test_df.loc[test_df['Code'] == remaining_code, 'Trip'] = closest_trip
+                    else:
+                        test_df.loc[test_df['Code'] == remaining_code, 'Trip'] = trip_counter
+                        trip_counter += 1
             break
         
         seed_code = all_codes.pop(0)
@@ -2080,6 +2081,11 @@ def predict_trips(test_df, model_data):
         
         # หาสาขาที่ตรงกันทั้งหมดและเพิ่มเข้าทริปทันที
         matching_codes = []
+        
+        # 🔍 Debug: แสดงข้อมูล seed
+        if seed_base_name == "ฟิวเจอร์รังสิต":
+            print(f"\n🔍 Seed: {seed_code} ({seed_base_name}) - ตำบล:{seed_subdistrict} อำเภอ:{seed_district} จังหวัด:{seed_province}")
+        
         for code in all_codes[:]:  # iterate over copy
             code_base_name = get_base_name(test_df[test_df['Code'] == code]['Name'].iloc[0] if 'Name' in test_df.columns else '')
             code_province = get_province(code)
@@ -2094,6 +2100,15 @@ def predict_trips(test_df, model_data):
                     code_subdistrict = str(code_m['ตำบล']).strip() if 'ตำบล' in code_m.index and pd.notna(code_m['ตำบล']) else ''
                     code_district = str(code_m['อำเภอ']).strip() if 'อำเภอ' in code_m.index and pd.notna(code_m['อำเภอ']) else ''
             
+            # 🔍 Debug: แสดงสาขาที่เช็ค
+            if seed_base_name == "ฟิวเจอร์รังสิต" and code_base_name == "ฟิวเจอร์รังสิต":
+                match = (code_base_name == seed_base_name and 
+                        code_subdistrict == seed_subdistrict and 
+                        code_district == seed_district and 
+                        code_province == seed_province and
+                        code_subdistrict != '' and code_district != '')
+                print(f"  → {code} ({code_base_name}) - ตำบล:{code_subdistrict} อำเภอ:{code_district} จังหวัด:{code_province} - Match: {match}")
+            
             # เช็คว่าตรงกันทั้งหมดหรือไม่ (name + subdistrict + district + province)
             if (code_base_name == seed_base_name and 
                 code_subdistrict == seed_subdistrict and 
@@ -2102,6 +2117,11 @@ def predict_trips(test_df, model_data):
                 code_subdistrict != '' and  # ต้องมีข้อมูลตำบล
                 code_district != ''):  # ต้องมีข้อมูลอำเภอ
                 matching_codes.append(code)
+        
+        # 🔍 Debug: แสดงผลลัพธ์
+        if seed_base_name == "ฟิวเจอร์รังสิต":
+            print(f"  ✅ Matching codes: {matching_codes}")
+            print(f"  📦 Trip {trip_counter}: {[seed_code] + matching_codes}")
         
         # เพิ่มสาขาที่ตรงกันทั้งหมดเข้าทริปก่อน
         for code in matching_codes:
@@ -2384,13 +2404,13 @@ def predict_trips(test_df, model_data):
                 if names_are_similar:
                     should_pair = True
                 else:
-                    # กฎ 3: ใช้โมเดล AI ทำนาย (เฉพาะกรณีที่มีข้อมูลจังหวัด)
-                    if seed_province != 'UNKNOWN' and code_province != 'UNKNOWN':
+                    # กฎ 3: ใช้โมเดล AI ทำนาย (เฉพาะกรณีที่มีข้อมูลจังหวัด และมี model)
+                    if model and seed_province != 'UNKNOWN' and code_province != 'UNKNOWN':
                         features = create_pair_features(seed_code, code, branch_info)
                         X = pd.DataFrame([features])
                         should_pair = model.predict(X)[0] == 1
                     else:
-                        should_pair = False  # ไม่ใช้ AI ถ้าไม่มีข้อมูลจังหวัด
+                        should_pair = False  # ไม่ใช้ AI ถ้าไม่มี model หรือข้อมูลจังหวัด
             
             if should_pair:
                 # คำนวณน้ำหนัก/คิวหลังเพิ่มสาขานี้
