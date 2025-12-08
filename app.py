@@ -2870,8 +2870,6 @@ def predict_trips(test_df, model_data):
                                 test_df.loc[test_df['Code'] == code, 'Trip'] = trip1['trip_num']
                             merge_count += 1
                             print(f"✅ รวมทริป {trip2['trip_num']} เข้า {trip1['trip_num']} (จังหวัด: {province}, utilization ใหม่: {new_util:.1f}%, ระยะทาง: {max_distance:.1f} กม.)")
-                            
-                            # อัพเดต trip1 สำหรับรอบถัดไป
                             trip1['weight'] = new_w
                             trip1['cube'] = new_c
                             trip1['branches'] = new_count
