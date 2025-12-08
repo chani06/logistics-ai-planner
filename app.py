@@ -1851,12 +1851,13 @@ def predict_trips(test_df, model_data):
         """
         จัดกลุ่มสาขาตามลำดับ:
         1. ชื่อเหมือนกัน + ตำบลเดียวกัน (สำคัญที่สุด)
-        2. ชื่อเหมือนกัน (ไม่สนตำบล)
-        3. ตำบลเดียวกัน (ไม่สนชื่อ)
-        4. ที่เหลือ
+        2. ชื่อเหมือนกัน + จังหวัดเดียวกัน
+        3. จังหวัด + อำเภอเดียวกัน (🆕 เพิ่มเพื่อรวมสาขาในเขตเดียวกัน)
+        4. จังหวัดเดียวกัน
+        5. ที่เหลือ
         """
         # สร้าง key สำหรับจัดกลุ่ม
-        groups = {}  # key: (base_name, subdistrict) -> [codes]
+        groups = {}  # key: (priority, province, district, base_name, subdistrict) -> [codes]
         
         for code in codes:
             name = name_cache.get(code, '')
@@ -1865,22 +1866,30 @@ def predict_trips(test_df, model_data):
             district = district_cache.get(code, '')
             province = province_cache.get(code, '')
             
-            # สร้าง group key - ชื่อ + ตำบล (ถ้ามี)
-            if base_name and subdistrict:
-                key = (base_name, subdistrict, province)
-            elif base_name:
-                key = (base_name, '', province)
-            elif subdistrict:
-                key = ('', subdistrict, province)
+            # สร้าง group key - ใช้ลำดับความสำคัญ
+            if base_name and subdistrict and province:
+                # ลำดับ 1: ชื่อ + ตำบล + จังหวัด
+                key = (1, province, district, base_name, subdistrict)
+            elif base_name and province:
+                # ลำดับ 2: ชื่อ + จังหวัด
+                key = (2, province, '', base_name, '')
+            elif province and district:
+                # ลำดับ 3: จังหวัด + อำเภอ (🆕 รวมสาขาในอำเภอเดียวกัน)
+                key = (3, province, district, '', '')
+            elif province:
+                # ลำดับ 4: จังหวัดเดียวกัน
+                key = (4, province, '', '', '')
             else:
-                key = ('', '', province if province else code)  # ถ้าไม่มีข้อมูล ให้ใช้ code เป็น key
+                # ลำดับ 5: ที่เหลือ
+                key = (5, province if province else code, '', '', '')
             
             if key not in groups:
                 groups[key] = []
             groups[key].append(code)
         
-        # เรียงลำดับกลุ่ม: กลุ่มที่มีสมาชิกมากมาก่อน, แล้วเรียงตามระยะจาก DC
+        # เรียงลำดับกลุ่ม: priority → ระยะเฉลี่ยจาก DC → จำนวนสมาชิก
         def group_sort_key(key):
+            priority = key[0]
             group_codes = groups[key]
             # หาระยะเฉลี่ยของกลุ่มจาก DC
             distances = []
@@ -1889,7 +1898,7 @@ def predict_trips(test_df, model_data):
                 if lat and lon:
                     distances.append(calculate_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon))
             avg_dist = sum(distances) / len(distances) if distances else 9999
-            return (avg_dist, -len(group_codes))  # ใกล้ก่อน, มากก่อน
+            return (priority, avg_dist, -len(group_codes))  # priority → ใกล้ก่อน → มากก่อน
         
         sorted_keys = sorted(groups.keys(), key=group_sort_key)
         
