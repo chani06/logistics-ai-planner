@@ -1978,14 +1978,18 @@ def predict_trips(test_df, model_data):
             
             has_history = pair in trip_pairs
             
-            # เช็คจังหวัด (ยกเว้นกรณีตำบลใกล้กัน)
+            # 🔒 เช็คจังหวัดว่าอยู่ภูมิภาคเดียวกันหรือไม่ (ป้องกันการกระโดดข้ามภูมิภาค)
             different_province = False
             if seed_province == 'UNKNOWN' or code_province == 'UNKNOWN':
-                # ไม่มีข้อมูลจังหวัด - อนุญาตเฉพาะชื่อคล้ายกัน
-                if not names_are_similar:
+                # ไม่มีข้อมูลจังหวัด - อนุญาตเฉพาะชื่อคล้ายกันหรือมีประวัติ
+                if not names_are_similar and not has_history:
                     continue
             elif seed_province != code_province:
-                # ต่างจังหวัด - ยกเว้นถ้าตำบลใกล้กัน (จะเช็คทีหลัง)
+                # ต่างจังหวัด → เช็คว่าอยู่กลุ่มใกล้เคียงกันหรือไม่
+                if not is_nearby_province(seed_province, code_province):
+                    # ไม่ใช่จังหวัดใกล้เคียง (คนละภูมิภาค) → ข้าม (ยกเว้นมีประวัติร่วม)
+                    if not has_history:
+                        continue
                 different_province = True
             
             # ตรวจสอบความเหมาะสมในการรวมกลุ่ม
@@ -2688,6 +2692,14 @@ def predict_trips(test_df, model_data):
             trip_num = merge_trip['trip_num']
             codes = merge_trip['codes']
             
+            # หาจังหวัดของทริปที่จะรวม
+            merge_provinces = set()
+            for code in codes:
+                if 'Province' in test_df.columns:
+                    prov = test_df[test_df['Code'] == code]['Province'].iloc[0] if len(test_df[test_df['Code'] == code]) > 0 else None
+                    if prov and str(prov).strip() and prov != 'UNKNOWN':
+                        merge_provinces.add(prov)
+            
             # หาทริปที่เหมาะสมที่สุดสำหรับรวม
             best_target_trip = None
             best_new_util = 999
@@ -2700,6 +2712,28 @@ def predict_trips(test_df, model_data):
                 target_w = target_data['Weight'].sum()
                 target_c = target_data['Cube'].sum()
                 target_count = len(target_data)
+                
+                # 🔒 เช็คจังหวัดว่าอยู่กลุ่มเดียวกันหรือไม่
+                target_provinces = set()
+                for code in target_data['Code'].values:
+                    if 'Province' in test_df.columns:
+                        prov = test_df[test_df['Code'] == code]['Province'].iloc[0] if len(test_df[test_df['Code'] == code]) > 0 else None
+                        if prov and str(prov).strip() and prov != 'UNKNOWN':
+                            target_provinces.add(prov)
+                
+                # เช็คว่าจังหวัดในทริปที่จะรวม กับ ทริปเป้าหมาย อยู่กลุ่มเดียวกันหรือไม่
+                provinces_compatible = True
+                for merge_prov in merge_provinces:
+                    for target_prov in target_provinces:
+                        if not is_nearby_province(merge_prov, target_prov):
+                            provinces_compatible = False
+                            break
+                    if not provinces_compatible:
+                        break
+                
+                # ถ้าจังหวัดไม่อยู่กลุ่มเดียวกัน → ข้าม
+                if not provinces_compatible:
+                    continue
                 
                 # คำนวณ utilization ถ้ารวมกัน
                 new_w = target_w + merge_trip['weight']
@@ -3215,13 +3249,26 @@ def predict_trips(test_df, model_data):
                     continue
                 
                 # เช็คว่าอยู่ในจังหวัดเดียวกันหรือใกล้เคียง
-                if branch_prov not in trip_provinces:
-                    # เช็คระยะทางจากทุกสาขาในทริป
-                    min_distance = float('inf')
-                    for trip_lat, trip_lon in trip_coords:
-                        dist = haversine_distance(trip_lat, trip_lon, branch_lat, branch_lon)
-                        if dist < min_distance:
-                            min_distance = dist
+                province_compatible = False
+                if branch_prov in trip_provinces:
+                    province_compatible = True
+                else:
+                    # 🔒 เช็คว่าจังหวัดสาขาอยู่กลุ่มเดียวกันกับจังหวัดในทริปหรือไม่
+                    for trip_prov in trip_provinces:
+                        if is_nearby_province(branch_prov, trip_prov):
+                            province_compatible = True
+                            break
+                
+                # ถ้าจังหวัดไม่อยู่กลุ่มเดียวกัน → ข้าม
+                if not province_compatible:
+                    continue
+                
+                # เช็คระยะทางจากทุกสาขาในทริป
+                min_distance = float('inf')
+                for trip_lat, trip_lon in trip_coords:
+                    dist = haversine_distance(trip_lat, trip_lon, branch_lat, branch_lon)
+                    if dist < min_distance:
+                        min_distance = dist
                     
                 # เช็ควา่อยู่ตำบลเดียวกันหรือไม่
                     branch_row = MASTER_DATA[MASTER_DATA['Plan Code'] == branch_code]
