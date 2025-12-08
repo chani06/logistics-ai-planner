@@ -2886,7 +2886,9 @@ def predict_trips(test_df, model_data):
             for old_trip in sorted(test_df[test_df['Trip'] > 0]['Trip'].unique()):
                 trip_mapping[old_trip] = new_trip_num
                 new_trip_num += 1
-            test_df['Trip'] = test_df['Trip'].map(lambda x: trip_mapping.get(x, 0) if x > 0 else 0)    # ===============================================
+            test_df['Trip'] = test_df['Trip'].map(lambda x: trip_mapping.get(x, 0) if x > 0 else 0)
+    
+    # ===============================================
     # Post-processing: รวมทริปเล็กและปรับขนาดรถ
     # ===============================================
     # กำลังปรับปรุงการจัดทริป
