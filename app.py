@@ -2306,6 +2306,79 @@ def predict_trips(test_df, model_data):
     test_df['Trip'] = test_df['Code'].map(assigned_trips)
     
     # ===============================================
+    # 🆕 ตรวจสอบสาขาที่ยังไม่มีทริป และจัดให้ครบทุกสาขา
+    # ===============================================
+    unassigned_codes = test_df[test_df['Trip'].isna()]['Code'].tolist()
+    
+    if unassigned_codes:
+        # จัดสาขาที่ยังไม่มีทริปเข้าทริปที่ใกล้ที่สุด หรือสร้างทริปใหม่
+        for code in unassigned_codes:
+            code_lat, code_lon = coord_cache.get(code, (None, None))
+            code_province = province_cache.get(code, 'UNKNOWN')
+            code_weight = test_df[test_df['Code'] == code]['Weight'].sum()
+            code_cube = test_df[test_df['Code'] == code]['Cube'].sum()
+            
+            best_trip = None
+            best_score = float('inf')
+            
+            # หาทริปที่ใกล้ที่สุดและรับสาขานี้ได้
+            for trip_num in test_df['Trip'].dropna().unique():
+                trip_data = test_df[test_df['Trip'] == trip_num]
+                trip_codes = trip_data['Code'].tolist()
+                trip_weight = trip_data['Weight'].sum()
+                trip_cube = trip_data['Cube'].sum()
+                
+                # เช็คจังหวัดเดียวกัน
+                trip_provinces = set()
+                for tc in trip_codes:
+                    tp = province_cache.get(tc, 'UNKNOWN')
+                    if tp != 'UNKNOWN':
+                        trip_provinces.add(tp)
+                
+                # ต้องจังหวัดเดียวกัน หรือไม่มีข้อมูลจังหวัด
+                if code_province != 'UNKNOWN' and trip_provinces and code_province not in trip_provinces:
+                    continue
+                
+                # เช็คว่าใส่รถได้หรือไม่ (ใช้ 6W เป็น limit)
+                new_weight = trip_weight + code_weight
+                new_cube = trip_cube + code_cube
+                new_util = max((new_weight / LIMITS['6W']['max_w']) * 100,
+                              (new_cube / LIMITS['6W']['max_c']) * 100)
+                
+                if new_util > 120:  # เกิน 120% ไม่รับ
+                    continue
+                
+                # เช็คจำนวนสาขา
+                if len(trip_codes) >= MAX_BRANCHES_PER_TRIP:
+                    continue
+                
+                # คำนวณระยะทางเฉลี่ยไปสาขาในทริป
+                if code_lat:
+                    distances = []
+                    for tc in trip_codes:
+                        tc_lat, tc_lon = coord_cache.get(tc, (None, None))
+                        if tc_lat:
+                            dist = haversine_distance(code_lat, code_lon, tc_lat, tc_lon)
+                            distances.append(dist)
+                    
+                    if distances:
+                        avg_dist = sum(distances) / len(distances)
+                        # เลือกทริปที่ใกล้ที่สุด
+                        if avg_dist < best_score:
+                            best_score = avg_dist
+                            best_trip = trip_num
+            
+            if best_trip is not None:
+                # จัดเข้าทริปที่ใกล้ที่สุด
+                test_df.loc[test_df['Code'] == code, 'Trip'] = best_trip
+                assigned_trips[code] = best_trip
+            else:
+                # ไม่มีทริปที่เหมาะสม → สร้างทริปใหม่
+                test_df.loc[test_df['Code'] == code, 'Trip'] = trip_counter
+                assigned_trips[code] = trip_counter
+                trip_counter += 1
+    
+    # ===============================================
     # 🔒 Post-processing: สลับสาขาให้อยู่ทริปที่ใกล้กันที่สุด (FAST)
     # ===============================================
     def optimize_branch_placement():
@@ -2840,8 +2913,8 @@ def predict_trips(test_df, model_data):
             if not trip_coords:
                 continue
             
-            # หาสาขาที่ยังไม่ได้จัดทริป (Trip = 0)
-            unassigned = test_df[test_df['Trip'] == 0]
+            # หาสาขาที่ยังไม่ได้จัดทริป (Trip = 0 หรือ NaN)
+            unassigned = test_df[(test_df['Trip'] == 0) | (test_df['Trip'].isna())]
             
             for idx, row in unassigned.iterrows():
                 branch_code = row['Code']
