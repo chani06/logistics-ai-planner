@@ -1882,16 +1882,18 @@ def predict_trips(test_df, model_data):
         base = re.sub(r'^FC\s*', '', base)
         return base.strip().lower()
     
-    # 🆕 จัดกลุ่มสาขาตามชื่อเดียวกัน + ตำบลเดียวกัน
+    # 🆕 จัดกลุ่มสาขาตามชื่อเดียวกัน + ตำบลเดียวกัน + เรียงตามระยะทาง nearest neighbor
     def group_by_name_and_subdistrict(codes):
         """
-        จัดกลุ่มสาขาตามลำดับ (ปรับใหม่):
+        จัดกลุ่มสาขาตามลำดับ แล้วเรียงตามระยะทาง nearest neighbor:
         1. ชื่อเหมือนกัน + ตำบลเดียวกัน + จังหวัดเดียวกัน (สำคัญที่สุด)
-        2. ชื่อเหมือนกัน + จังหวัดเดียวกัน (🔥 สำคัญรองลงมา - ให้สาขาชื่อเดียวกันอยู่ด้วยกัน)
-        3. ชื่อเหมือนกัน (ต่างจังหวัด แต่ชื่อเดียวกัน)
+        2. ชื่อเหมือนกัน + จังหวัดเดียวกัน
+        3. ชื่อเหมือนกัน (ต่างจังหวัด)
         4. จังหวัด + อำเภอเดียวกัน
         5. จังหวัดเดียวกัน
         6. ที่เหลือ
+        
+        🆕 เรียงกลุ่มตามระยะทาง: เริ่มจากใกล้ DC → nearest neighbor ไปเรื่อยๆ
         """
         # สร้าง key สำหรับจัดกลุ่ม
         groups = {}  # key: (priority, province, district, base_name, subdistrict) -> [codes]
@@ -1927,28 +1929,100 @@ def predict_trips(test_df, model_data):
                 groups[key] = []
             groups[key].append(code)
         
-        # เรียงลำดับกลุ่ม: priority → ระยะเฉลี่ยจาก DC → จำนวนสมาชิก
-        def group_sort_key(key):
-            priority = key[0]
-            group_codes = groups[key]
-            # หาระยะเฉลี่ยของกลุ่มจาก DC
-            distances = []
+        # 🆕 เรียงกลุ่มด้วย nearest neighbor approach
+        # เริ่มจากกลุ่มที่ใกล้ DC ที่สุด แล้วหากลุ่มถัดไปที่ใกล้ที่สุด
+        result = []
+        remaining_groups = list(groups.items())  # [(key, [codes]), ...]
+        
+        # หาตำแหน่งเฉลี่ยของแต่ละกลุ่ม
+        def get_group_center(group_codes):
+            lats, lons = [], []
             for code in group_codes:
                 lat, lon = coord_cache.get(code, (None, None))
                 if lat and lon:
-                    distances.append(calculate_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon))
-            avg_dist = sum(distances) / len(distances) if distances else 9999
-            return (priority, avg_dist, -len(group_codes))  # priority → ใกล้ก่อน → มากก่อน
+                    lats.append(lat)
+                    lons.append(lon)
+            if lats and lons:
+                return (sum(lats) / len(lats), sum(lons) / len(lons))
+            return (None, None)
         
-        sorted_keys = sorted(groups.keys(), key=group_sort_key)
+        # เริ่มจากกลุ่มที่ใกล้ DC ที่สุด
+        if remaining_groups:
+            # หากลุ่มที่ใกล้ DC ที่สุด
+            def dist_from_dc(item):
+                key, group_codes = item
+                priority = key[0]
+                center_lat, center_lon = get_group_center(group_codes)
+                if center_lat and center_lon:
+                    dist = calculate_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, center_lat, center_lon)
+                    return (priority, dist)  # เรียงตาม priority ก่อน แล้วระยะทาง
+                return (priority, 9999)
+            
+            remaining_groups.sort(key=dist_from_dc)
+            current_key, current_group = remaining_groups.pop(0)
+            
+            # เรียงสมาชิกในกลุ่มแรกตาม nearest neighbor
+            group_sorted = sort_by_distance_from_dc(current_group)
+            ordered = build_route_nearest_neighbor(group_sorted)
+            result.extend(ordered)
+            
+            # หากลุ่มถัดไปที่ใกล้กับกลุ่มปัจจุบันที่สุด
+            while remaining_groups:
+                # ใช้ตำแหน่งสุดท้ายของ result เป็นจุดอ้างอิง
+                last_code = result[-1] if result else None
+                last_lat, last_lon = coord_cache.get(last_code, (None, None)) if last_code else (DC_WANG_NOI_LAT, DC_WANG_NOI_LON)
+                
+                if not last_lat:
+                    last_lat, last_lon = DC_WANG_NOI_LAT, DC_WANG_NOI_LON
+                
+                # หากลุ่มที่ใกล้ที่สุด
+                def dist_from_last(item):
+                    key, group_codes = item
+                    priority = key[0]
+                    center_lat, center_lon = get_group_center(group_codes)
+                    if center_lat and center_lon:
+                        dist = calculate_distance(last_lat, last_lon, center_lat, center_lon)
+                        return (priority, dist)  # priority ก่อน แล้วระยะทาง
+                    return (priority, 9999)
+                
+                remaining_groups.sort(key=dist_from_last)
+                next_key, next_group = remaining_groups.pop(0)
+                
+                # เรียงสมาชิกในกลุ่มตาม nearest neighbor จากจุดสุดท้าย
+                ordered_group = build_route_nearest_neighbor_from_point(next_group, last_lat, last_lon)
+                result.extend(ordered_group)
         
-        # รวมกลุ่มที่เรียงแล้ว โดยเรียงสมาชิกในกลุ่มตาม nearest neighbor
+        return result
+    
+    # 🆕 ฟังก์ชัน nearest neighbor เริ่มจากจุดที่กำหนด
+    def build_route_nearest_neighbor_from_point(codes, start_lat, start_lon):
+        if not codes:
+            return []
+        
         result = []
-        for key in sorted_keys:
-            group_codes = groups[key]
-            # เรียงสมาชิกในกลุ่มตามระยะจาก DC ก่อน แล้ว nearest neighbor
-            group_sorted = sort_by_distance_from_dc(group_codes)
-            result.extend(build_route_nearest_neighbor(group_sorted))
+        remaining = codes[:]
+        current_lat, current_lon = start_lat, start_lon
+        
+        while remaining:
+            # หาสาขาที่ใกล้ที่สุดจากจุดปัจจุบัน
+            nearest = None
+            min_dist = float('inf')
+            for code in remaining:
+                lat, lon = coord_cache.get(code, (None, None))
+                if lat and lon:
+                    dist = calculate_distance(current_lat, current_lon, lat, lon)
+                    if dist < min_dist:
+                        min_dist = dist
+                        nearest = code
+            
+            if nearest:
+                result.append(nearest)
+                remaining.remove(nearest)
+                current_lat, current_lon = coord_cache.get(nearest, (current_lat, current_lon))
+            else:
+                # ไม่มีพิกัด ให้เพิ่มไปเลย
+                result.extend(remaining)
+                break
         
         return result
     
@@ -2082,7 +2156,7 @@ def predict_trips(test_df, model_data):
                     if seed_district and code_district and seed_district == code_district:
                         same_district = True
             
-            # 🎯 ลำดับความสำคัญ: ตำบลเดียวกัน → ตำบลต่างแต่ใกล้กัน → ชื่อ+ระยะทาง → ระยะทาง
+            # 🎯 ลำดับความสำคัญ: ตำบล → ชื่อ+ระยะทาง → ระยะทาง
             
             # ✅ ลำดับ 0: ตำบลเดียวกัน + ชื่อเดียวกัน - ต้องอยู่ด้วยกันแน่นอน
             if same_subdistrict and names_similar:
@@ -2092,24 +2166,24 @@ def predict_trips(test_df, model_data):
             if same_subdistrict:
                 return (1, dist_from_seed, code_index)
             
-            # 🆕 ลำดับ 2: ต่างตำบลแต่ใกล้กันมาก (< 5km) - ตำบลข้างเคียง
-            if not same_subdistrict and dist_from_seed < 5:
+            # ✅ ลำดับ 2: ชื่อเดียวกัน + อำเภอเดียวกัน
+            if names_similar and same_district:
                 return (2, dist_from_seed, code_index)
             
-            # ✅ ลำดับ 3: ชื่อเดียวกัน + อำเภอเดียวกัน (แม้ต่างตำบล)
-            if names_similar and same_district:
+            # ✅ ลำดับ 3: ชื่อเดียวกัน + ใกล้มาก (< 10km)
+            if names_similar and dist_from_seed < 10:
                 return (3, dist_from_seed, code_index)
             
-            # 🆕 ลำดับ 4: ต่างตำบลแต่อำเภอเดียวกัน + ใกล้กัน (< 10km)
+            # ✅ ลำดับ 4: อำเภอเดียวกัน + ใกล้มาก (< 10km)
             if same_district and dist_from_seed < 10:
                 return (4, dist_from_seed, code_index)
             
-            # ✅ ลำดับ 5: ชื่อเดียวกัน + ใกล้มาก (< 10km)
-            if names_similar and dist_from_seed < 10:
+            # ✅ ลำดับ 5: ใกล้มากๆ (< 5km) - ห้ามข้าม!
+            if dist_from_seed < 5:
                 return (5, dist_from_seed, code_index)
             
-            # 🆕 ลำดับ 6: ต่างตำบลแต่ใกล้พอสมควร (5-15km)
-            if dist_from_seed >= 5 and dist_from_seed < 15:
+            # ✅ ลำดับ 6: ใกล้พอสมควร (5-15km) - เส้นทางต่อเนื่อง
+            if dist_from_seed < 15:
                 return (6, dist_from_seed, code_index)
             
             # ✅ ลำดับ 7: ชื่อคล้ายกัน + ไม่ไกลมาก (15-25km)
