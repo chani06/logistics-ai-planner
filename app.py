@@ -94,6 +94,40 @@ def load_master_data():
 # โหลด Master Data
 MASTER_DATA = load_master_data()
 
+# ==========================================
+# LOAD BOOKING HISTORY FULL DATA
+# ==========================================
+@st.cache_data(ttl=7200)
+def load_booking_history_full():
+    """โหลดประวัติ Booking ทั้งหมด เพื่อแสดงเลข Booking ในตาราง"""
+    try:
+        possible_files = [
+            'Dc/ประวัติงานจัดส่ง DC วังน้อย(1).xlsx',
+            'Dc/ประวัติงานจัดส่ง DC วังน้อย.xlsx'
+        ]
+        
+        for path in possible_files:
+            if os.path.exists(path):
+                df = pd.read_excel(path)
+                # สร้าง mapping รหัสสาขา -> Booking Numbers
+                branch_bookings = {}
+                for _, row in df.iterrows():
+                    code = str(row.get('รหัสสาขา', '')).strip().upper()
+                    booking_no = str(row.get('Booking No', '')).strip()
+                    if code and booking_no:
+                        if code not in branch_bookings:
+                            branch_bookings[code] = []
+                        if booking_no not in branch_bookings[code]:
+                            branch_bookings[code].append(booking_no)
+                
+                return branch_bookings
+        
+        return {}
+    except Exception as e:
+        return {}
+
+BOOKING_HISTORY_FULL = load_booking_history_full()
+
 @st.cache_data(ttl=3600)  # Cache 1 ชั่วโมง
 def load_booking_history_restrictions():
     """โหลดประวัติการจัดส่งจาก Booking History - ข้อมูลจริง 3,053 booking (Optimized)"""
@@ -4834,8 +4868,22 @@ def main():
                                 height=500
                             )
                             
-                            # ตารางรายละเอียดทั้งหมด (เพิ่มอำเภอ ตำบล)
+                            # ตารางรายละเอียดทั้งหมด (เพิ่มอำเภอ ตำบล + Booking Numbers)
                             with st.expander("📋 ดูรายละเอียดรายสาขา (ทั้งหมด)", expanded=False):
+                                # เพิ่มคอลัมน์ Booking Numbers จากประวัติ
+                                def get_booking_numbers(code):
+                                    """ดึงเลข Booking จากประวัติ"""
+                                    code_upper = str(code).strip().upper()
+                                    if code_upper in BOOKING_HISTORY_FULL:
+                                        bookings = BOOKING_HISTORY_FULL[code_upper]
+                                        # แสดง 3 เลขแรก (ถ้ามีมาก)
+                                        if len(bookings) > 3:
+                                            return ', '.join(bookings[:3]) + f' (+{len(bookings)-3})'
+                                        return ', '.join(bookings)
+                                    return '-'
+                                
+                                result_df['BookingHistory'] = result_df['Code'].apply(get_booking_numbers)
+                                
                                 # จัดเรียงคอลัมน์ที่สำคัญ
                                 display_cols = ['Trip', 'Code', 'Name']
                                 if 'Province' in result_df.columns:
@@ -4849,6 +4897,8 @@ def main():
                                 display_cols.extend(['Weight', 'Cube', 'Truck'])
                                 if 'Distance_from_DC' in result_df.columns:
                                     display_cols.append('Distance_from_DC')
+                                if 'BookingHistory' in result_df.columns:
+                                    display_cols.append('BookingHistory')
                                 if 'VehicleCheck' in result_df.columns:
                                     display_cols.append('VehicleCheck')
                                 
@@ -4869,6 +4919,7 @@ def main():
                                     'Cube': 'ปริมาตร(m³)', 
                                     'Truck': 'รถ',
                                     'Distance_from_DC': 'ระยะจาก DC(km)',
+                                    'BookingHistory': '📜 Booking No',
                                     'VehicleCheck': 'สถานะ'
                                 }
                                 display_df.columns = [col_names.get(c, c) for c in display_cols]
