@@ -2901,190 +2901,190 @@ def predict_trips(test_df, model_data):
             
             # 🔒 เช็คจังหวัด - สำคัญมาก! ห้าม 6W ในปริมณฑล
             provinces = set()
-        for code in trip_codes:
-            prov = get_province(code)
-            if prov and prov != 'UNKNOWN':
-                provinces.add(prov)
-        
-        # เช็คว่าทุกจังหวัดเป็นพื้นที่ใกล้หรือไม่
-        all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
-        has_north = any(get_region_type(p) == 'north' for p in provinces) if provinces else False
-        has_south = any(get_region_type(p) == 'south' for p in provinces) if provinces else False
-        
-        # คำนวณระยะทาง max จาก DC
-        max_distance_from_dc = 0
-        for code in trip_codes:
-            lat, lon = coord_cache.get(code, (None, None))
-            if lat and lon:
-                dist = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
-                max_distance_from_dc = max(max_distance_from_dc, dist)
-        
-        # ตรวจสอบข้อจำกัดสาขา
-        max_allowed = get_max_vehicle_for_trip(trip_codes)
-        
-        # ⚠️ สำคัญ: ถ้าทุกจังหวัดเป็น nearby → ห้าม 6W เด็ดขาด!
-        if all_nearby:
-            very_far = False  # บังคับให้ไม่ใช้ 6W
-            if max_allowed == '6W':
-                max_allowed = 'JB'  # บังคับขอบเขตเป็น JB
-        # ⚠️ ภาคเหนือและภาคใต้ → บังคับใช้ 6W
-        elif has_north or has_south:
-            very_far = True  # บังคับให้ใช้ 6W
-        else:
-            # 🚛 เช็คระยะทาง - ไกลมากพิเศษ (>300km) ต้องใช้ 6W
-            very_far_by_distance = max_distance_from_dc > 300
-            very_far = very_far_by_distance
-        
-        # คำนวณ % การใช้รถแต่ละประเภท
-        util_4w = max((total_w / LIMITS['4W']['max_w']) * 100, 
-                      (total_c / LIMITS['4W']['max_c']) * 100)
-        util_jb = max((total_w / LIMITS['JB']['max_w']) * 100,
-                      (total_c / LIMITS['JB']['max_c']) * 100)
-        util_6w = max((total_w / LIMITS['6W']['max_w']) * 100,
-                      (total_c / LIMITS['6W']['max_c']) * 100)
-        
-        # 🔒 ไม่ต้องเรียก get_max_vehicle_for_trip อีก - ใช้ค่าที่บังคับ all_nearby แล้ว
-        
-        # 🎯 กลยุทธ์เลือกรถ (เริ่มจาก 4W → JB → แยก 2 คัน/6W)
-        recommended = None
-        cube_util_4w = (total_c / LIMITS['4W']['max_c']) * 100
-        cube_util_jb = (total_c / LIMITS['JB']['max_c']) * 100
-        cube_util_6w = (total_c / LIMITS['6W']['max_c']) * 100
-        weight_util_4w = (total_w / LIMITS['4W']['max_w']) * 100
-        weight_util_jb = (total_w / LIMITS['JB']['max_w']) * 100
-        weight_util_6w = (total_w / LIMITS['6W']['max_w']) * 100
-        
-        # 🚨 ตรวจสอบข้อจำกัดสาขาก่อน
-        if max_allowed == '4W':
-            # ลำดับ 1: ลอง 4W ก่อน (95-130%)
-            if 95 <= cube_util_4w <= 130 and weight_util_4w <= 130 and branch_count <= 12:
-                recommended = '4W'
-            # ลำดับ 2: ถ้า 4W ไม่พอดี → แยกเป็น 4W + 4W (75-95% ต่อคัน)
-            elif cube_util_4w > 130:
-                # จะแยกใน Phase 2.5
-                recommended = '4W+4W'
+            for code in trip_codes:
+                prov = get_province(code)
+                if prov and prov != 'UNKNOWN':
+                    provinces.add(prov)
+            
+            # เช็คว่าทุกจังหวัดเป็นพื้นที่ใกล้หรือไม่
+            all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
+            has_north = any(get_region_type(p) == 'north' for p in provinces) if provinces else False
+            has_south = any(get_region_type(p) == 'south' for p in provinces) if provinces else False
+            
+            # คำนวณระยะทาง max จาก DC
+            max_distance_from_dc = 0
+            for code in trip_codes:
+                lat, lon = coord_cache.get(code, (None, None))
+                if lat and lon:
+                    dist = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
+                    max_distance_from_dc = max(max_distance_from_dc, dist)
+            
+            # ตรวจสอบข้อจำกัดสาขา
+            max_allowed = get_max_vehicle_for_trip(trip_codes)
+            
+            # ⚠️ สำคัญ: ถ้าทุกจังหวัดเป็น nearby → ห้าม 6W เด็ดขาด!
+            if all_nearby:
+                very_far = False  # บังคับให้ไม่ใช้ 6W
+                if max_allowed == '6W':
+                    max_allowed = 'JB'  # บังคับขอบเขตเป็น JB
+            # ⚠️ ภาคเหนือและภาคใต้ → บังคับใช้ 6W
+            elif has_north or has_south:
+                very_far = True  # บังคับให้ใช้ 6W
             else:
-                # ต่ำกว่า 95% → ใช้ 4W (แต่อาจรวมกับทริปอื่นภายหลัง)
-                recommended = '4W'
-        elif max_allowed == 'JB':
-            # ลำดับ 1: ลอง 4W ก่อน (95-130%)
-            if 95 <= cube_util_4w <= 130 and weight_util_4w <= 130 and branch_count <= 12:
-                recommended = '4W'
-            # ลำดับ 2: ลอง JB (95-130%)
-            elif 95 <= cube_util_jb <= 130 and weight_util_jb <= 130 and branch_count <= 12:
-                recommended = 'JB'
-            # ลำดับ 3: แยกเป็น JB + 4W หรือ JB + JB (75-95% ต่อคัน)
-            elif cube_util_jb > 130:
-                # ลองแยกเป็น JB + 4W (13 cube max)
-                if total_c <= 13:
-                    recommended = 'JB+4W'
-                else:
-                    recommended = 'JB+JB'  # 16 cube max
-            else:
-                # ต่ำกว่า 95% → ใช้ JB หรือ 4W
-                if cube_util_jb >= 75:
-                    recommended = 'JB'
-                else:
+                # 🚛 เช็คระยะทาง - ไกลมากพิเศษ (>300km) ต้องใช้ 6W
+                very_far_by_distance = max_distance_from_dc > 300
+                very_far = very_far_by_distance
+            
+            # คำนวณ % การใช้รถแต่ละประเภท
+            util_4w = max((total_w / LIMITS['4W']['max_w']) * 100, 
+                          (total_c / LIMITS['4W']['max_c']) * 100)
+            util_jb = max((total_w / LIMITS['JB']['max_w']) * 100,
+                          (total_c / LIMITS['JB']['max_c']) * 100)
+            util_6w = max((total_w / LIMITS['6W']['max_w']) * 100,
+                          (total_c / LIMITS['6W']['max_c']) * 100)
+            
+            # 🔒 ไม่ต้องเรียก get_max_vehicle_for_trip อีก - ใช้ค่าที่บังคับ all_nearby แล้ว
+            
+            # 🎯 กลยุทธ์เลือกรถ (เริ่มจาก 4W → JB → แยก 2 คัน/6W)
+            recommended = None
+            cube_util_4w = (total_c / LIMITS['4W']['max_c']) * 100
+            cube_util_jb = (total_c / LIMITS['JB']['max_c']) * 100
+            cube_util_6w = (total_c / LIMITS['6W']['max_c']) * 100
+            weight_util_4w = (total_w / LIMITS['4W']['max_w']) * 100
+            weight_util_jb = (total_w / LIMITS['JB']['max_w']) * 100
+            weight_util_6w = (total_w / LIMITS['6W']['max_w']) * 100
+            
+            # 🚨 ตรวจสอบข้อจำกัดสาขาก่อน
+            if max_allowed == '4W':
+                # ลำดับ 1: ลอง 4W ก่อน (95-130%)
+                if 95 <= cube_util_4w <= 130 and weight_util_4w <= 130 and branch_count <= 12:
                     recommended = '4W'
-        # 🚛 กรุงเทพ+ปริมณฑล (nearby) → บังคับห้าม 6W (ลำดับแรกสุด!)
-        elif all_nearby:
-            # ลอง 4W ก่อน
-            if cube_util_4w <= 120 and weight_util_4w <= 130:
-                recommended = '4W'
-            # ถ้า 4W ไม่พอ → ลอง JB
-            elif cube_util_jb <= 130 and weight_util_jb <= 130:
-                recommended = 'JB'
-                region_changes['nearby_6w_to_jb'] += 1
-            # ถ้า JB ก็ไม่พอ → ต้องแยกทริป (จะแยกใน Phase 2.5)
-            else:
-                recommended = 'JB'  # กำหนดไว้ก่อน จะแยกภายหลัง
-                region_changes['nearby_6w_to_jb'] += 1
-        # 🚛 ภาคเหนือทั้งหมด → บังคับใช้ 6W เท่านั้น
-        elif has_north:
-            recommended = '6W'
-            region_changes['far_keep_6w'] += 1
-        # 🚛 ภาคใต้ทั้งหมด → บังคับใช้ 6W เท่านั้น
-        elif has_south:
-            recommended = '6W'
-            region_changes['far_keep_6w'] += 1
-        else:
-            # 🎯 พื้นที่ไกล (far) - ยืดหยุ่น ใช้ JB ได้ถ้าเหมาะสม
-            # เป้าหมาย: Cube 95-130%, ห้ามรถเหลือ % ต่ำ (< 75%)
-            
-            MIN_UTIL = 75   # ขั้นต่ำ - ห้ามรถเหลือต่ำกว่านี้
-            TARGET_MIN = 95 # เป้าหมายขั้นต่ำ
-            TARGET_MAX = 130 # เป้าหมายสูงสุด
-            
-            # 🎯 กลยุทธ์: เลือกรถที่ Cube พอดีที่สุด (95-130%)
-            
-            # 1. ถ้า 6W เต็มพอดี (95-130%) → ใช้ 6W ✅
-            if TARGET_MIN <= cube_util_6w <= TARGET_MAX and weight_util_6w <= TARGET_MAX:
+                # ลำดับ 2: ถ้า 4W ไม่พอดี → แยกเป็น 4W + 4W (75-95% ต่อคัน)
+                elif cube_util_4w > 130:
+                    # จะแยกใน Phase 2.5
+                    recommended = '4W+4W'
+                else:
+                    # ต่ำกว่า 95% → ใช้ 4W (แต่อาจรวมกับทริปอื่นภายหลัง)
+                    recommended = '4W'
+            elif max_allowed == 'JB':
+                # ลำดับ 1: ลอง 4W ก่อน (95-130%)
+                if 95 <= cube_util_4w <= 130 and weight_util_4w <= 130 and branch_count <= 12:
+                    recommended = '4W'
+                # ลำดับ 2: ลอง JB (95-130%)
+                elif 95 <= cube_util_jb <= 130 and weight_util_jb <= 130 and branch_count <= 12:
+                    recommended = 'JB'
+                # ลำดับ 3: แยกเป็น JB + 4W หรือ JB + JB (75-95% ต่อคัน)
+                elif cube_util_jb > 130:
+                    # ลองแยกเป็น JB + 4W (13 cube max)
+                    if total_c <= 13:
+                        recommended = 'JB+4W'
+                    else:
+                        recommended = 'JB+JB'  # 16 cube max
+                else:
+                    # ต่ำกว่า 95% → ใช้ JB หรือ 4W
+                    if cube_util_jb >= 75:
+                        recommended = 'JB'
+                    else:
+                        recommended = '4W'
+            # 🚛 กรุงเทพ+ปริมณฑล (nearby) → บังคับห้าม 6W (ลำดับแรกสุด!)
+            elif all_nearby:
+                # ลอง 4W ก่อน
+                if cube_util_4w <= 120 and weight_util_4w <= 130:
+                    recommended = '4W'
+                # ถ้า 4W ไม่พอ → ลอง JB
+                elif cube_util_jb <= 130 and weight_util_jb <= 130:
+                    recommended = 'JB'
+                    region_changes['nearby_6w_to_jb'] += 1
+                # ถ้า JB ก็ไม่พอ → ต้องแยกทริป (จะแยกใน Phase 2.5)
+                else:
+                    recommended = 'JB'  # กำหนดไว้ก่อน จะแยกภายหลัง
+                    region_changes['nearby_6w_to_jb'] += 1
+            # 🚛 ภาคเหนือทั้งหมด → บังคับใช้ 6W เท่านั้น
+            elif has_north:
                 recommended = '6W'
                 region_changes['far_keep_6w'] += 1
-            
-            # 2. ถ้า JB พอดี (95-130%) และ 6W ไม่เต็ม (<95%) → ใช้ JB (พอดีกว่า) ✅
-            elif TARGET_MIN <= cube_util_jb <= TARGET_MAX and weight_util_jb <= TARGET_MAX and cube_util_6w < TARGET_MIN:
-                recommended = 'JB'
-                region_changes['other'] += 1
-            
-            # 3. ถ้า 6W ว่างมาก (<80%) → ใช้ JB 2 คันดีกว่า 6W ครึ่งคัน ✅
-            # เช่น 10 m³ = 50% 6W แต่ = 143% JB → แยกเป็น JB 2 คัน (71.5% ต่อคัน)
-            elif cube_util_6w < 80:
-                # คำนวณถ้าแยกเป็น JB 2 คัน
-                jb_split_util = cube_util_jb / 2
-                if MIN_UTIL <= jb_split_util <= TARGET_MAX:
-                    # JB 2 คันดีกว่า (แต่ละคัน 75-95%)
-                    recommended = 'JB'  # จะแยกเป็น JB 2 คันใน Phase 2.1
-                    region_changes['other'] += 1
-                elif cube_util_jb <= TARGET_MAX:
-                    # JB 1 คันพอ
-                    recommended = 'JB'
-                    region_changes['other'] += 1
-                else:
-                    # ใช้ 6W (แม้ไม่เต็ม แต่ไม่มีทางเลือก)
-                    recommended = '6W'
-                    region_changes['far_keep_6w'] += 1
-            
-            # 4. กรณีอื่นๆ → ใช้ 6W (ห้ามให้รถเหลือ % ต่ำกว่า 75%)
+            # 🚛 ภาคใต้ทั้งหมด → บังคับใช้ 6W เท่านั้น
+            elif has_south:
+                recommended = '6W'
+                region_changes['far_keep_6w'] += 1
             else:
-                if cube_util_6w >= MIN_UTIL:
+                # 🎯 พื้นที่ไกล (far) - ยืดหยุ่น ใช้ JB ได้ถ้าเหมาะสม
+                # เป้าหมาย: Cube 95-130%, ห้ามรถเหลือ % ต่ำ (< 75%)
+                
+                MIN_UTIL = 75   # ขั้นต่ำ - ห้ามรถเหลือต่ำกว่านี้
+                TARGET_MIN = 95 # เป้าหมายขั้นต่ำ
+                TARGET_MAX = 130 # เป้าหมายสูงสุด
+                
+                # 🎯 กลยุทธ์: เลือกรถที่ Cube พอดีที่สุด (95-130%)
+                
+                # 1. ถ้า 6W เต็มพอดี (95-130%) → ใช้ 6W ✅
+                if TARGET_MIN <= cube_util_6w <= TARGET_MAX and weight_util_6w <= TARGET_MAX:
                     recommended = '6W'
                     region_changes['far_keep_6w'] += 1
-                elif cube_util_jb >= MIN_UTIL and cube_util_jb <= TARGET_MAX:
-                    # 6W ต่ำกว่า 75% แต่ JB พอดี
+                
+                # 2. ถ้า JB พอดี (95-130%) และ 6W ไม่เต็ม (<95%) → ใช้ JB (พอดีกว่า) ✅
+                elif TARGET_MIN <= cube_util_jb <= TARGET_MAX and weight_util_jb <= TARGET_MAX and cube_util_6w < TARGET_MIN:
                     recommended = 'JB'
                     region_changes['other'] += 1
+                
+                # 3. ถ้า 6W ว่างมาก (<80%) → ใช้ JB 2 คันดีกว่า 6W ครึ่งคัน ✅
+                # เช่น 10 m³ = 50% 6W แต่ = 143% JB → แยกเป็น JB 2 คัน (71.5% ต่อคัน)
+                elif cube_util_6w < 80:
+                    # คำนวณถ้าแยกเป็น JB 2 คัน
+                    jb_split_util = cube_util_jb / 2
+                    if MIN_UTIL <= jb_split_util <= TARGET_MAX:
+                        # JB 2 คันดีกว่า (แต่ละคัน 75-95%)
+                        recommended = 'JB'  # จะแยกเป็น JB 2 คันใน Phase 2.1
+                        region_changes['other'] += 1
+                    elif cube_util_jb <= TARGET_MAX:
+                        # JB 1 คันพอ
+                        recommended = 'JB'
+                        region_changes['other'] += 1
+                    else:
+                        # ใช้ 6W (แม้ไม่เต็ม แต่ไม่มีทางเลือก)
+                        recommended = '6W'
+                        region_changes['far_keep_6w'] += 1
+                
+                # 4. กรณีอื่นๆ → ใช้ 6W (ห้ามให้รถเหลือ % ต่ำกว่า 75%)
                 else:
-                    # ไม่มีทางเลือก → ใช้ 6W แล้วแยกภายหลัง
-                    recommended = '6W'
-                    region_changes['far_keep_6w'] += 1
-        
-        # 🚨 บังคับใช้ max_allowed ถ้ารถที่แนะนำใหญ่กว่าข้อจำกัด (ห้ามข้าม!)
-        vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
-        recommended_priority = vehicle_priority.get(recommended, 3)
-        allowed_priority = vehicle_priority.get(max_allowed, 3)
-        
-        if recommended_priority > allowed_priority:
-            # รถที่แนะนำใหญ่กว่าที่อนุญาต → บังคับใช้ max_allowed (ห้ามข้ามขั้น!)
-            recommended = max_allowed
-        
-        # 🔒 Double check: ห้ามข้ามข้อจำกัดสาขาเด็ดขาด!
-        if max_allowed == '4W' and recommended != '4W':
-            recommended = '4W'
-        elif max_allowed == 'JB' and recommended == '6W':
-            recommended = 'JB'
-        
-        # 🔒 Triple check: กรุงเทพ+ปริมณฑล ห้าม 6W เด็ดขาด!
-        if all_nearby and recommended == '6W':
-            # บังคับเปลี่ยนเป็น JB
-            recommended = 'JB'
-            region_changes['nearby_6w_to_jb'] += 1
-        
-        # บันทึกการปรับขนาด
-        original_vehicle = trip_recommended_vehicles.get(trip_num, '6W')
-        trip_recommended_vehicles[trip_num] = recommended
-        if recommended != original_vehicle:
-            downsize_count += 1
+                    if cube_util_6w >= MIN_UTIL:
+                        recommended = '6W'
+                        region_changes['far_keep_6w'] += 1
+                    elif cube_util_jb >= MIN_UTIL and cube_util_jb <= TARGET_MAX:
+                        # 6W ต่ำกว่า 75% แต่ JB พอดี
+                        recommended = 'JB'
+                        region_changes['other'] += 1
+                    else:
+                        # ไม่มีทางเลือก → ใช้ 6W แล้วแยกภายหลัง
+                        recommended = '6W'
+                        region_changes['far_keep_6w'] += 1
+            
+            # 🚨 บังคับใช้ max_allowed ถ้ารถที่แนะนำใหญ่กว่าข้อจำกัด (ห้ามข้าม!)
+            vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
+            recommended_priority = vehicle_priority.get(recommended, 3)
+            allowed_priority = vehicle_priority.get(max_allowed, 3)
+            
+            if recommended_priority > allowed_priority:
+                # รถที่แนะนำใหญ่กว่าที่อนุญาต → บังคับใช้ max_allowed (ห้ามข้ามขั้น!)
+                recommended = max_allowed
+            
+            # 🔒 Double check: ห้ามข้ามข้อจำกัดสาขาเด็ดขาด!
+            if max_allowed == '4W' and recommended != '4W':
+                recommended = '4W'
+            elif max_allowed == 'JB' and recommended == '6W':
+                recommended = 'JB'
+            
+            # 🔒 Triple check: กรุงเทพ+ปริมณฑล ห้าม 6W เด็ดขาด!
+            if all_nearby and recommended == '6W':
+                # บังคับเปลี่ยนเป็น JB
+                recommended = 'JB'
+                region_changes['nearby_6w_to_jb'] += 1
+            
+            # บันทึกการปรับขนาด
+            original_vehicle = trip_recommended_vehicles.get(trip_num, '6W')
+            trip_recommended_vehicles[trip_num] = recommended
+            if recommended != original_vehicle:
+                downsize_count += 1
     
     # Phase 2 completed
     
