@@ -4277,6 +4277,30 @@ def predict_trips(test_df, model_data):
     
     test_df['Region'] = test_df['Code'].apply(get_region_name)
     
+    # 🆕 เพิ่มคอลัมน์ตำบลและอำเภอจาก Master Data
+    def get_subdistrict(code):
+        """ดึงตำบลจาก Master Data"""
+        if MASTER_DATA.empty or 'Plan Code' not in MASTER_DATA.columns:
+            return ''
+        master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+        if len(master_row) > 0:
+            sub = master_row.iloc[0].get('ตำบล', '')
+            return str(sub).strip() if pd.notna(sub) else ''
+        return ''
+    
+    def get_district(code):
+        """ดึงอำเภอจาก Master Data"""
+        if MASTER_DATA.empty or 'Plan Code' not in MASTER_DATA.columns:
+            return ''
+        master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+        if len(master_row) > 0:
+            dist = master_row.iloc[0].get('อำเภอ', '')
+            return str(dist).strip() if pd.notna(dist) else ''
+        return ''
+    
+    test_df['Subdistrict'] = test_df['Code'].apply(get_subdistrict)
+    test_df['District'] = test_df['Code'].apply(get_district)
+    
     # เพิ่มคอลัมน์ระยะทางระหว่างสาขาในทริป และเรียงลำดับ
     def add_distance_and_sort(df):
         # คำนวณระยะทาง max ภายในแต่ละทริป
@@ -4610,6 +4634,10 @@ def main():
                                 display_cols = ['Trip', 'Code', 'Name']
                                 if 'Province' in result_df.columns:
                                     display_cols.append('Province')
+                                if 'District' in result_df.columns:
+                                    display_cols.append('District')
+                                if 'Subdistrict' in result_df.columns:
+                                    display_cols.append('Subdistrict')
                                 if 'Region' in result_df.columns:
                                     display_cols.append('Region')
                                 display_cols.extend(['Max_Distance_in_Trip', 'Weight', 'Cube', 'Truck', 'VehicleCheck'])
@@ -4620,6 +4648,7 @@ def main():
                                 
                                 # ตั้งชื่อคอลัมน์ภาษาไทย
                                 col_names = {'Trip': 'ทริป', 'Code': 'รหัส', 'Name': 'ชื่อสาขา', 'Province': 'จังหวัด', 
+                                           'District': 'อำเภอ', 'Subdistrict': 'ตำบล',
                                            'Region': 'ภาค', 'Max_Distance_in_Trip': 'ระยะทาง Max(km)', 
                                            'Weight': 'น้ำหนัก(kg)', 'Cube': 'คิว(m³)', 'Truck': 'รถ', 'VehicleCheck': 'ตรวจสอบรถ'}
                                 display_df.columns = [col_names.get(c, c) for c in display_cols]
