@@ -2420,7 +2420,11 @@ def predict_trips(test_df, model_data):
                 should_split = True
                 target_vehicle = '6W'
             
-            if not should_split:
+            if not should_split or target_vehicle is None:
+                continue
+            
+            # ตรวจสอบว่ามีข้อมูลรถใน LIMITS
+            if target_vehicle not in LIMITS:
                 continue
             
             # แยกสาขาเป็น 2 กลุ่ม (ใช้ greedy bin packing)
@@ -2433,6 +2437,7 @@ def predict_trips(test_df, model_data):
             g2_cube = 0
             
             max_c = LIMITS[target_vehicle]['max_c']
+            max_branches = LIMITS[target_vehicle]['max_branches']
             target_util = 100  # เป้าหมาย 100% ต่อคัน
             
             for idx, row in trip_data.iterrows():
@@ -2447,7 +2452,7 @@ def predict_trips(test_df, model_data):
                 if g1_util < target_util:
                     # เช็คว่าใส่แล้วไม่เกิน 130%
                     new_g1_util = ((g1_cube + cube) / max_c) * 100
-                    if new_g1_util <= 130 and len(g1_codes) < LIMITS[target_vehicle]['max_branches']:
+                    if new_g1_util <= 130 and len(g1_codes) < max_branches:
                         g1_codes.append(code)
                         g1_cube += cube
                     else:
@@ -2456,7 +2461,7 @@ def predict_trips(test_df, model_data):
                 elif g2_util < target_util:
                     # เช็คว่าใส่แล้วไม่เกิน 130%
                     new_g2_util = ((g2_cube + cube) / max_c) * 100
-                    if new_g2_util <= 130 and len(g2_codes) < LIMITS[target_vehicle]['max_branches']:
+                    if new_g2_util <= 130 and len(g2_codes) < max_branches:
                         g2_codes.append(code)
                         g2_cube += cube
                     else:
