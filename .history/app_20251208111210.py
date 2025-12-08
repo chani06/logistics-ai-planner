@@ -4634,10 +4634,6 @@ def main():
                                 display_cols = ['Trip', 'Code', 'Name']
                                 if 'Province' in result_df.columns:
                                     display_cols.append('Province')
-                                if 'District' in result_df.columns:
-                                    display_cols.append('District')
-                                if 'Subdistrict' in result_df.columns:
-                                    display_cols.append('Subdistrict')
                                 if 'Region' in result_df.columns:
                                     display_cols.append('Region')
                                 display_cols.extend(['Max_Distance_in_Trip', 'Weight', 'Cube', 'Truck', 'VehicleCheck'])
@@ -4648,7 +4644,6 @@ def main():
                                 
                                 # ตั้งชื่อคอลัมน์ภาษาไทย
                                 col_names = {'Trip': 'ทริป', 'Code': 'รหัส', 'Name': 'ชื่อสาขา', 'Province': 'จังหวัด', 
-                                           'District': 'อำเภอ', 'Subdistrict': 'ตำบล',
                                            'Region': 'ภาค', 'Max_Distance_in_Trip': 'ระยะทาง Max(km)', 
                                            'Weight': 'น้ำหนัก(kg)', 'Cube': 'คิว(m³)', 'Truck': 'รถ', 'VehicleCheck': 'ตรวจสอบรถ'}
                                 display_df.columns = [col_names.get(c, c) for c in display_cols]

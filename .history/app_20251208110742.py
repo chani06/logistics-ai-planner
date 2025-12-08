@@ -1634,80 +1634,29 @@ def predict_trips(test_df, model_data):
     # 🚀 Cache พิกัดและจังหวัดล่วงหน้า (ประหยัดเวลา 70%)
     coord_cache = {}
     province_cache = {}
-    
-    # 🆕 รายชื่อ 77 จังหวัดของไทยเพื่อดึงจากชื่อสาขา
-    THAI_PROVINCES = [
-        'กรุงเทพ', 'กรุงเทพมหานคร', 'สมุทรปราการ', 'นนทบุรี', 'ปทุมธานี', 'นครปฐม', 'สมุทรสาคร',
-        'พระนครศรีอยุธยา', 'อยุธยา', 'อ่างทอง', 'ลพบุรี', 'สิงห์บุรี', 'ชัยนาท', 'สระบุรี',
-        'ชลบุรี', 'ระยอง', 'จันทบุรี', 'ตราด', 'ฉะเชิงเทรา', 'ปราจีนบุรี', 'นครนายก', 'สระแก้ว',
-        'นครราชสีมา', 'โคราช', 'บุรีรัมย์', 'สุรินทร์', 'ศรีสะเกษ', 'อุบลราชธานี', 'ยโสธร', 'ชัยภูมิ',
-        'อำนาจเจริญ', 'หนองบัวลำภู', 'ขอนแก่น', 'อุดรธานี', 'เลย', 'หนองคาย', 'มหาสารคาม',
-        'ร้อยเอ็ด', 'กาฬสินธุ์', 'สกลนคร', 'นครพนม', 'มุกดาหาร', 'บึงกาฬ',
-        'เชียงใหม่', 'ลำพูน', 'ลำปาง', 'อุตรดิตถ์', 'แพร่', 'น่าน', 'พะเยา', 'เชียงราย', 'แม่ฮ่องสอน',
-        'นครสวรรค์', 'อุทัยธานี', 'กำแพงเพชร', 'ตาก', 'สุโขทัย', 'พิษณุโลก', 'พิจิตร', 'เพชรบูรณ์',
-        'ราชบุรี', 'กาญจนบุรี', 'สุพรรณบุรี', 'นครปฐม', 'สมุทรสงคราม', 'เพชรบุรี', 'ประจวบคีรีขันธ์',
-        'ชุมพร', 'ระนอง', 'สุราษฎร์ธานี', 'พังงา', 'กระบี่', 'ภูเก็ต', 'นครศรีธรรมราช', 'ตรัง',
-        'พัทลุง', 'สงขลา', 'สตูล', 'ปัตตานี', 'ยะลา', 'นราธิวาส'
-    ]
-    
-    def extract_province_from_name(branch_name):
-        """ดึงจังหวัดจากชื่อสาขา เช่น 'พิษณุโลก5' -> 'พิษณุโลก'"""
-        if not branch_name:
-            return None
-        name = str(branch_name).strip()
-        for province in THAI_PROVINCES:
-            if province in name:
-                return province
-        return None
-    
     for code in all_codes:
         lat, lon = get_lat_lon_from_master(code)
         coord_cache[code] = (lat, lon)
         
-        # Cache จังหวัด - ลำดับความสำคัญ:
-        # 1. Master Data
-        # 2. ชื่อสาขา (ดึงจังหวัดจากชื่อ) 🆕
-        # 3. Province column
-        # 4. branch_info
-        
-        found_province = False
-        
-        # 1. ลอง Master Data ก่อน
+        # Cache จังหวัด
         if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
             master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
             if len(master_row) > 0:
                 prov = master_row.iloc[0].get('จังหวัด', '')
                 if prov and str(prov).strip() and prov != 'UNKNOWN':
                     province_cache[code] = str(prov).strip()
-                    found_province = True
-        
-        # 2. 🆕 ดึงจังหวัดจากชื่อสาขา (สำคัญสำหรับสาขาที่ไม่มีใน Master)
-        if not found_province and 'Name' in test_df.columns:
-            code_data = test_df[test_df['Code'] == code]
-            if len(code_data) > 0:
-                branch_name = code_data['Name'].iloc[0]
-                prov_from_name = extract_province_from_name(branch_name)
-                if prov_from_name:
-                    province_cache[code] = prov_from_name
-                    found_province = True
-        
-        # 3. Province column
-        if not found_province and 'Province' in test_df.columns:
+                    continue
+        if 'Province' in test_df.columns:
             prov = test_df[test_df['Code'] == code]['Province'].iloc[0] if len(test_df[test_df['Code'] == code]) > 0 else None
             if prov and prov != 'UNKNOWN' and str(prov).strip():
                 province_cache[code] = prov
-                found_province = True
-        
-        # 4. branch_info
-        if not found_province and code in branch_info:
+                continue
+        if code in branch_info:
             prov = branch_info[code].get('province', 'UNKNOWN')
             if prov and prov != 'UNKNOWN' and str(prov).strip():
                 province_cache[code] = prov
-                found_province = True
-        
-        # ถ้าไม่เจอเลย
-        if not found_province:
-            province_cache[code] = 'UNKNOWN'
+                continue
+        province_cache[code] = 'UNKNOWN'
     
     # 🎯 จัดกลุ่มตามพิกัดก่อน (เพิ่มรัศมีสูง - ขอบเขตใหญ่ขึ้น)
     spatial_clusters = create_distance_based_clusters(all_codes, max_distance_km=60)
@@ -2357,79 +2306,6 @@ def predict_trips(test_df, model_data):
     test_df['Trip'] = test_df['Code'].map(assigned_trips)
     
     # ===============================================
-    # 🆕 ตรวจสอบสาขาที่ยังไม่มีทริป และจัดให้ครบทุกสาขา
-    # ===============================================
-    unassigned_codes = test_df[test_df['Trip'].isna()]['Code'].tolist()
-    
-    if unassigned_codes:
-        # จัดสาขาที่ยังไม่มีทริปเข้าทริปที่ใกล้ที่สุด หรือสร้างทริปใหม่
-        for code in unassigned_codes:
-            code_lat, code_lon = coord_cache.get(code, (None, None))
-            code_province = province_cache.get(code, 'UNKNOWN')
-            code_weight = test_df[test_df['Code'] == code]['Weight'].sum()
-            code_cube = test_df[test_df['Code'] == code]['Cube'].sum()
-            
-            best_trip = None
-            best_score = float('inf')
-            
-            # หาทริปที่ใกล้ที่สุดและรับสาขานี้ได้
-            for trip_num in test_df['Trip'].dropna().unique():
-                trip_data = test_df[test_df['Trip'] == trip_num]
-                trip_codes = trip_data['Code'].tolist()
-                trip_weight = trip_data['Weight'].sum()
-                trip_cube = trip_data['Cube'].sum()
-                
-                # เช็คจังหวัดเดียวกัน
-                trip_provinces = set()
-                for tc in trip_codes:
-                    tp = province_cache.get(tc, 'UNKNOWN')
-                    if tp != 'UNKNOWN':
-                        trip_provinces.add(tp)
-                
-                # ต้องจังหวัดเดียวกัน หรือไม่มีข้อมูลจังหวัด
-                if code_province != 'UNKNOWN' and trip_provinces and code_province not in trip_provinces:
-                    continue
-                
-                # เช็คว่าใส่รถได้หรือไม่ (ใช้ 6W เป็น limit)
-                new_weight = trip_weight + code_weight
-                new_cube = trip_cube + code_cube
-                new_util = max((new_weight / LIMITS['6W']['max_w']) * 100,
-                              (new_cube / LIMITS['6W']['max_c']) * 100)
-                
-                if new_util > 120:  # เกิน 120% ไม่รับ
-                    continue
-                
-                # เช็คจำนวนสาขา
-                if len(trip_codes) >= MAX_BRANCHES_PER_TRIP:
-                    continue
-                
-                # คำนวณระยะทางเฉลี่ยไปสาขาในทริป
-                if code_lat:
-                    distances = []
-                    for tc in trip_codes:
-                        tc_lat, tc_lon = coord_cache.get(tc, (None, None))
-                        if tc_lat:
-                            dist = haversine_distance(code_lat, code_lon, tc_lat, tc_lon)
-                            distances.append(dist)
-                    
-                    if distances:
-                        avg_dist = sum(distances) / len(distances)
-                        # เลือกทริปที่ใกล้ที่สุด
-                        if avg_dist < best_score:
-                            best_score = avg_dist
-                            best_trip = trip_num
-            
-            if best_trip is not None:
-                # จัดเข้าทริปที่ใกล้ที่สุด
-                test_df.loc[test_df['Code'] == code, 'Trip'] = best_trip
-                assigned_trips[code] = best_trip
-            else:
-                # ไม่มีทริปที่เหมาะสม → สร้างทริปใหม่
-                test_df.loc[test_df['Code'] == code, 'Trip'] = trip_counter
-                assigned_trips[code] = trip_counter
-                trip_counter += 1
-    
-    # ===============================================
     # 🔒 Post-processing: สลับสาขาให้อยู่ทริปที่ใกล้กันที่สุด (FAST)
     # ===============================================
     def optimize_branch_placement():
@@ -2964,8 +2840,8 @@ def predict_trips(test_df, model_data):
             if not trip_coords:
                 continue
             
-            # หาสาขาที่ยังไม่ได้จัดทริป (Trip = 0 หรือ NaN)
-            unassigned = test_df[(test_df['Trip'] == 0) | (test_df['Trip'].isna())]
+            # หาสาขาที่ยังไม่ได้จัดทริป (Trip = 0)
+            unassigned = test_df[test_df['Trip'] == 0]
             
             for idx, row in unassigned.iterrows():
                 branch_code = row['Code']
@@ -4277,30 +4153,6 @@ def predict_trips(test_df, model_data):
     
     test_df['Region'] = test_df['Code'].apply(get_region_name)
     
-    # 🆕 เพิ่มคอลัมน์ตำบลและอำเภอจาก Master Data
-    def get_subdistrict(code):
-        """ดึงตำบลจาก Master Data"""
-        if MASTER_DATA.empty or 'Plan Code' not in MASTER_DATA.columns:
-            return ''
-        master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
-        if len(master_row) > 0:
-            sub = master_row.iloc[0].get('ตำบล', '')
-            return str(sub).strip() if pd.notna(sub) else ''
-        return ''
-    
-    def get_district(code):
-        """ดึงอำเภอจาก Master Data"""
-        if MASTER_DATA.empty or 'Plan Code' not in MASTER_DATA.columns:
-            return ''
-        master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
-        if len(master_row) > 0:
-            dist = master_row.iloc[0].get('อำเภอ', '')
-            return str(dist).strip() if pd.notna(dist) else ''
-        return ''
-    
-    test_df['Subdistrict'] = test_df['Code'].apply(get_subdistrict)
-    test_df['District'] = test_df['Code'].apply(get_district)
-    
     # เพิ่มคอลัมน์ระยะทางระหว่างสาขาในทริป และเรียงลำดับ
     def add_distance_and_sort(df):
         # คำนวณระยะทาง max ภายในแต่ละทริป
@@ -4634,10 +4486,6 @@ def main():
                                 display_cols = ['Trip', 'Code', 'Name']
                                 if 'Province' in result_df.columns:
                                     display_cols.append('Province')
-                                if 'District' in result_df.columns:
-                                    display_cols.append('District')
-                                if 'Subdistrict' in result_df.columns:
-                                    display_cols.append('Subdistrict')
                                 if 'Region' in result_df.columns:
                                     display_cols.append('Region')
                                 display_cols.extend(['Max_Distance_in_Trip', 'Weight', 'Cube', 'Truck', 'VehicleCheck'])
@@ -4648,7 +4496,6 @@ def main():
                                 
                                 # ตั้งชื่อคอลัมน์ภาษาไทย
                                 col_names = {'Trip': 'ทริป', 'Code': 'รหัส', 'Name': 'ชื่อสาขา', 'Province': 'จังหวัด', 
-                                           'District': 'อำเภอ', 'Subdistrict': 'ตำบล',
                                            'Region': 'ภาค', 'Max_Distance_in_Trip': 'ระยะทาง Max(km)', 
                                            'Weight': 'น้ำหนัก(kg)', 'Cube': 'คิว(m³)', 'Truck': 'รถ', 'VehicleCheck': 'ตรวจสอบรถ'}
                                 display_df.columns = [col_names.get(c, c) for c in display_cols]
