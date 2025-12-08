@@ -2296,8 +2296,26 @@ def predict_trips(test_df, model_data):
                             avg_dist = sum(distances_to_other) / len(distances_to_other)
                             max_dist = max(distances_to_other)
                             
-                            # ถ้าใกล้กว่าอย่างมีนัยสำคัญ (> 10km) และไม่มีสาขาไหนไกลเกิน 40km
-                            if avg_dist < best_avg_dist - 10 and max_dist <= 40:
+                            # เช็คว่าอยู่ตำบลเดียวกันหรือไม่
+                            code_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                            same_subdistrict = False
+                            if len(code_row) > 0:
+                                code_subdist = code_row.iloc[0].get('ตำบล', '')
+                                if code_subdist:
+                                    for other_code in other_codes[:3]:  # เช็คแค่ 3 สาขาแรก
+                                        other_row = MASTER_DATA[MASTER_DATA['Plan Code'] == other_code]
+                                        if len(other_row) > 0:
+                                            other_subdist = other_row.iloc[0].get('ตำบล', '')
+                                            if code_subdist == other_subdist:
+                                                same_subdistrict = True
+                                                break
+                            
+                            # ถ้าตำบลเดียวกัน → ใช้เกณฑ์หลวม (5km)
+                            # ถ้าคนละตำบล → ใช้เกณฑ์เดิม (10km)
+                            threshold = 5 if same_subdistrict else 10
+                            
+                            # ถ้าใกล้กว่าอย่างมีนัยสำคัญและไม่มีสาขาไหนไกลเกิน 40km
+                            if avg_dist < best_avg_dist - threshold and max_dist <= 40:
                                 best_avg_dist = avg_dist
                                 best_trip = other_trip_num
                     
@@ -2361,6 +2379,124 @@ def predict_trips(test_df, model_data):
     
     # เรียกใช้งาน optimization
     optimize_branch_placement()
+    
+    # ===============================================
+    # Phase 2.5: แยกทริปที่เกิน 130% เป็น 2 คัน
+    # ===============================================
+    def split_oversized_trips():
+        """แยกทริปที่มี Cube > 130% เป็น 2 คัน (เป้าหมาย 75-105% ต่อคัน)"""
+        split_count = 0
+        trips_to_check = sorted(test_df['Trip'].unique())
+        
+        for trip_num in trips_to_check:
+            if trip_num == 0:
+                continue
+            
+            trip_data = test_df[test_df['Trip'] == trip_num].copy()
+            trip_codes = trip_data['Code'].tolist()
+            
+            if len(trip_codes) < 2:
+                continue
+            
+            total_w = trip_data['Weight'].sum()
+            total_c = trip_data['Cube'].sum()
+            
+            # เช็ค utilization กับรถแต่ละแบบ
+            util_4w_c = (total_c / LIMITS['4W']['max_c']) * 100
+            util_jb_c = (total_c / LIMITS['JB']['max_c']) * 100
+            util_6w_c = (total_c / LIMITS['6W']['max_c']) * 100
+            
+            # ถ้าเกิน 130% → แยกทริป
+            should_split = False
+            target_vehicle = None
+            
+            if util_4w_c > 130 and len(trip_codes) <= 24:  # แยกเป็น 4W+4W (max 12 ต่อคัน)
+                should_split = True
+                target_vehicle = '4W'
+            elif util_jb_c > 130 and len(trip_codes) <= 24:  # แยกเป็น JB+JB/JB+4W
+                should_split = True
+                target_vehicle = 'JB'
+            elif util_6w_c > 130:  # แยกเป็น 6W+6W
+                should_split = True
+                target_vehicle = '6W'
+            
+            if not should_split:
+                continue
+            
+            # แยกสาขาเป็น 2 กลุ่ม (ใช้ greedy bin packing)
+            # เรียงสาขาตาม Cube มากไปน้อย
+            trip_data = trip_data.sort_values('Cube', ascending=False)
+            
+            g1_codes = []
+            g2_codes = []
+            g1_cube = 0
+            g2_cube = 0
+            
+            max_c = LIMITS[target_vehicle]['max_c']
+            target_util = 100  # เป้าหมาย 100% ต่อคัน
+            
+            for idx, row in trip_data.iterrows():
+                code = row['Code']
+                cube = row['Cube']
+                
+                # เลือกกลุ่มที่ใกล้เป้าหมายที่สุด
+                g1_util = (g1_cube / max_c) * 100
+                g2_util = (g2_cube / max_c) * 100
+                
+                # ถ้า g1 ยังไม่ถึง target → ใส่ g1
+                if g1_util < target_util:
+                    # เช็คว่าใส่แล้วไม่เกิน 130%
+                    new_g1_util = ((g1_cube + cube) / max_c) * 100
+                    if new_g1_util <= 130 and len(g1_codes) < LIMITS[target_vehicle]['max_branches']:
+                        g1_codes.append(code)
+                        g1_cube += cube
+                    else:
+                        g2_codes.append(code)
+                        g2_cube += cube
+                elif g2_util < target_util:
+                    # เช็คว่าใส่แล้วไม่เกิน 130%
+                    new_g2_util = ((g2_cube + cube) / max_c) * 100
+                    if new_g2_util <= 130 and len(g2_codes) < LIMITS[target_vehicle]['max_branches']:
+                        g2_codes.append(code)
+                        g2_cube += cube
+                    else:
+                        g1_codes.append(code)
+                        g1_cube += cube
+                else:
+                    # ทั้ง 2 กลุ่มเต็มแล้ว → ใส่กลุ่มที่น้อยกว่า
+                    if g1_util < g2_util:
+                        g1_codes.append(code)
+                        g1_cube += cube
+                    else:
+                        g2_codes.append(code)
+                        g2_cube += cube
+            
+            # เช็คว่าแต่ละกลุ่มมีสาขาอย่างน้อย 1 สาขา
+            if len(g1_codes) == 0 or len(g2_codes) == 0:
+                continue
+            
+            # คำนวณ util สุดท้าย
+            g1_util_final = (g1_cube / max_c) * 100
+            g2_util_final = (g2_cube / max_c) * 100
+            
+            # เช็คว่าทั้ง 2 กลุ่มไม่ต่ำเกินไป (<60%)
+            if g1_util_final < 60 or g2_util_final < 60:
+                continue
+            
+            # แยกทริป: g1 ใช้ trip_num เดิม, g2 ใช้ trip_num ใหม่
+            max_trip = test_df['Trip'].max()
+            new_trip_num = max_trip + 1
+            
+            for code in g2_codes:
+                test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip_num
+            
+            split_count += 1
+        
+        return split_count
+    
+    split_count = split_oversized_trips()
+    if split_count > 0:
+        print(f"\n✂️ แยกทริปที่เกิน 130% สำเร็จ: {split_count} ทริป")
     
     # ===============================================
     # Post-processing: รวมทริปเล็กและปรับขนาดรถ
@@ -2785,17 +2921,17 @@ def predict_trips(test_df, model_data):
                 test_df.loc[test_df['Code'] == code, 'Trip'] = best_merge
             rebalance_count += 1
     
-    # 🎯 Phase 1.5: เก็บสาขาที่อยู่ในเส้นทาง (Route Pickup Optimization) - จำกัดเวลา
+    # 🎯 Phase 1.5: เก็บสาขาที่อยู่ในเส้นทาง (Route Pickup Optimization)
     pickup_count = 0
     MAX_DETOUR_KM_LOCAL = MAX_DETOUR_KM  # ใช้ค่าจาก config (12 กม.)
     
-    # ⚡ Skip ถ้ามีทริปมากเกิน 20 ทริป (ประหยัดเวลา)
+    # ⚡ Skip ถ้ามีทริปมากเกิน 50 ทริป (ประหยัดเวลา)
     unique_trips = test_df['Trip'].unique()
-    if len(unique_trips) > 20:
+    if len(unique_trips) > 50:
         pass  # Skip Phase 1.5 เพื่อความเร็ว
     else:
-        # วนลูปทุกทริปที่ยังไม่เต็ม (เป้าหมาย 95%) - จำกัดแค่ 15 ทริปแรก
-        for trip_num in sorted(unique_trips)[:15]:
+        # วนลูปทุกทริปที่ยังไม่เต็ม (เป้าหมาย 95-130%)
+        for trip_num in sorted(unique_trips):
             trip_data = test_df[test_df['Trip'] == trip_num]
             current_w = trip_data['Weight'].sum()
             current_c = trip_data['Cube'].sum()
@@ -2855,8 +2991,26 @@ def predict_trips(test_df, model_data):
                         if dist < min_distance:
                             min_distance = dist
                     
+                # เช็ควา่อยู่ตำบลเดียวกันหรือไม่
+                    branch_row = MASTER_DATA[MASTER_DATA['Plan Code'] == branch_code]
+                    same_subdistrict = False
+                    if len(branch_row) > 0:
+                        branch_subdist = branch_row.iloc[0].get('ตำบล', '')
+                        if branch_subdist:
+                            for trip_code in trip_data['Code'].values[:5]:  # เช็คแค่ 5 สาขาแรก
+                                trip_row = MASTER_DATA[MASTER_DATA['Plan Code'] == trip_code]
+                                if len(trip_row) > 0:
+                                    trip_subdist = trip_row.iloc[0].get('ตำบล', '')
+                                    if branch_subdist == trip_subdist:
+                                        same_subdistrict = True
+                                        break
+                    
+                    # ถ้าตำบลเดียวกัน → ยอมได้ถึง 30km
+                    # ถ้าคนละตำบล → ใช้เกณฑ์ปกติ 12km
+                    max_detour = 30 if same_subdistrict else MAX_DETOUR_KM_LOCAL
+                    
                     # ถ้าไม่ได้อยู่ในเส้นทาง (ไกลเกินจากทุกสาขา) → ข้าม
-                    if min_distance > MAX_DETOUR_KM_LOCAL:
+                    if min_distance > max_detour:
                         continue
                 
                 # คำนวณว่าเพิ่มสาขานี้แล้วเกินไหม
@@ -2869,14 +3023,14 @@ def predict_trips(test_df, model_data):
                 new_weight_util = (new_w / LIMITS['6W']['max_w']) * 100
                 new_util = max(new_cube_util, new_weight_util)
                 
-                # 🎯 ถ้ารถไม่เต็ม (<95%) → ยอมให้เพิ่มแม้เกิน 105% ได้ แต่ไม่เกิน 130%
-                # เป้าหมาย: Cube 95-130%, น้ำหนัก ≤130%
+                # 🎯 ถ้ารถไม่เต็ม (<95%) → ยอมให้เพิ่มแม้เกิน 105% ได้ แต่ไม่เกิน 135%
+                # เป้าหมาย: Cube 95-135%, น้ำหนัก ≤135%
                 if current_util < 95:
-                    # รถยังไม่เต็ม → ยืดหยุ่นมาก (ยอมให้เกินได้ถึง 130%)
-                    can_add = new_cube_util <= 130 and new_weight_util <= 130 and new_count <= MAX_BRANCHES_PER_TRIP
+                    # รถยังไม่เต็ม → ยืดหยุ่นมาก (ยอมให้เกินได้ถึง 135%)
+                    can_add = new_cube_util <= 135 and new_weight_util <= 135 and new_count <= MAX_BRANCHES_PER_TRIP
                 else:
-                    # รถเต็มพอสมควรแล้ว → เข้มงวดขึ้น (ไม่เกิน 120%)
-                    can_add = new_cube_util <= 120 and new_weight_util <= 130 and new_count <= MAX_BRANCHES_PER_TRIP
+                    # รถเต็มพอสมควรแล้ว → เข้มงวดขึ้น (ไม่เกิน 130%)
+                    can_add = new_cube_util <= 130 and new_weight_util <= 135 and new_count <= MAX_BRANCHES_PER_TRIP
                 
                 if can_add:
                     # เช็คข้อจำกัดสาขา
