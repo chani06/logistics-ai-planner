@@ -1762,12 +1762,101 @@ def predict_trips(test_df, model_data):
             return 9999  # ไม่มีพิกัด ให้ไว้ท้าย
         return sorted(codes, key=get_distance_from_dc)
     
-    # แปลงกลุ่มเป็น list ของ codes ที่เรียงตาม nearest neighbor
+    # 🆕 Cache ชื่อและตำบล/อำเภอ เพื่อจัดกลุ่ม
+    name_cache = {}
+    subdistrict_cache = {}
+    district_cache = {}
+    
+    for code in test_df['Code'].unique():
+        # Cache ชื่อสาขา
+        if 'Name' in test_df.columns:
+            code_data = test_df[test_df['Code'] == code]
+            if len(code_data) > 0:
+                name_cache[code] = str(code_data['Name'].iloc[0]).strip()
+        
+        # Cache ตำบล/อำเภอ จาก Master
+        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+            master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+            if len(master_row) > 0:
+                m = master_row.iloc[0]
+                if 'ตำบล' in m.index and pd.notna(m['ตำบล']):
+                    subdistrict_cache[code] = str(m['ตำบล']).strip()
+                if 'อำเภอ' in m.index and pd.notna(m['อำเภอ']):
+                    district_cache[code] = str(m['อำเภอ']).strip()
+    
+    # 🆕 ฟังก์ชันหา base name (เช่น "โลตัส พระราม 2" -> "โลตัส พระราม")
+    def get_base_name(name):
+        import re
+        if not name:
+            return ""
+        # ตัดตัวเลขท้ายชื่อและ whitespace
+        base = re.sub(r'\s*\d+\s*$', '', str(name).strip())
+        # ตัด "สาขา" ออก
+        base = re.sub(r'^สาขา\s*', '', base)
+        return base.strip()
+    
+    # 🆕 จัดกลุ่มสาขาตามชื่อเดียวกัน + ตำบลเดียวกัน
+    def group_by_name_and_subdistrict(codes):
+        """
+        จัดกลุ่มสาขาตามลำดับ:
+        1. ชื่อเหมือนกัน + ตำบลเดียวกัน (สำคัญที่สุด)
+        2. ชื่อเหมือนกัน (ไม่สนตำบล)
+        3. ตำบลเดียวกัน (ไม่สนชื่อ)
+        4. ที่เหลือ
+        """
+        # สร้าง key สำหรับจัดกลุ่ม
+        groups = {}  # key: (base_name, subdistrict) -> [codes]
+        
+        for code in codes:
+            name = name_cache.get(code, '')
+            base_name = get_base_name(name)
+            subdistrict = subdistrict_cache.get(code, '')
+            district = district_cache.get(code, '')
+            province = province_cache.get(code, '')
+            
+            # สร้าง group key - ชื่อ + ตำบล (ถ้ามี)
+            if base_name and subdistrict:
+                key = (base_name, subdistrict, province)
+            elif base_name:
+                key = (base_name, '', province)
+            elif subdistrict:
+                key = ('', subdistrict, province)
+            else:
+                key = ('', '', province if province else code)  # ถ้าไม่มีข้อมูล ให้ใช้ code เป็น key
+            
+            if key not in groups:
+                groups[key] = []
+            groups[key].append(code)
+        
+        # เรียงลำดับกลุ่ม: กลุ่มที่มีสมาชิกมากมาก่อน, แล้วเรียงตามระยะจาก DC
+        def group_sort_key(key):
+            group_codes = groups[key]
+            # หาระยะเฉลี่ยของกลุ่มจาก DC
+            distances = []
+            for code in group_codes:
+                lat, lon = coord_cache.get(code, (None, None))
+                if lat and lon:
+                    distances.append(calculate_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon))
+            avg_dist = sum(distances) / len(distances) if distances else 9999
+            return (avg_dist, -len(group_codes))  # ใกล้ก่อน, มากก่อน
+        
+        sorted_keys = sorted(groups.keys(), key=group_sort_key)
+        
+        # รวมกลุ่มที่เรียงแล้ว โดยเรียงสมาชิกในกลุ่มตาม nearest neighbor
+        result = []
+        for key in sorted_keys:
+            group_codes = groups[key]
+            # เรียงสมาชิกในกลุ่มตามระยะจาก DC ก่อน แล้ว nearest neighbor
+            group_sorted = sort_by_distance_from_dc(group_codes)
+            result.extend(build_route_nearest_neighbor(group_sorted))
+        
+        return result
+    
+    # แปลงกลุ่มเป็น list ของ codes ที่เรียงตามชื่อ+ตำบล แล้ว nearest neighbor
     all_codes = []
     for cluster in spatial_clusters:
-        # 🔄 เรียงจากใกล้ DC ไปไกล ก่อน nearest neighbor
-        cluster_sorted = sort_by_distance_from_dc(cluster)
-        ordered_cluster = build_route_nearest_neighbor(cluster_sorted)
+        # 🆕 จัดกลุ่มตามชื่อ+ตำบลก่อน แล้วเรียง nearest neighbor
+        ordered_cluster = group_by_name_and_subdistrict(cluster)
         all_codes.extend(ordered_cluster)
     
     while all_codes:
