@@ -2569,8 +2569,11 @@ def predict_trips(test_df, model_data):
         print(f"\n✂️ แยกทริปที่เกิน 130% สำเร็จ: {split_count} ทริป")
     
     # ===============================================
-    # Phase 2.75: จัดสาขาที่ยังไม่มีทริป (Trip = 0) เข้าทริปใหม่
+    # Phase 2.75: จัดสาขาที่ยังไม่มีทริป (Trip = 0 หรือ NaN) เข้าทริปใหม่
     # ===============================================
+    # ตรวจสอบและแปลง NaN เป็น 0 ก่อน
+    test_df['Trip'] = test_df['Trip'].fillna(0)
+    
     unassigned_count = len(test_df[test_df['Trip'] == 0])
     if unassigned_count > 0:
         print(f"\n🔍 พบสาขาที่ยังไม่ได้จัดทริป: {unassigned_count} สาขา")
@@ -2632,7 +2635,8 @@ def predict_trips(test_df, model_data):
     # ===============================================
     # Phase 2.8: แปลง Trip เป็น int และเริ่มจาก 1
     # ===============================================
-    test_df['Trip'] = test_df['Trip'].astype(int)
+    # แปลง NaN เป็น 0 ก่อน convert เป็น int (ป้องกัน IntCastingNaNError)
+    test_df['Trip'] = test_df['Trip'].fillna(0).astype(int)
     
     # เรียงเลขทริปใหม่ให้ต่อเนื่อง (1, 2, 3, ...)
     trip_mapping = {}
@@ -2643,6 +2647,88 @@ def predict_trips(test_df, model_data):
     
     # อัพเดตเลขทริป
     test_df['Trip'] = test_df['Trip'].map(lambda x: trip_mapping.get(x, 0) if x > 0 else 0)
+    
+    # ===============================================
+    # Phase 2.9: รวมทริปที่ utilization ต่ำเกินไป (< 75%)
+    # ===============================================
+    print("\n🔧 Phase 2.9: ตรวจสอบและรวมทริปที่ utilization ต่ำเกินไป...")
+    
+    # ตรวจสอบแต่ละทริป
+    trips_to_merge = []
+    for trip_num in sorted(test_df[test_df['Trip'] > 0]['Trip'].unique()):
+        trip_data = test_df[test_df['Trip'] == trip_num]
+        total_w = trip_data['Weight'].sum()
+        total_c = trip_data['Cube'].sum()
+        branch_count = len(trip_data)
+        
+        # คำนวณ utilization สำหรับรถแต่ละประเภท
+        util_4w = max((total_w / LIMITS['4W']['max_w']) * 100, (total_c / LIMITS['4W']['max_c']) * 100)
+        util_jb = max((total_w / LIMITS['JB']['max_w']) * 100, (total_c / LIMITS['JB']['max_c']) * 100)
+        util_6w = max((total_w / LIMITS['6W']['max_w']) * 100, (total_c / LIMITS['6W']['max_c']) * 100)
+        
+        # หาค่า utilization ที่เหมาะสมที่สุด
+        best_util = min([u for u in [util_4w, util_jb, util_6w] if u <= 140], default=util_6w)
+        
+        # ถ้าต่ำกว่า 75% → พยายามรวมกับทริปอื่น
+        if best_util < 75:
+            trips_to_merge.append({
+                'trip_num': trip_num,
+                'weight': total_w,
+                'cube': total_c,
+                'branches': branch_count,
+                'util': best_util,
+                'codes': trip_data['Code'].tolist()
+            })
+    
+    # พยายามรวมทริปที่ utilization ต่ำ
+    if len(trips_to_merge) > 0:
+        print(f"🔍 พบทริปที่ utilization ต่ำกว่า 75%: {len(trips_to_merge)} ทริป")
+        
+        for merge_trip in trips_to_merge:
+            trip_num = merge_trip['trip_num']
+            codes = merge_trip['codes']
+            
+            # หาทริปที่เหมาะสมที่สุดสำหรับรวม
+            best_target_trip = None
+            best_new_util = 999
+            
+            for target_trip in sorted(test_df[test_df['Trip'] > 0]['Trip'].unique()):
+                if target_trip == trip_num:
+                    continue
+                
+                target_data = test_df[test_df['Trip'] == target_trip]
+                target_w = target_data['Weight'].sum()
+                target_c = target_data['Cube'].sum()
+                target_count = len(target_data)
+                
+                # คำนวณ utilization ถ้ารวมกัน
+                new_w = target_w + merge_trip['weight']
+                new_c = target_c + merge_trip['cube']
+                new_count = target_count + merge_trip['branches']
+                
+                # ตรวจสอบว่ารวมได้หรือไม่
+                new_util_6w = max((new_w / LIMITS['6W']['max_w']) * 100, (new_c / LIMITS['6W']['max_c']) * 100)
+                
+                # ถ้ารวมแล้วไม่เกิน 130% และจำนวนสาขาไม่เกิน → ใช้ได้
+                if new_util_6w <= 130 and new_count <= MAX_BRANCHES_PER_TRIP:
+                    if new_util_6w < best_new_util:
+                        best_new_util = new_util_6w
+                        best_target_trip = target_trip
+            
+            # ถ้าหาทริปที่รวมได้ → รวมเลย
+            if best_target_trip is not None:
+                for code in codes:
+                    test_df.loc[test_df['Code'] == code, 'Trip'] = best_target_trip
+                print(f"✅ รวมทริป {trip_num} ({merge_trip['util']:.1f}%) เข้าทริป {best_target_trip} (utilization ใหม่: {best_new_util:.1f}%)")
+        
+        # เรียงเลขทริปใหม่อีกครั้งหลังการรวม
+        test_df['Trip'] = test_df['Trip'].fillna(0).astype(int)
+        trip_mapping = {}
+        new_trip_num = 1
+        for old_trip in sorted(test_df[test_df['Trip'] > 0]['Trip'].unique()):
+            trip_mapping[old_trip] = new_trip_num
+            new_trip_num += 1
+        test_df['Trip'] = test_df['Trip'].map(lambda x: trip_mapping.get(x, 0) if x > 0 else 0)
     
     # ===============================================
     # Post-processing: รวมทริปเล็กและปรับขนาดรถ
