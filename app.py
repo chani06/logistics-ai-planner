@@ -2711,42 +2711,61 @@ def predict_trips(test_df, model_data):
                 max_cube_allowed = max_c
                 max_weight_allowed = max_w
                 
-                # กำหนด threshold ตามประเภทรถ
-                if vehicle_type == 'JB':
-                    # JB: < 8.0 คิว (น้อยกว่า 8, ไม่เท่ากับ), ≤ 3500 kg
-                    max_cube_allowed = 8.0  # ต้องน้อยกว่า 8
+                # 🔥 เงื่อนไขจาก simple_trip_planner_v2.py
+                if vehicle_type == '6W':
+                    max_cube_allowed = LIMITS['6W']['max_c']  # 20 คิว
+                    max_weight_allowed = LIMITS['6W']['max_w']  # 7000 kg
+                    max_drops = LIMITS['6W']['max_drops']  # ไม่จำกัด
+                elif vehicle_type == 'JB':
+                    max_cube_allowed = LIMITS['JB']['max_c']  # 7 คิว
                     max_weight_allowed = LIMITS['JB']['max_w']  # 3500 kg
-                    can_fit = trip_weight <= max_weight_allowed and trip_cube < max_cube_allowed
-                elif vehicle_type == '4W':
-                    # 4W: ≤ 5.00 คิว (ไม่เกิน 5), ≤ 2500 kg
-                    max_cube_allowed = LIMITS['4W']['max_c']  # 5.00 คิว
+                    max_drops = LIMITS['JB']['max_drops']  # 7 drops
+                else:  # 4W
+                    # 4W: 5 คิว (PT ล้วน), 3.5 คิว (คละ)
+                    all_punthai = test_df[test_df['Code'].isin(current_trip + [code])]['Is_Punthai'].all() if 'Is_Punthai' in test_df.columns else False
+                    max_cube_allowed = LIMITS['4W']['max_c'] if all_punthai else 3.5
                     max_weight_allowed = LIMITS['4W']['max_w']  # 2500 kg
-                    can_fit = trip_weight <= max_weight_allowed and trip_cube <= max_cube_allowed
-                else:
-                    # 6W: ยอมให้เกิน 105% (21 คิว)
-                    can_fit = trip_weight <= max_w and trip_cube <= max_c
-                    
-                    # 🔥 กรณีพิเศษ 6W: ถ้าเกิน 21 คิว ให้เช็คว่าเหลือสาขาใกล้เคียงน้อย (1-2 สาขา)
-                    if not can_fit and trip_cube > LIMITS['6W']['max_c'] * 1.05:  # เกิน 21 คิว
-                        # นับจำนวนสาขาที่เหลือในเส้นทางนี้
-                        remaining_nearby_branches = 0
-                        code_region = get_region_from_province(code_province) if code_province != 'UNKNOWN' else None
-                        
-                        # นับสาขาที่เหลือในภาคเดียวกัน
-                        for remaining_code in all_codes:
-                            if remaining_code == code:
-                                continue
-                            remaining_prov = province_cache.get(remaining_code, 'UNKNOWN')
-                            if remaining_prov != 'UNKNOWN':
-                                remaining_region = get_region_from_province(remaining_prov)
-                                if code_region and remaining_region == code_region:
-                                    remaining_nearby_branches += 1
-                        
-                        # ถ้าเหลือ 1-2 สาขาในเส้นทางนี้ → ยอมรับเกิน
-                        if remaining_nearby_branches <= 2:
-                            can_fit = True
+                    max_drops = LIMITS['4W']['max_drops']  # 12 drops
                 
-                # 🚨 กรณีพิเศษ: ถ้ารถไม่เต็ม ให้พิจารณารับสาขาใกล้เคียงเพิ่ม (เฉพาะ 6W)
+                # ตรวจสอบตามเงื่อนไข simple
+                should_add = True
+                
+                # เช็คคิว
+                if trip_cube > max_cube_allowed:
+                    # 6W: ยอมให้เกิน 20 คิว
+                    if vehicle_type == '6W' and trip_cube <= LIMITS['6W']['max_c']:
+                        pass  # ใส่ได้
+                    # JB: ห้ามเกิน 7 คิว (ไม่อัพเกรด)
+                    elif vehicle_type == 'JB':
+                        should_add = False  # เกิน 7 คิว → ตัดทริป
+                    # 4W → JB
+                    elif vehicle_type == '4W' and trip_cube <= LIMITS['JB']['max_c']:
+                        vehicle_type = 'JB'
+                        max_cube_allowed = LIMITS['JB']['max_c']
+                        max_weight_allowed = LIMITS['JB']['max_w']
+                        max_drops = LIMITS['JB']['max_drops']
+                    else:
+                        should_add = False
+                
+                # เช็คน้ำหนัก
+                if should_add and trip_weight > max_weight_allowed:
+                    # 6W: ผ่อนปรนน้ำหนัก 10%
+                    if vehicle_type == '6W' and trip_weight <= LIMITS['6W']['max_w'] * 1.1:
+                        pass  # ใส่ได้
+                    else:
+                        should_add = False
+                
+                # เช็ค drops
+                if should_add and len(current_trip) + 1 > max_drops:
+                    # 6W: ใส่ได้จนถึง max_drops
+                    if vehicle_type == '6W' and len(current_trip) + 1 <= LIMITS['6W']['max_drops']:
+                        pass  # ใส่ได้
+                    else:
+                        should_add = False
+                
+                can_fit = should_add
+                
+                # ไม่มี special case เพิ่มเติม - ใช้เงื่อนไขจาก simple เท่านั้น
                 if not can_fit and vehicle_type == '6W':
                     # คำนวณ % การใช้รถปัจจุบัน (ก่อนเพิ่มสาขาใหม่)
                     current_weight = test_df[test_df['Code'].isin(current_trip)]['Weight'].sum()
@@ -5067,6 +5086,40 @@ def main():
                                 
                                 # อัปเดตเลขทริปใหม่
                                 export_df['Trip'] = export_df['Trip'].map(old_to_new_trip)
+                                
+                                # 🔥 เพิ่ม DC011 ต่อท้ายทุกทริป (ตาม simple_trip_planner_v2.py)
+                                dc_rows = []
+                                for trip_num in sorted(export_df['Trip'].dropna().unique()):
+                                    trip_data = export_df[export_df['Trip'] == trip_num]
+                                    if len(trip_data) == 0:
+                                        continue
+                                    
+                                    # ดึง truck type จากทริป
+                                    truck = trip_data['Truck'].mode()[0] if len(trip_data['Truck'].mode()) > 0 else '4W'
+                                    
+                                    # สร้างแถว DC011
+                                    dc_row = export_df.iloc[0].copy()  # copy โครงสร้าง
+                                    dc_row['Trip'] = trip_num
+                                    dc_row['Code'] = 'DC011'
+                                    dc_row['Name'] = 'บ.พีทีจี เอ็นเนอยี จำกัด (มหาชน) (DCวังน้อย)'
+                                    dc_row['Cube'] = 0
+                                    dc_row['Weight'] = 0
+                                    dc_row['Truck'] = truck
+                                    if 'Distance_from_DC' in dc_row.index:
+                                        dc_row['Distance_from_DC'] = -1  # ให้อยู่ท้ายสุด
+                                    
+                                    dc_rows.append(dc_row)
+                                
+                                # เพิ่ม DC rows เข้า export_df
+                                if dc_rows:
+                                    dc_df = pd.DataFrame(dc_rows)
+                                    export_df = pd.concat([export_df, dc_df], ignore_index=True)
+                                    # เรียงตาม Trip แล้วตาม Distance_from_DC (DC=-1 จะอยู่ท้าย)
+                                    if 'Distance_from_DC' in export_df.columns:
+                                        export_df = export_df.sort_values(['Trip', 'Distance_from_DC'], ascending=[True, False])
+                                    else:
+                                        export_df = export_df.sort_values('Trip')
+                                    export_df = export_df.reset_index(drop=True)
                                 
                                 # สร้างคอลัมน์ Trip no (4W001, 4WJ002, 6W003)
                                 trip_no_map = {}
