@@ -5460,10 +5460,18 @@ def main():
                                 trip_col_exists = 'Trip' in punthai_export.columns
                                 
                                 for row_num in range(len(punthai_export)):
-                                    # ดึง trip number (ถ้ามี) - ใช้ .get() เพื่อป้องกัน KeyError
+                                    # ดึง trip number (ถ้ามี) - ใช้วิธีปลอดภัย
                                     if trip_col_exists:
-                                        row_data = punthai_export.iloc[row_num]
-                                        trip = row_data.get('Trip', row_num) if hasattr(row_data, 'get') else row_num
+                                        try:
+                                            # พยายามเข้าถึง Trip โดยใช้ .iloc และ .get()
+                                            row_data = punthai_export.iloc[row_num]
+                                            if isinstance(row_data, pd.Series):
+                                                # ถ้าเป็น Series ให้ใช้ .get() หรือเข้าถึงด้วย index
+                                                trip = row_data.get('Trip', row_num) if 'Trip' in row_data.index else row_num
+                                            else:
+                                                trip = row_num
+                                        except (KeyError, AttributeError):
+                                            trip = row_num
                                     else:
                                         # ถ้าไม่มีคอลัมน์ Trip ให้ใช้ row_num แทน
                                         trip = row_num
