@@ -3029,7 +3029,7 @@ def predict_trips(test_df, model_data):
                 (new_c / LIMITS['6W']['max_c']) * 100
             )
             
-            if new_util <= 125 and new_count <= MAX_BRANCHES_PER_TRIP:
+            if new_util <= 100 and new_count <= MAX_BRANCHES_PER_TRIP:
                 # เช็คข้อจำกัดสาขา
                 trip_codes = set(trip_data['Code'].values) | {branch_code}
                 max_allowed = get_max_vehicle_for_trip(trip_codes)
@@ -3137,7 +3137,7 @@ def predict_trips(test_df, model_data):
             )
             
             # รวมได้ถ้า ≤120% และสาขา ≤MAX
-            if combined_util <= 120 and combined_count <= MAX_BRANCHES_PER_TRIP:
+            if combined_util <= 100 and combined_count <= MAX_BRANCHES_PER_TRIP:
                 # เช็คข้อจำกัดสาขา
                 combined_codes = low_trip['codes'] | set(trip_data['Code'].values)
                 max_allowed = get_max_vehicle_for_trip(combined_codes)
@@ -3240,10 +3240,10 @@ def predict_trips(test_df, model_data):
                 # เป้าหมาย: Cube 95-130%, น้ำหนัก ≤130%
                 if current_util < 95:
                     # รถยังไม่เต็ม → ยืดหยุ่นมาก (ยอมให้เกินได้ถึง 130%)
-                    can_add = new_cube_util <= 130 and new_weight_util <= 130 and new_count <= MAX_BRANCHES_PER_TRIP
+                    can_add = new_cube_util <= 100 and new_weight_util <= 100 and new_count <= MAX_BRANCHES_PER_TRIP
                 else:
                     # รถเต็มพอสมควรแล้ว → เข้มงวดขึ้น (ไม่เกิน 120%)
-                    can_add = new_cube_util <= 120 and new_weight_util <= 130 and new_count <= MAX_BRANCHES_PER_TRIP
+                    can_add = new_cube_util <= 100 and new_weight_util <= 100 and new_count <= MAX_BRANCHES_PER_TRIP
                 
                 if can_add:
                     # เช็คข้อจำกัดสาขา
@@ -3421,25 +3421,25 @@ def predict_trips(test_df, model_data):
             
             # 🚨 ตรวจสอบข้อจำกัดสาขาก่อน
             if max_allowed == '4W':
-                # ลำดับ 1: ลอง 4W ก่อน (95-130%)
-                if 95 <= cube_util_4w <= 130 and weight_util_4w <= 130 and branch_count <= 12:
+                # ลำดับ 1: ลอง 4W ก่อน (95-100%)
+                if 95 <= cube_util_4w <= 100 and weight_util_4w <= 100 and branch_count <= 12:
                     recommended = '4W'
                 # ลำดับ 2: ถ้า 4W ไม่พอดี → แยกเป็น 4W + 4W (75-95% ต่อคัน)
-                elif cube_util_4w > 130:
+                elif cube_util_4w > 100:
                     # จะแยกใน Phase 2.5
                     recommended = '4W+4W'
                 else:
                     # ต่ำกว่า 95% → ใช้ 4W (แต่อาจรวมกับทริปอื่นภายหลัง)
                     recommended = '4W'
             elif max_allowed == 'JB':
-                # ลำดับ 1: ลอง 4W ก่อน (95-130%)
-                if 95 <= cube_util_4w <= 130 and weight_util_4w <= 130 and branch_count <= 12:
+                # ลำดับ 1: ลอง 4W ก่อน (95-100%)
+                if 95 <= cube_util_4w <= 100 and weight_util_4w <= 100 and branch_count <= 12:
                     recommended = '4W'
-                # ลำดับ 2: ลอง JB (95-130%)
-                elif 95 <= cube_util_jb <= 130 and weight_util_jb <= 130 and branch_count <= 12:
+                # ลำดับ 2: ลอง JB (95-100%)
+                elif 95 <= cube_util_jb <= 100 and weight_util_jb <= 100 and branch_count <= 12:
                     recommended = 'JB'
                 # ลำดับ 3: แยกเป็น JB + 4W หรือ JB + JB (75-95% ต่อคัน)
-                elif cube_util_jb > 130:
+                elif cube_util_jb > 100:
                     # ลองแยกเป็น JB + 4W (13 cube max)
                     if total_c <= 13:
                         recommended = 'JB+4W'
@@ -3454,10 +3454,10 @@ def predict_trips(test_df, model_data):
             # 🚛 กรุงเทพ+ปริมณฑล (nearby) → บังคับห้าม 6W (ลำดับแรกสุด!)
             elif all_nearby:
                 # ลอง 4W ก่อน
-                if cube_util_4w <= 120 and weight_util_4w <= 130:
+                if cube_util_4w <= 100 and weight_util_4w <= 100:
                     recommended = '4W'
                 # ถ้า 4W ไม่พอ → ลอง JB
-                elif cube_util_jb <= 130 and weight_util_jb <= 130:
+                elif cube_util_jb <= 100 and weight_util_jb <= 100:
                     recommended = 'JB'
                     region_changes['nearby_6w_to_jb'] += 1
                 # ถ้า JB ก็ไม่พอ → ต้องแยกทริป (จะแยกใน Phase 2.5)
@@ -3672,9 +3672,9 @@ def predict_trips(test_df, model_data):
         
         # 🚨 บังคับ: ต้องเคารพข้อจำกัดสาขา ไม่ว่าประวัติจะบอกอะไร!
         # กรณีที่ 1: รถใหญ่กว่าที่อนุญาต → บังคับเปลี่ยนหรือแยก
-        # กรณีที่ 2: รถตามข้อจำกัดแต่ใส่ไม่ได้ (>130%)
-        if current_priority > allowed_priority or util_allowed > 130:
-            if util_allowed <= 130:
+        # กรณีที่ 2: รถตามข้อจำกัดแต่ใส่ไม่ได้ (>100%) → ตัดแยกทันที!
+        if current_priority > allowed_priority or util_allowed > 100:
+            if util_allowed <= 100:
                 # ใส่รถที่อนุญาตได้ → ปรับรถ
                 trip_recommended_vehicles[trip_num] = max_allowed
                 fix_count += 1
@@ -3694,8 +3694,8 @@ def predict_trips(test_df, model_data):
                     fourw_c = LIMITS['4W']['max_c']
                     fourw_util = max((total_w / fourw_w) * 100, (total_c / fourw_c) * 100)
                     
-                    # ถ้า 4W ใส่ได้ (ไม่เกิน 140%) → ใช้ 4W
-                    if fourw_util <= 140:
+                    # ถ้า 4W ใส่ได้ (ไม่เกิน 105%) → ใช้ 4W
+                    if fourw_util <= 105:
                         trip_recommended_vehicles[trip_num] = '4W'
                         fix_count += 1
                         continue
@@ -3757,8 +3757,8 @@ def predict_trips(test_df, model_data):
                         # เงื่อนไขเพิ่ม: ถ้าสาขาห่างจากกลุ่มมากเกิน 50km → แยกกลุ่มใหม่
                         too_far = distance_from_group > 50 and len(current_group) > 0
                         
-                        # เป้าหมาย: 95-120% และไม่เกินจำนวนสาขา และไม่ไกลเกินไป
-                        if ((test_util <= 120 and len(current_group) < max_branches and not too_far) or 
+                        # เป้าหมาย: 95-100% และไม่เกินจำนวนสาขา และไม่ไกลเกินไป
+                        if ((test_util <= 100 and len(current_group) < max_branches and not too_far) or 
                             len(current_group) == 0):
                             # ใส่ได้
                             current_group.append(code)
@@ -3818,15 +3818,15 @@ def predict_trips(test_df, model_data):
                         
                         # เลือกรถที่เหมาะสมที่สุด (Cube 95-120%)
                         if trip_branches <= 12:
-                            if 95 <= util_4w <= 120 and max_allowed != 'JB' and max_allowed != '6W':
+                            if 95 <= util_4w <= 100 and max_allowed != 'JB' and max_allowed != '6W':
                                 trip_info['vehicle'] = '4W'
-                            elif 95 <= util_jb <= 130 and max_allowed != '6W':
+                            elif 95 <= util_jb <= 100 and max_allowed != '6W':
                                 trip_info['vehicle'] = 'JB'
                             elif util_6w <= 200 and max_allowed == '6W':
                                 trip_info['vehicle'] = '6W'
-                            elif util_jb <= 140 and max_allowed != '6W':
+                            elif util_jb <= 105 and max_allowed != '6W':
                                 trip_info['vehicle'] = 'JB'
-                            elif util_4w <= 140 and max_allowed != 'JB' and max_allowed != '6W':
+                            elif util_4w <= 105 and max_allowed != 'JB' and max_allowed != '6W':
                                 trip_info['vehicle'] = '4W'
                             else:
                                 trip_info['vehicle'] = target_vehicle
@@ -3881,7 +3881,7 @@ def predict_trips(test_df, model_data):
                                 new_c = trip_info['cube'] + branch_c
                                 new_util = max((new_w / v_w) * 100, (new_c / v_c) * 100)
                                 
-                                if new_util <= 140 and len(trip_info['codes']) < 12:
+                                if new_util <= 105 and len(trip_info['codes']) < 12:
                                     score = distance + (new_util - 100) * 0.5
                                     if score < best_score:
                                         best_score = score
