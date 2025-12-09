@@ -47,14 +47,14 @@ BUFFER = 1.05
 MAX_BRANCHES_PER_TRIP = 12  # สูงสุด 12 สาขาต่อทริปสำหรับ 4W/JB (6W ไม่จำกัด)
 TARGET_BRANCHES_PER_TRIP = 9  # เป้าหมาย 9 สาขาต่อทริป
 
-# Performance Config - Optimized for < 1 minute
+# Performance Config - Optimized for SPEED (< 30 seconds)
 MAX_DETOUR_KM = 12  # ลดจาก 15km เป็น 12km
-MAX_MERGE_ITERATIONS = 10  # ลดจาก 25 เป็น 10 เพื่อเร็วขึ้น
-MAX_REBALANCE_ITERATIONS = 5  # จำกัดการ rebalance (ใหม่!)
-MAX_PROCESSING_TIME = 50  # วินาที - เหลือเวลา 10 วิสำหรับ Phase อื่น (ใหม่!)
-EARLY_STOP_UTIL = 95  # หยุดถ้าได้ utilization >= 95% (ใหม่!)
-MAX_REBALANCE_ITERATIONS = 5  # จำกัดการ rebalance (ใหม่!)
-EARLY_STOP_THRESHOLD = 0.95  # หยุดถ้าได้ utilization >= 95% (ใหม่!)
+MAX_MERGE_ITERATIONS = 5  # ลดเหลือ 5 เพื่อเร็วมาก
+MAX_REBALANCE_ITERATIONS = 3  # จำกัดการ rebalance
+MAX_PROCESSING_TIME = 25  # วินาที - เร็วขึ้น
+EARLY_STOP_UTIL = 90  # หยุดถ้าได้ utilization >= 90%
+EARLY_STOP_THRESHOLD = 0.90  # หยุดถ้าได้ utilization >= 90%
+SKIP_OPTIMIZATION = True  # ข้าม optimization ที่ไม่จำเป็น
 
 # รายการสาขาที่ไม่ต้องการจัดส่ง (ตัดออก)
 EXCLUDE_BRANCHES = ['DC011', 'PTDC', 'PTG DISTRIBUTION CENTER']
@@ -76,7 +76,7 @@ MAX_DISTANCE_BETWEEN_BRANCHES = 100  # km - ระยะห่างระหว
 MAX_DC_DISTANCE_SPREAD = 80  # km - ความห่างสูงสุดของ Distance_DC ในทริปเดียวกัน (ป้องกันข้ามภูมิภาค)
 
 # 🗺️ ระยะทาง: ใช้ระยะทางจริงตามถนน (Road Distance) แทนเส้นตรง
-USE_ROAD_DISTANCE = True  # True = ใช้ OSRM API คำนวณระยะทางจริง, False = ใช้ Haversine (เส้นตรง)
+USE_ROAD_DISTANCE = False  # True = ใช้ OSRM API คำนวณระยะทางจริง (ช้า), False = ใช้ Haversine (เร็ว)
 
 # ==========================================
 # LOAD MASTER DATA
@@ -3091,8 +3091,9 @@ def predict_trips(test_df, model_data):
         # อัพเดต test_df
         test_df['Trip'] = test_df['Code'].map(assigned_trips)
     
-    # เรียกใช้งาน optimization
-    optimize_branch_placement()
+    # เรียกใช้งาน optimization (ข้ามถ้า SKIP_OPTIMIZATION = True)
+    if not SKIP_OPTIMIZATION:
+        optimize_branch_placement()
     
     # ===============================================
     # Post-processing: รวมทริปเล็กและปรับขนาดรถ
@@ -4518,45 +4519,46 @@ def predict_trips(test_df, model_data):
             if single_trip['trip_num'] in trip_recommended_vehicles:
                 del trip_recommended_vehicles[single_trip['trip_num']]
     
-    # 🗺️ เรียงลำดับสาขาตาม Nearest Neighbor (เฉพาะทริปใหญ่ ≥ 6 สาขา - เพิ่มความเร็ว)
-    for trip_num in test_df['Trip'].unique():
-        if trip_num == 0:
-            continue
-        
-        trip_codes = list(test_df[test_df['Trip'] == trip_num]['Code'].values)
-        if len(trip_codes) < 6:  # Skip ถ้าน้อยกว่า 6 สาขา
-            continue
-        
-        # เรียงตาม Nearest Neighbor แบบเร็ว (ใช้ cache)
-        ordered = []
-        remaining = trip_codes.copy()
-        current_lat, current_lon = DC_WANG_NOI_LAT, DC_WANG_NOI_LON
-        
-        while remaining and len(ordered) < len(trip_codes):
-            nearest = None
-            min_dist = float('inf')
+    # 🗺️ เรียงลำดับสาขาตาม Nearest Neighbor (ข้ามถ้า SKIP_OPTIMIZATION = True)
+    if not SKIP_OPTIMIZATION:
+        for trip_num in test_df['Trip'].unique():
+            if trip_num == 0:
+                continue
             
-            for code in remaining:
-                lat, lon = coord_cache.get(code, (None, None))
-                if lat:
-                    dist = haversine_distance(current_lat, current_lon, lat, lon)
-                    if dist < min_dist:
-                        min_dist = dist
-                        nearest = code
+            trip_codes = list(test_df[test_df['Trip'] == trip_num]['Code'].values)
+            if len(trip_codes) < 8:  # Skip ถ้าน้อยกว่า 8 สาขา (เพิ่มจาก 6)
+                continue
             
-            if nearest:
-                ordered.append(nearest)
-                remaining.remove(nearest)
-                lat, lon = coord_cache.get(nearest, (None, None))
-                if lat:
-                    current_lat, current_lon = lat, lon
-            else:
-                ordered.extend(remaining)
-                break
-        
-        # อัปเดต Sequence
-        for seq, code in enumerate(ordered, start=1):
-            test_df.loc[(test_df['Code'] == code) & (test_df['Trip'] == trip_num), 'Sequence'] = seq
+            # เรียงตาม Nearest Neighbor แบบเร็ว (ใช้ cache)
+            ordered = []
+            remaining = trip_codes.copy()
+            current_lat, current_lon = DC_WANG_NOI_LAT, DC_WANG_NOI_LON
+            
+            while remaining and len(ordered) < len(trip_codes):
+                nearest = None
+                min_dist = float('inf')
+                
+                for code in remaining:
+                    lat, lon = coord_cache.get(code, (None, None))
+                    if lat:
+                        dist = haversine_distance(current_lat, current_lon, lat, lon)
+                        if dist < min_dist:
+                            min_dist = dist
+                            nearest = code
+                
+                if nearest:
+                    ordered.append(nearest)
+                    remaining.remove(nearest)
+                    lat, lon = coord_cache.get(nearest, (None, None))
+                    if lat:
+                        current_lat, current_lon = lat, lon
+                else:
+                    ordered.extend(remaining)
+                    break
+            
+            # อัปเดต Sequence
+            for seq, code in enumerate(ordered, start=1):
+                test_df.loc[(test_df['Code'] == code) & (test_df['Trip'] == trip_num), 'Sequence'] = seq
     
     # สรุปผลและแนะนำรถ
     summary_data = []
