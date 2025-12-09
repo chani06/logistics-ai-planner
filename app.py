@@ -75,6 +75,9 @@ DISTANCE_REQUIRE_6W = 100  # ถ้าห่างจาก DC เกิน 100 
 MAX_DISTANCE_BETWEEN_BRANCHES = 100  # km - ระยะห่างระหว่างสาขาติดกัน
 MAX_DC_DISTANCE_SPREAD = 80  # km - ความห่างสูงสุดของ Distance_DC ในทริปเดียวกัน (ป้องกันข้ามภูมิภาค)
 
+# 🗺️ ระยะทาง: ใช้ระยะทางจริงตามถนน (Road Distance) แทนเส้นตรง
+USE_ROAD_DISTANCE = True  # True = ใช้ OSRM API คำนวณระยะทางจริง, False = ใช้ Haversine (เส้นตรง)
+
 # ==========================================
 # LOAD MASTER DATA
 # ==========================================
@@ -322,9 +325,22 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.asin(math.sqrt(a))
     return 6371 * c
 
-def calculate_distance_from_dc(lat, lon):
-    """คำนวณระยะทางจาก DC วังน้อย (กม.)"""
-    return calculate_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
+def calculate_distance_from_dc(lat, lon, use_road_distance=True):
+    """
+    คำนวณระยะทางจาก DC วังน้อย (กม.)
+    
+    Parameters:
+    - lat, lon: พิกัดปลายทาง
+    - use_road_distance: ใช้ระยะทางจริงตามถนน (default=True)
+    
+    Returns:
+    - distance (km): ระยะทางจาก DC
+    """
+    if use_road_distance:
+        dist, fallback = get_road_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
+        return dist
+    else:
+        return calculate_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
 
 def get_direction_from_dc(lat, lon):
     """คำนวณทิศทางจาก DC (N/S/E/W/NE/NW/SE/SW) - ตาม simple_trip_planner_v2.py"""
@@ -923,6 +939,74 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     distance = R * c
     
     return distance
+
+# Global cache สำหรับระยะทางจริง (road distance)
+_road_distance_cache = {}
+
+def get_road_distance(lat1, lon1, lat2, lon2, use_cache=True):
+    """
+    คำนวณระยะทางจริงตามถนนโดยใช้ OSRM API (Open Source Routing Machine)
+    
+    Parameters:
+    - lat1, lon1: พิกัดจุดเริ่มต้น
+    - lat2, lon2: พิกัดจุดปลายทาง
+    - use_cache: ใช้ cache หรือไม่ (default=True)
+    
+    Returns:
+    - distance (km): ระยะทางจริงตามถนน
+    - fallback: True ถ้าใช้ Haversine แทน (เมื่อ API ไม่พร้อมใช้งาน)
+    """
+    import requests
+    from math import radians, sin, cos, sqrt, atan2
+    
+    # สร้าง cache key
+    cache_key = f"{lat1:.4f},{lon1:.4f}-{lat2:.4f},{lon2:.4f}"
+    
+    # เช็ค cache ก่อน
+    if use_cache and cache_key in _road_distance_cache:
+        return _road_distance_cache[cache_key], False
+    
+    try:
+        # ใช้ OSRM public API (ฟรี)
+        url = f"http://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}"
+        params = {
+            'overview': 'false',
+            'steps': 'false'
+        }
+        
+        response = requests.get(url, params=params, timeout=2)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('code') == 'Ok' and 'routes' in data and len(data['routes']) > 0:
+                # ระยะทางจาก OSRM (เป็นเมตร)
+                distance_m = data['routes'][0]['distance']
+                distance_km = distance_m / 1000.0
+                
+                # บันทึก cache
+                if use_cache:
+                    _road_distance_cache[cache_key] = distance_km
+                
+                return distance_km, False
+        
+        # ถ้า API ล้มเหลว ใช้ Haversine แทน (คูณด้วย 1.3 เพื่อประมาณระยะทางถนน)
+        straight_dist = haversine_distance(lat1, lon1, lat2, lon2)
+        road_dist = straight_dist * 1.3  # ถนนโดยปกติยาวกว่าเส้นตรง 20-40%
+        
+        if use_cache:
+            _road_distance_cache[cache_key] = road_dist
+        
+        return road_dist, True
+        
+    except Exception as e:
+        # Error → ใช้ Haversine แทน
+        straight_dist = haversine_distance(lat1, lon1, lat2, lon2)
+        road_dist = straight_dist * 1.3
+        
+        if use_cache:
+            _road_distance_cache[cache_key] = road_dist
+        
+        return road_dist, True
 
 def check_branch_distance_compatibility(codes1, codes2, get_lat_lon_func):
     """
@@ -2893,13 +2977,13 @@ def predict_trips(test_df, model_data):
                 # ถ้าต่างจังหวัดแต่ภูมิภาคเดียวกันและใกล้กัน → ยังพอรับได้
                 same_province = code_province in trip_provinces
                 if not same_province and code_province != 'UNKNOWN' and trip_provinces:
-                    # ต่างจังหวัด - เช็คระยะทาง ถ้าใกล้กันมาก (< 80 km) ก็ยังรวมได้
+                    # ต่างจังหวัด - เช็คระยะทางจริง (road distance) ถ้าใกล้กันมาก (< 80 km) ก็ยังรวมได้
                     if code_lat:
                         min_dist_to_trip = float('inf')
                         for tc in trip_codes:
                             tc_lat, tc_lon = coord_cache.get(tc, (None, None))
                             if tc_lat:
-                                dist = haversine_distance(code_lat, code_lon, tc_lat, tc_lon)
+                                dist, _ = get_road_distance(code_lat, code_lon, tc_lat, tc_lon)
                                 min_dist_to_trip = min(min_dist_to_trip, dist)
                         
                         # ถ้าห่างเกิน 80 km → ข้าม (ยกเว้นถ้าทั้งทริปมีน้อยกว่า 3 สาขา)
@@ -2919,13 +3003,13 @@ def predict_trips(test_df, model_data):
                 if len(trip_codes) >= MAX_BRANCHES_PER_TRIP:
                     continue
                 
-                # คำนวณระยะทางเฉลี่ยไปสาขาในทริป
+                # คำนวณระยะทางเฉลี่ยไปสาขาในทริป (ใช้ระยะทางจริงตามถนน)
                 if code_lat:
                     distances = []
                     for tc in trip_codes:
                         tc_lat, tc_lon = coord_cache.get(tc, (None, None))
                         if tc_lat:
-                            dist = haversine_distance(code_lat, code_lon, tc_lat, tc_lon)
+                            dist, _ = get_road_distance(code_lat, code_lon, tc_lat, tc_lon)
                             distances.append(dist)
                     
                     if distances:
@@ -4770,16 +4854,17 @@ def predict_trips(test_df, model_data):
                     lon = m.iloc[0].get('ลองติจูด', 0)
                     
                     if lat and lon:
-                        # คำนวณระยะทางจากจุดก่อนหน้า
-                        dist = haversine_distance(prev_lat, prev_lon, lat, lon)
+                        # คำนวณระยะทางจริงตามถนนจากจุดก่อนหน้า
+                        dist, _ = get_road_distance(prev_lat, prev_lon, lat, lon)
                         
                         if i == 0:
-                            # สาขาแรก: ระยะจาก DC
+                            # สาขาแรก: ระยะจาก DC (ใช้ระยะทางจริง)
                             distance_from_dc[code] = round(dist, 2)
                             distance_to_next[code] = 0  # ไม่มีระยะ "ก่อนหน้า"
                         else:
-                            # สาขาถัดไป: ระยะจากสาขาก่อนหน้า
-                            distance_from_dc[code] = round(haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon), 2)
+                            # สาขาถัดไป: คำนวณระยะทางจาก DC แบบจริง
+                            dc_dist, _ = get_road_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
+                            distance_from_dc[code] = round(dc_dist, 2)
                             distance_to_next[codes[i-1]] = round(dist, 2)  # บันทึกที่สาขาก่อนหน้า
                             
                             if i == len(codes) - 1:
@@ -4986,6 +5071,10 @@ def main():
     col1, col2 = st.columns([3, 1])
     with col1:
         st.title("🚚 ระบบจัดเที่ยว")
+        if USE_ROAD_DISTANCE:
+            st.caption("🗺️ ใช้ระยะทางจริงตามถนน (Road Distance) จาก OSRM API")
+        else:
+            st.caption("📏 ใช้ระยะทางเส้นตรง (Haversine Distance)")
     with col2:
         st.image("https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/1f69a.svg", width=100)
     
