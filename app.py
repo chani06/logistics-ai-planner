@@ -2917,54 +2917,27 @@ def predict_trips(test_df, model_data):
     }
     
     # ⚡ Early stopping - ถ้าใช้เวลามากกว่า 55 วินาที
-            if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
-                master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == branch_code]
-                if len(master_row) > 0:
-                    branch_district = str(master_row.iloc[0].get('อำเภอ', '')).strip()
-            
-            # ถ้าใช้รถน้อยกว่า 40% → พิจารณาย้าย
-            if util_4w < 40 or util_jb < 40:
-                lat, lon = get_lat_lon(branch_code)
-                if lat and lon:
-                    single_branch_trips.append({
-                        'trip': trip_num,
-                        'code': branch_code,
-                        'weight': branch_w,
-                        'cube': branch_c,
-                        'lat': lat,
-                        'lon': lon,
-                        'util': util_4w,
-                        'province': branch_province,
-                        'district': branch_district
-                    })
-    
-    # พยายามย้ายสาขาเดียวไปรวมกับทริปอื่นที่ใกล้เคียง
-    for single_trip in single_branch_trips:
-        branch_code = single_trip['code']
-        branch_w = single_trip['weight']
-        branch_c = single_trip['cube']
-        branch_lat = single_trip['lat']
-        branch_lon = single_trip['lon']
-        
-        # หาทริปที่ใกล้ที่สุด (ไม่รวมทริปของตัวเอง)
-        best_trip = None
-        min_distance = float('inf')
-        
+    if time.time() - start_time > 55:
+        # Skip Phase 2 complex logic, ใช้ logic เร็ว
         for trip_num in test_df['Trip'].unique():
-            if trip_num == 0 or trip_num == single_trip['trip']:
-                continue
-            
             trip_data = test_df[test_df['Trip'] == trip_num]
+            total_c = trip_data['Cube'].sum()
             
-            # ถ้าทริปมีมากกว่า 2 สาขา → พิจารณา
-            if len(trip_data) < 2:
-                continue
-            
-            # คำนวณระยะทางจาก centroid ของทริป
-            trip_lats = []
-            trip_lons = []
-            for code in trip_data['Code'].values:
-                lat, lon = get_lat_lon(code)
+            # เลือกรถแบบเร็ว (ไม่มี optimization)
+            if total_c <= 5:
+                trip_recommended_vehicles[trip_num] = '4W'
+            elif total_c <= 8:
+                trip_recommended_vehicles[trip_num] = 'JB'
+            else:
+                trip_recommended_vehicles[trip_num] = '6W'
+    else:
+        # เก็บข้อมูลทริปที่เหลือ
+        for trip_num in test_df['Trip'].unique():
+            trip_data = test_df[test_df['Trip'] == trip_num]
+            branch_count = len(trip_data)
+            total_w = trip_data['Weight'].sum()
+            total_c = trip_data['Cube'].sum()
+            trip_codes = set(trip_data['Code'].values)
                 if lat and lon:
                     trip_lats.append(lat)
                     trip_lons.append(lon)
