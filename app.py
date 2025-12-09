@@ -4851,37 +4851,69 @@ def main():
                             # ดาวน์โหลด
                             output = io.BytesIO()
                             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                                # เพิ่มคอลัมน์ Trip no และประเภทรถ
-                                export_df = result_df.copy()
+                                # 🔥 รักษาข้อมูลต้นฉบับ 100% - merge กับไฟล์ที่อัปโหลด
+                                export_df = df.copy()  # เริ่มจากไฟล์ต้นฉบับ
                                 
-                                # สร้างคอลัมน์ Trip no (เช่น 4W001, JB002, 6W003)
+                                # เพิ่มคอลัมน์ Trip, Truck จาก result_df
+                                trip_mapping = result_df.set_index('Code')[['Trip', 'Truck']].to_dict()
+                                export_df['Trip'] = export_df['Code'].map(trip_mapping['Trip'])
+                                export_df['Truck'] = export_df['Code'].map(trip_mapping['Truck'])
+                                
+                                # 🔢 เรียงเลขทริปต่อเนื่อง 1,2,3... (ไม่กระโดด)
+                                # เรียงตาม Region → Direction → Distance_DC → Province
+                                trip_order = result_df.groupby('Trip').first().reset_index()
+                                if 'Region' in result_df.columns and 'Distance_from_DC' in result_df.columns:
+                                    trip_order = trip_order.sort_values(
+                                        by=['Region', 'Distance_from_DC'],
+                                        ascending=[True, False]  # ไกล→ใกล้
+                                    ).reset_index(drop=True)
+                                else:
+                                    trip_order = trip_order.sort_values('Trip').reset_index(drop=True)
+                                
+                                # สร้าง mapping: old_trip → new_trip (1,2,3...)
+                                old_to_new_trip = {}
+                                for new_num, row in enumerate(trip_order.itertuples(), start=1):
+                                    old_to_new_trip[row.Trip] = new_num
+                                
+                                # อัปเดตเลขทริปใหม่
+                                export_df['Trip'] = export_df['Trip'].map(old_to_new_trip)
+                                
+                                # สร้างคอลัมน์ Trip_No (เช่น 4W001, JB002, 6W003)
                                 trip_no_map = {}
                                 vehicle_counts = {'4W': 0, 'JB': 0, '6W': 0}
                                 
-                                for trip_num in sorted(export_df['Trip'].unique()):
-                                    # ดึงประเภทรถจาก summary
-                                    trip_summary = summary[summary['Trip'] == trip_num]
-                                    if len(trip_summary) > 0:
-                                        truck_info = trip_summary.iloc[0]['Truck']
+                                for trip_num in sorted(export_df['Trip'].dropna().unique()):
+                                    # ดึงประเภทรถจาก Truck column
+                                    trip_trucks = export_df[export_df['Trip'] == trip_num]['Truck'].dropna()
+                                    if len(trip_trucks) > 0:
+                                        truck_info = trip_trucks.iloc[0]
                                         # แยกประเภทรถ (4W, JB, 6W)
                                         vehicle_type = truck_info.split()[0] if truck_info else '6W'
                                         
                                         # นับรถแต่ละประเภท
                                         vehicle_counts[vehicle_type] += 1
                                         trip_no = f"{vehicle_type}{vehicle_counts[vehicle_type]:03d}"
-                                        trip_no_map[trip_num] = {'trip_no': trip_no, 'vehicle': vehicle_type}
+                                        trip_no_map[trip_num] = trip_no
                                 
-                                # เพิ่มคอลัมน์ใหม่
-                                export_df['Trip_No'] = export_df['Trip'].map(lambda x: trip_no_map.get(x, {}).get('trip_no', ''))
-                                export_df['Vehicle_Type'] = export_df['Trip'].map(lambda x: trip_no_map.get(x, {}).get('vehicle', ''))
+                                # เพิ่มคอลัมน์ Trip_No
+                                export_df['TripNo'] = export_df['Trip'].map(trip_no_map)
                                 
-                                # เรียงคอลัมน์ใหม่
-                                cols = ['Trip_No', 'Vehicle_Type', 'Trip'] + [c for c in export_df.columns if c not in ['Trip_No', 'Vehicle_Type', 'Trip']]
-                                export_df = export_df[cols]
+                                # จัดเรียงคอลัมน์: TripNo, Trip, Truck ไว้หน้าสุด ตามด้วยคอลัมน์เดิม
+                                original_cols = [c for c in df.columns if c in export_df.columns]
+                                new_cols = ['TripNo', 'Trip', 'Truck'] + [c for c in original_cols if c not in ['TripNo', 'Trip', 'Truck']]
+                                export_df = export_df[new_cols]
+                                
+                                # เรียงตาม Trip แล้ว Weight (มาก→น้อย)
+                                export_df = export_df.sort_values(['Trip', 'Weight'], ascending=[True, False])
+                                
+                                # อัปเดต summary ให้ใช้เลขทริปใหม่ที่เรียงแล้ว
+                                summary_export = summary.copy()
+                                summary_export['Trip'] = summary_export['Trip'].map(old_to_new_trip)
+                                summary_export = summary_export.sort_values('Trip')
                                 
                                 # เขียน Excel
                                 export_df.to_excel(writer, sheet_name='รายละเอียดทริป', index=False)
-                                summary.to_excel(writer, sheet_name='สรุปทริป', index=False)
+                                summary_export.to_excel(writer, sheet_name='สรุปทริป', index=False)
                                 
                                 # จัดรูปแบบ - แยกสีตามทริป
                                 workbook = writer.book
@@ -4935,12 +4967,14 @@ def main():
                                         
                                         worksheet.write(row_num + 1, col_num, value, cell_format)
                                 
-                                # ปรับความกว้างคอลัมน์
-                                worksheet.set_column('A:A', 12)  # Trip_No
-                                worksheet.set_column('B:B', 15)  # Vehicle_Type
-                                worksheet.set_column('C:C', 8)   # Trip
-                                worksheet.set_column('D:D', 12)  # Code
-                                worksheet.set_column('E:E', 35)  # Name
+                                # ปรับความกว้างคอลัมน์อัตโนมัติ
+                                for col_num, col_name in enumerate(export_df.columns):
+                                    # คำนวณความกว้างจากความยาวของชื่อคอลัมน์และข้อมูล
+                                    max_len = max(
+                                        export_df[col_name].astype(str).map(len).max(),
+                                        len(str(col_name))
+                                    )
+                                    worksheet.set_column(col_num, col_num, min(max_len + 2, 50))
                             
                             col1, col2, col3 = st.columns([1, 2, 1])
                             with col2:
