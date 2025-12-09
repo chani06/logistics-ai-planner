@@ -2869,16 +2869,42 @@ def predict_trips(test_df, model_data):
                 trip_weight = trip_data['Weight'].sum()
                 trip_cube = trip_data['Cube'].sum()
                 
-                # เช็คจังหวัดเดียวกัน
+                # เช็คจังหวัดและภูมิภาค - ยืดหยุ่นมากขึ้น
                 trip_provinces = set()
+                trip_regions = set()
                 for tc in trip_codes:
                     tp = province_cache.get(tc, 'UNKNOWN')
                     if tp != 'UNKNOWN':
                         trip_provinces.add(tp)
+                        tr = get_region_from_province(tp)
+                        if tr:
+                            trip_regions.add(tr)
                 
-                # ต้องจังหวัดเดียวกัน หรือไม่มีข้อมูลจังหวัด
-                if code_province != 'UNKNOWN' and trip_provinces and code_province not in trip_provinces:
-                    continue
+                # เช็คภูมิภาคก่อน - ต้องภูมิภาคเดียวกัน
+                code_region = get_region_from_province(code_province) if code_province != 'UNKNOWN' else None
+                
+                if code_region and trip_regions:
+                    # ถ้าต่างภูมิภาค → ข้าม (เว้นแต่ภูมิภาคที่เข้ากันได้เช่น NORTH+NORTHEAST)
+                    regions_compatible = all(check_region_compatibility(code_region, tr) for tr in trip_regions)
+                    if not regions_compatible:
+                        continue
+                
+                # ถ้าจังหวัดเดียวกัน → ดีมาก
+                # ถ้าต่างจังหวัดแต่ภูมิภาคเดียวกันและใกล้กัน → ยังพอรับได้
+                same_province = code_province in trip_provinces
+                if not same_province and code_province != 'UNKNOWN' and trip_provinces:
+                    # ต่างจังหวัด - เช็คระยะทาง ถ้าใกล้กันมาก (< 80 km) ก็ยังรวมได้
+                    if code_lat:
+                        min_dist_to_trip = float('inf')
+                        for tc in trip_codes:
+                            tc_lat, tc_lon = coord_cache.get(tc, (None, None))
+                            if tc_lat:
+                                dist = haversine_distance(code_lat, code_lon, tc_lat, tc_lon)
+                                min_dist_to_trip = min(min_dist_to_trip, dist)
+                        
+                        # ถ้าห่างเกิน 80 km → ข้าม (ยกเว้นถ้าทั้งทริปมีน้อยกว่า 3 สาขา)
+                        if min_dist_to_trip > 80 and len(trip_codes) >= 3:
+                            continue
                 
                 # เช็คว่าใส่รถได้หรือไม่ (ใช้ 6W เป็น limit)
                 new_weight = trip_weight + code_weight
@@ -4324,6 +4350,89 @@ def predict_trips(test_df, model_data):
                 if low_trip['trip_num'] in trip_recommended_vehicles:
                     del trip_recommended_vehicles[low_trip['trip_num']]
     
+    # 🧹 Phase 3.5: ทำความสะอาดทริปสาขาเดียว (Single-branch leftover cleanup)
+    # หาทริปที่มีเพียง 1 สาขา และพยายามรวมกับทริปใกล้เคียงในภูมิภาคเดียวกัน
+    single_branch_trips = []
+    for trip_num in test_df['Trip'].unique():
+        if trip_num == 0:
+            continue
+        trip_data = test_df[test_df['Trip'] == trip_num]
+        if len(trip_data) == 1:  # สาขาเดียว
+            single_branch_trips.append({
+                'trip_num': trip_num,
+                'code': trip_data.iloc[0]['Code'],
+                'weight': trip_data['Weight'].sum(),
+                'cube': trip_data['Cube'].sum()
+            })
+    
+    # พยายามรวมทริปสาขาเดียวเข้ากับทริปอื่นที่อยู่ในภูมิภาคเดียวกันและใกล้กัน
+    for single_trip in single_branch_trips:
+        code = single_trip['code']
+        code_lat, code_lon = coord_cache.get(code, (None, None))
+        code_province = province_cache.get(code, 'UNKNOWN')
+        code_region = get_region_from_province(code_province) if code_province != 'UNKNOWN' else None
+        
+        if not code_lat or not code_region:
+            continue
+        
+        # หาทริปที่ใกล้ที่สุดในภูมิภาคเดียวกัน
+        best_target = None
+        best_distance = float('inf')
+        
+        for target_trip_num in test_df['Trip'].unique():
+            if target_trip_num == 0 or target_trip_num == single_trip['trip_num']:
+                continue
+            
+            target_data = test_df[test_df['Trip'] == target_trip_num]
+            target_vehicle = trip_recommended_vehicles.get(target_trip_num, '6W')
+            
+            # เช็คภูมิภาค
+            target_regions = set()
+            for tc in target_data['Code']:
+                tp = province_cache.get(tc, 'UNKNOWN')
+                if tp != 'UNKNOWN':
+                    tr = get_region_from_province(tp)
+                    if tr:
+                        target_regions.add(tr)
+            
+            # ต้องภูมิภาคเดียวกันหรือเข้ากันได้
+            if not target_regions or not all(check_region_compatibility(code_region, tr) for tr in target_regions):
+                continue
+            
+            # เช็คว่ารวมได้ไหม (ไม่เกิน limit)
+            new_w = target_data['Weight'].sum() + single_trip['weight']
+            new_c = target_data['Cube'].sum() + single_trip['cube']
+            
+            vehicle_limits = LIMITS.get(target_vehicle, LIMITS['6W'])
+            new_util = max((new_w / vehicle_limits['max_w']) * 100,
+                          (new_c / vehicle_limits['max_c']) * 100)
+            
+            max_branches = vehicle_limits.get('max_drops', 12)
+            
+            # ยืดหยุ่นมากขึ้น: ยอมให้เกิน 105% เพื่อไม่ให้เหลือเศษสาขา
+            if new_util <= 110 and len(target_data) < max_branches:
+                # คำนวณระยะทางเฉลี่ยไปสาขาในทริป
+                distances = []
+                for tc in target_data['Code']:
+                    tc_lat, tc_lon = coord_cache.get(tc, (None, None))
+                    if tc_lat:
+                        dist = haversine_distance(code_lat, code_lon, tc_lat, tc_lon)
+                        distances.append(dist)
+                
+                if distances:
+                    avg_dist = sum(distances) / len(distances)
+                    # ยืดหยุ่นระยะทาง: ยอมรับได้ถึง 120 km เพื่อไม่ให้เหลือเศษ
+                    if avg_dist < 120 and avg_dist < best_distance:
+                        best_distance = avg_dist
+                        best_target = target_trip_num
+        
+        # ย้ายสาขาเข้าทริปเป้าหมาย
+        if best_target:
+            test_df.loc[test_df['Code'] == code, 'Trip'] = best_target
+            # ลบทริปเดิม
+            if single_trip['trip_num'] in trip_recommended_vehicles:
+                del trip_recommended_vehicles[single_trip['trip_num']]
+    
     # 🗺️ เรียงลำดับสาขาตาม Nearest Neighbor (เฉพาะทริปใหญ่ ≥ 6 สาขา - เพิ่มความเร็ว)
     for trip_num in test_df['Trip'].unique():
         if trip_num == 0:
@@ -5262,9 +5371,10 @@ def main():
                                 trip_col_exists = 'Trip' in punthai_export.columns
                                 
                                 for row_num in range(len(punthai_export)):
-                                    # ดึง trip number (ถ้ามี)
+                                    # ดึง trip number (ถ้ามี) - ใช้ .get() เพื่อป้องกัน KeyError
                                     if trip_col_exists:
-                                        trip = punthai_export.iloc[row_num]['Trip']
+                                        row_data = punthai_export.iloc[row_num]
+                                        trip = row_data.get('Trip', row_num) if hasattr(row_data, 'get') else row_num
                                     else:
                                         # ถ้าไม่มีคอลัมน์ Trip ให้ใช้ row_num แทน
                                         trip = row_num
