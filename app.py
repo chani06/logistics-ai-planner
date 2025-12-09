@@ -5015,11 +5015,8 @@ def main():
                                 workbook = writer.book
                                 worksheet = writer.sheets['รายละเอียดทริป']
                                 
-                                # สีสำหรับแต่ละทริป (สลับสี)
-                                colors = [
-                                    '#E3F2FD', '#FFEBEE', '#F3E5F5', '#E8F5E9', '#FFF3E0',
-                                    '#E0F2F1', '#FFF9C4', '#F1F8E9', '#FCE4EC', '#E1F5FE'
-                                ]
+                                # สีสำหรับแต่ละทริป (สลับเหลืองโทนส้ม-ขาว)
+                                colors = ['#FFE699', '#FFFFFF']  # เหลืองโทนส้ม สลับ ขาว
                                 
                                 # Format header
                                 header_format = workbook.add_format({
