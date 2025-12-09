@@ -4851,7 +4851,21 @@ def main():
                             # ดาวน์โหลด
                             output = io.BytesIO()
                             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                                # 🔥 รักษาข้อมูลต้นฉบับ 100% - merge กับไฟล์ที่อัปโหลด
+                                # 🔥 ดึงไฟล์ต้นฉบับทุกชีต
+                                original_file = uploaded_file
+                                original_file.seek(0)  # Reset file pointer
+                                original_excel = pd.ExcelFile(original_file)
+                                
+                                # รักษาทุกชีตจากไฟล์ต้นฉบับ (ยกเว้น sheet ที่จะแทนที่)
+                                sheets_to_keep = {}
+                                for sheet_name in original_excel.sheet_names:
+                                    if sheet_name not in ['2.Punthai', 'Summary']:  # ข้าม sheet ที่จะสร้างใหม่
+                                        try:
+                                            sheets_to_keep[sheet_name] = pd.read_excel(original_excel, sheet_name=sheet_name)
+                                        except:
+                                            pass  # ข้าม sheet ที่อ่านไม่ได้
+                                
+                                # 🔥 เตรียมข้อมูลสำหรับ Sheet 2.Punthai
                                 export_df = df.copy()  # เริ่มจากไฟล์ต้นฉบับ
                                 
                                 # เพิ่มคอลัมน์ Trip, Truck จาก result_df
@@ -4859,8 +4873,8 @@ def main():
                                 export_df['Trip'] = export_df['Code'].map(trip_mapping['Trip'])
                                 export_df['Truck'] = export_df['Code'].map(trip_mapping['Truck'])
                                 
-                                # 🔢 เรียงเลขทริปต่อเนื่อง 1,2,3... (ไม่กระโดด)
-                                # เรียงตาม Region → Direction → Distance_DC → Province
+                                # 🔢 เรียงเลขทริปต่อเนื่อง 1,2,3... (ไม่กระโดด ไม่ขาดหาย)
+                                # เรียงตาม Region → Distance_DC (ไกล→ใกล้)
                                 trip_order = result_df.groupby('Trip').first().reset_index()
                                 if 'Region' in result_df.columns and 'Distance_from_DC' in result_df.columns:
                                     trip_order = trip_order.sort_values(
@@ -4870,7 +4884,7 @@ def main():
                                 else:
                                     trip_order = trip_order.sort_values('Trip').reset_index(drop=True)
                                 
-                                # สร้าง mapping: old_trip → new_trip (1,2,3...)
+                                # สร้าง mapping: old_trip → new_trip (1,2,3... ต่อเนื่อง)
                                 old_to_new_trip = {}
                                 for new_num, row in enumerate(trip_order.itertuples(), start=1):
                                     old_to_new_trip[row.Trip] = new_num
@@ -4878,49 +4892,84 @@ def main():
                                 # อัปเดตเลขทริปใหม่
                                 export_df['Trip'] = export_df['Trip'].map(old_to_new_trip)
                                 
-                                # สร้างคอลัมน์ Trip_No (เช่น 4W001, JB002, 6W003)
+                                # สร้างคอลัมน์ Trip no (4W001, 4WJ002, 6W003)
                                 trip_no_map = {}
-                                vehicle_counts = {'4W': 0, 'JB': 0, '6W': 0}
+                                vehicle_counts = {'4W': 0, '4WJ': 0, '6W': 0}
                                 
                                 for trip_num in sorted(export_df['Trip'].dropna().unique()):
-                                    # ดึงประเภทรถจาก Truck column
                                     trip_trucks = export_df[export_df['Trip'] == trip_num]['Truck'].dropna()
                                     if len(trip_trucks) > 0:
                                         truck_info = trip_trucks.iloc[0]
-                                        # แยกประเภทรถ (4W, JB, 6W)
                                         vehicle_type = truck_info.split()[0] if truck_info else '6W'
                                         
-                                        # นับรถแต่ละประเภท
-                                        vehicle_counts[vehicle_type] += 1
+                                        # แปลง JB → 4WJ
+                                        if vehicle_type == 'JB':
+                                            vehicle_type = '4WJ'
+                                        
+                                        vehicle_counts[vehicle_type] = vehicle_counts.get(vehicle_type, 0) + 1
                                         trip_no = f"{vehicle_type}{vehicle_counts[vehicle_type]:03d}"
                                         trip_no_map[trip_num] = trip_no
                                 
-                                # เพิ่มคอลัมน์ Trip_No
-                                export_df['TripNo'] = export_df['Trip'].map(trip_no_map)
+                                export_df['Trip no'] = export_df['Trip'].map(trip_no_map)
                                 
-                                # จัดเรียงคอลัมน์: TripNo, Trip, Truck ไว้หน้าสุด ตามด้วยคอลัมน์เดิม
-                                original_cols = [c for c in df.columns if c in export_df.columns]
-                                new_cols = ['TripNo', 'Trip', 'Truck'] + [c for c in original_cols if c not in ['TripNo', 'Trip', 'Truck']]
-                                export_df = export_df[new_cols]
+                                # 📋 จัดคอลัมน์ตามรูปแบบ Punthai: Sep., BU, รหัสสาขา, รหัส WMS, สาขา, Total Cube, Total Wgt, จำนวนชิ้น, Trip, Trip no
+                                # Mapping คอลัมน์เดิม → คอลัมน์ Punthai
+                                punthai_cols = {
+                                    'Trip no': 'Trip no',
+                                    'Trip': 'Trip',
+                                    'Code': 'รหัสสาขา',
+                                    'Name': 'สาขา',
+                                    'Cube': 'Total Cube',
+                                    'Weight': 'Total Wgt'
+                                }
                                 
-                                # เรียงตาม Trip แล้ว Weight (มาก→น้อย)
-                                export_df = export_df.sort_values(['Trip', 'Weight'], ascending=[True, False])
+                                # เพิ่มคอลัมน์ที่ขาด
+                                if 'Sep.' not in export_df.columns:
+                                    export_df.insert(0, 'Sep.', '')
+                                if 'BU' not in export_df.columns:
+                                    export_df.insert(1, 'BU', 'Punthai')
+                                if 'รหัส WMS' not in export_df.columns:
+                                    export_df['รหัส WMS'] = export_df.get('Code', '')
+                                if 'จำนวนชิ้น' not in export_df.columns:
+                                    export_df['จำนวนชิ้น'] = ''
                                 
-                                # อัปเดต summary ให้ใช้เลขทริปใหม่ที่เรียงแล้ว
+                                # เปลี่ยนชื่อคอลัมน์ตาม Punthai
+                                for old_col, new_col in punthai_cols.items():
+                                    if old_col in export_df.columns and old_col != new_col:
+                                        export_df.rename(columns={old_col: new_col}, inplace=True)
+                                
+                                # จัดลำดับคอลัมน์ตาม Punthai
+                                punthai_order = ['Sep.', 'BU', 'รหัสสาขา', 'รหัส WMS', 'สาขา', 'Total Cube', 'Total Wgt', 'จำนวนชิ้น', 'Trip', 'Trip no']
+                                other_cols = [c for c in export_df.columns if c not in punthai_order]
+                                final_cols = punthai_order + other_cols
+                                final_cols = [c for c in final_cols if c in export_df.columns]
+                                export_df = export_df[final_cols]
+                                
+                                # เรียงตาม Trip แล้ว Total Wgt (มาก→น้อย)
+                                export_df = export_df.sort_values(['Trip', 'Total Wgt'], ascending=[True, False])
+                                
+                                # อัปเดต summary ให้ใช้เลขทริปใหม่
                                 summary_export = summary.copy()
                                 summary_export['Trip'] = summary_export['Trip'].map(old_to_new_trip)
                                 summary_export = summary_export.sort_values('Trip')
                                 
-                                # เขียน Excel
-                                export_df.to_excel(writer, sheet_name='รายละเอียดทริป', index=False)
-                                summary_export.to_excel(writer, sheet_name='สรุปทริป', index=False)
+                                # 📝 เขียน Excel - เขียน sheet 2.Punthai และ Summary ก่อน
+                                export_df.to_excel(writer, sheet_name='2.Punthai', index=False)
+                                summary_export.to_excel(writer, sheet_name='Summary', index=False)
                                 
-                                # จัดรูปแบบ - แยกสีตามทริป
+                                # 📄 เขียน sheet อื่นๆจากไฟล์ต้นฉบับ
+                                for sheet_name, sheet_df in sheets_to_keep.items():
+                                    try:
+                                        sheet_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                                    except:
+                                        pass  # ข้าม sheet ที่เขียนไม่ได้
+                                
+                                # 🎨 จัดรูปแบบ - สลับสีตามทริป (เริ่มจากสีขาว)
                                 workbook = writer.book
-                                worksheet = writer.sheets['รายละเอียดทริป']
+                                worksheet = writer.sheets['2.Punthai']
                                 
-                                # สีสำหรับแต่ละทริป (สลับเหลืองโทนส้ม-ขาว)
-                                colors = ['#FFE699', '#FFFFFF']  # เหลืองโทนส้ม สลับ ขาว
+                                # สีสำหรับแต่ละทริป (สลับ ขาว-เหลืองโทนส้ม)
+                                colors = ['#FFFFFF', '#FFE699']  # ขาว สลับ เหลืองโทนส้ม
                                 
                                 # Format header
                                 header_format = workbook.add_format({
