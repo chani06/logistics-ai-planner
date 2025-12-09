@@ -5072,9 +5072,9 @@ def main():
     with col1:
         st.title("🚚 ระบบจัดเที่ยว")
         if USE_ROAD_DISTANCE:
-            st.caption("🗺️ ใช้ระยะทางจริงตามถนน (Road Distance) จาก OSRM API")
+            st.caption("🗺️ ใช้ระยะทางจริงตามถนน (Road Distance) | KeyError Fixed v2")
         else:
-            st.caption("📏 ใช้ระยะทางเส้นตรง (Haversine Distance)")
+            st.caption("📏 ใช้ระยะทางเส้นตรง (Haversine Distance) | KeyError Fixed v2")
     with col2:
         st.image("https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/1f69a.svg", width=100)
     
