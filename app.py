@@ -2703,20 +2703,20 @@ def predict_trips(test_df, model_data):
                     if avg_dist_to_trip > 25:
                         continue  # ไกลเกินไป - ควรไปทริปอื่น
                 
-                # 🔥 เช็คขนาดอย่างเข้มงวด: JB ≤ 8 คิว (100%), 4W ≤ 5 คิว (100%)
+                # 🔥 เช็คขนาดอย่างเข้มงวด: ยอมให้เกินในหลักทศนิยมได้
                 can_fit = False
                 max_cube_allowed = max_c
                 max_weight_allowed = max_w
                 
-                # กำหนด threshold ตามประเภทรถ
+                # กำหนด threshold ตามประเภทรถ (ยอมให้เกินในหลักทศนิยม)
                 if vehicle_type == 'JB':
-                    # JB: ห้ามเกิน 100% (7 คิว max, ใช้ 7 คิว = 100%)
-                    max_cube_allowed = LIMITS['JB']['max_c']  # 7 คิว
+                    # JB: ≤ 7.99 คิว (ไม่ถึง 8), ≤ 3500 kg
+                    max_cube_allowed = LIMITS['JB']['max_c'] + 0.99  # 7.99 คิว
                     max_weight_allowed = LIMITS['JB']['max_w']  # 3500 kg
                     can_fit = trip_weight <= max_weight_allowed and trip_cube <= max_cube_allowed
                 elif vehicle_type == '4W':
-                    # 4W: ห้ามเกิน 100% (5 คิว max)
-                    max_cube_allowed = LIMITS['4W']['max_c']  # 5 คิว
+                    # 4W: ≤ 5.99 คิว (ไม่ถึง 6), ≤ 2500 kg
+                    max_cube_allowed = LIMITS['4W']['max_c'] + 0.99  # 5.99 คิว
                     max_weight_allowed = LIMITS['4W']['max_w']  # 2500 kg
                     can_fit = trip_weight <= max_weight_allowed and trip_cube <= max_cube_allowed
                 else:
