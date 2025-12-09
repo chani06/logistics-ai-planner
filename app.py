@@ -3170,8 +3170,9 @@ def predict_trips(test_df, model_data):
     for trip in all_trips:
         trip['primary_province'] = get_primary_province(trip)
     
-    # เรียงตามจังหวัดหลัก → ระยะทาง → จำนวนสาขา → utilization
-    all_trips.sort(key=lambda x: (x['primary_province'], x['distance_from_dc'], x['count'], x['util']))
+    # เรียงตามจังหวัดหลัก → ระยะทาง (ไกล→ใกล้) → จำนวนสาขา → utilization
+    # ใช้ negative distance เพื่อให้ไกลที่สุดอยู่ข้างหน้า
+    all_trips.sort(key=lambda x: (x['primary_province'], -x['distance_from_dc'], x['count'], x['util']))
     
     # 🎯 Phase 1: รวมทริปเล็ก (< 2 สาขา บังคับรวม, 2 สาขาที่ใช้ไม่เต็ม 90%) - แบบ simple_trip_planner_v2.py
     MIN_BRANCHES = 2  # เปลี่ยนจาก 3 เป็น 2
@@ -5003,11 +5004,12 @@ def predict_trips(test_df, model_data):
                 'main_province': main_province
             })
         
-        # เรียงตาม Region → Direction → Distance (ไกล→ใกล้) → Province
+        # เรียงตาม Region → Distance (ไกล→ใกล้) → Direction → Province
+        # จัดอันดับจากหลัง: ไกลที่สุดก่อน → ใกล้ที่สุดท้าย
         trip_info_df = pd.DataFrame(trip_info)
         trip_info_df = trip_info_df.sort_values(
-            by=['region', 'direction', 'avg_distance', 'main_province'],
-            ascending=[True, True, False, True]  # Distance: False = ไกล→ใกล้
+            by=['region', 'avg_distance', 'direction', 'main_province'],
+            ascending=[True, False, True, True]  # Distance: False = ไกล→ใกล้ (เรียงจากหลัง)
         )
         
         # สร้าง mapping: old_trip → new_trip (1,2,3...)
