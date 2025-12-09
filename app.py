@@ -1548,6 +1548,34 @@ def predict_trips(test_df, model_data):
                 return '🔒 จำกัดสาขา'
             return '✅ ใช้ตามไฟล์'
         test_df_result['VehicleCheck'] = test_df_result.apply(vehicle_check_str, axis=1)
+        
+        # 🆕 เพิ่มคอลัมน์ Trip no (4W001, 4WJ002, 6W003)
+        trip_no_map = {}
+        vehicle_counts = {'4W': 0, '4WJ': 0, '6W': 0}
+        
+        for trip_num in sorted(test_df_result['Trip'].dropna().unique()):
+            # ดึง vehicle type จาก Truck column
+            trip_trucks = test_df_result[test_df_result['Trip'] == trip_num]['Truck'].dropna()
+            if len(trip_trucks) > 0:
+                truck_info = trip_trucks.iloc[0]
+                vehicle_type = truck_info.split()[0] if truck_info else '6W'
+                
+                # แปลง JB → 4WJ
+                if vehicle_type == 'JB':
+                    vehicle_type = '4WJ'
+                
+                # นับและสร้างรหัส
+                if vehicle_type in vehicle_counts:
+                    vehicle_counts[vehicle_type] = vehicle_counts.get(vehicle_type, 0) + 1
+                    trip_no = f"{vehicle_type}{vehicle_counts[vehicle_type]:03d}"
+                    trip_no_map[trip_num] = trip_no
+                else:
+                    # fallback to 6W
+                    vehicle_counts['6W'] = vehicle_counts.get('6W', 0) + 1
+                    trip_no = f"6W{vehicle_counts['6W']:03d}"
+                    trip_no_map[trip_num] = trip_no
+        
+        test_df_result['Trip no'] = test_df_result['Trip'].map(trip_no_map)
 
         return test_df_result, summary_df
     
@@ -2142,11 +2170,39 @@ def predict_trips(test_df, model_data):
         return result
     
     # แปลงกลุ่มเป็น list ของ codes ที่เรียงตามชื่อ+ตำบล แล้ว nearest neighbor
+    # 🆕 เรียงตามข้อจำกัดสาขาก่อน (4W → JB → 6W) เพื่อจัดสาขาตามข้อจำกัดรถ
     all_codes = []
     for cluster in spatial_clusters:
         # 🆕 จัดกลุ่มตามชื่อ+ตำบลก่อน แล้วเรียง nearest neighbor
         ordered_cluster = group_by_name_and_subdistrict(cluster)
         all_codes.extend(ordered_cluster)
+    
+    # 🔥 เรียงลำดับสาขาตามข้อจำกัดรถก่อน (4W → JB → 6W)
+    def get_branch_vehicle_priority(code):
+        """คืนค่าลำดับความสำคัญของข้อจำกัดรถ: 4W=1, JB=2, 6W=3"""
+        max_vehicle = get_max_vehicle_for_branch(code)
+        if max_vehicle == '4W':
+            return 1
+        elif max_vehicle == 'JB':
+            return 2
+        else:  # 6W or unknown
+            return 3
+    
+    # จัดกลุ่มตามข้อจำกัดรถ แล้วเรียงตามระยะทาง DC
+    codes_by_vehicle = {'4W': [], 'JB': [], '6W': []}
+    for code in all_codes:
+        max_vehicle = get_max_vehicle_for_branch(code)
+        if max_vehicle in codes_by_vehicle:
+            codes_by_vehicle[max_vehicle].append(code)
+        else:
+            codes_by_vehicle['6W'].append(code)  # default to 6W
+    
+    # เรียงใหม่: 4W → JB → 6W (แต่ละกลุ่มเรียงตามระยะทาง DC)
+    all_codes = []
+    for vehicle_type in ['4W', 'JB', '6W']:
+        if codes_by_vehicle[vehicle_type]:
+            sorted_codes = sort_by_distance_from_dc(codes_by_vehicle[vehicle_type])
+            all_codes.extend(sorted_codes)
     
     while all_codes:
         # ⏱️ Early stopping - ถ้าใช้เวลามากกว่า 50 วินาที
@@ -2912,12 +2968,24 @@ def predict_trips(test_df, model_data):
     # เรียงตามจังหวัดหลัก → ระยะทาง → จำนวนสาขา → utilization
     all_trips.sort(key=lambda x: (x['primary_province'], x['distance_from_dc'], x['count'], x['util']))
     
-    # 🎯 Phase 1: รวมทริปเล็ก (< 3 สาขา) เท่านั้น - แบบ simple_trip_planner_v2.py
-    MIN_BRANCHES = 3
+    # 🎯 Phase 1: รวมทริปเล็ก (< 2 สาขา บังคับรวม, 2 สาขาที่ใช้ไม่เต็ม 90%) - แบบ simple_trip_planner_v2.py
+    MIN_BRANCHES = 2  # เปลี่ยนจาก 3 เป็น 2
+    MIN_UTILIZATION = 90  # ต้องเต็มอย่างน้อย 90%
     merge_count = 0
     
-    # หาทริปเล็ก (< 3 สาขา)
-    small_trips = [t for t in all_trips if t and t['count'] < MIN_BRANCHES]
+    # หาทริปที่ต้องรวม: 
+    # 1. สาขาเดียว (< 2) → บังคับรวม
+    # 2. 2 สาขาแต่ใช้ไม่เต็ม 90% → พยายามรวม
+    small_trips = []
+    for t in all_trips:
+        if not t:
+            continue
+        # สาขาเดียว → บังคับรวม
+        if t['count'] < MIN_BRANCHES:
+            small_trips.append(t)
+        # 2 สาขาแต่ใช้ไม่เต็ม 90%
+        elif t['count'] == MIN_BRANCHES and t['util'] < MIN_UTILIZATION:
+            small_trips.append(t)
     
     for trip1 in small_trips:
         
@@ -2927,6 +2995,33 @@ def predict_trips(test_df, model_data):
         # หาทริปที่ใกล้ที่สุดและรวมได้
         for trip2 in all_trips:
             if not trip2 or trip2['trip'] == trip1['trip']:
+                continue
+            
+            # 🔥 เช็คภูมิภาคก่อน - ห้ามผสมภาค
+            trip1_regions = set()
+            trip2_regions = set()
+            for code in trip1['codes']:
+                prov = get_province(code)
+                region = get_region_from_province(prov)
+                if region:
+                    trip1_regions.add(region)
+            for code in trip2['codes']:
+                prov = get_province(code)
+                region = get_region_from_province(prov)
+                if region:
+                    trip2_regions.add(region)
+            
+            # ต้องอยู่ภาคเดียวกัน
+            regions_compatible = True
+            for r1 in trip1_regions:
+                for r2 in trip2_regions:
+                    if not check_region_compatibility(r1, r2):
+                        regions_compatible = False
+                        break
+                if not regions_compatible:
+                    break
+            
+            if not regions_compatible:
                 continue
             
             # เช็คระยะทางระหว่างสาขา
@@ -2968,7 +3063,7 @@ def predict_trips(test_df, model_data):
                 test_df.loc[test_df['Code'] == code, 'Trip'] = best_merge['trip']
             merge_count += 1
     
-    print(f"✅ Phase 1: รวมทริปเล็ก (< {MIN_BRANCHES} สาขา) = {merge_count} ทริป")
+    print(f"✅ Phase 1: รวมทริปเล็ก (< {MIN_BRANCHES} สาขาหรือใช้ไม่เต็ม {MIN_UTILIZATION}%) = {merge_count} ทริป")
     
     # ข้าม Phase 1.25, 1.75 และ 1.5 (simple version ไม่ใช้)
     reassign_count = 0
