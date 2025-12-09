@@ -35,9 +35,9 @@ MODEL_PATH = 'models/decision_tree_model.pkl'
 
 # ขีดจำกัดรถแต่ละประเภท
 LIMITS = {
-    '4W': {'max_w': 2500, 'max_c': 5.0},   # ไม่เกิน 12 จุด, Cube ≤ 5
-    'JB': {'max_w': 3500, 'max_c': 8.0},   # ไม่เกิน 12 จุด, Cube ≤ 8
-    '6W': {'max_w': 5500, 'max_c': 20.0}   # ไม่จำกัดจุด, Cube ต้องเต็ม
+    '4W': {'max_w': 2500, 'max_c': 5.0, 'max_drops': 12},   # ≤2,500 kg, Cube ≤5 (PT)/3.5 (Mix), ≤12 drops
+    'JB': {'max_w': 3500, 'max_c': 7.0, 'max_drops': 7},    # ≤3,500 kg, Cube ≤7, ≤7 drops (ถ้า PT ล้วน)
+    '6W': {'max_w': 7000, 'max_c': 20.0, 'min_c': 18.0, 'max_drops': float('inf')}  # ≤7,000 kg, 18-20 คิว, ไม่จำกัด drops
 }
 
 # เผื่อการใช้รถได้เกิน 5%
