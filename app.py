@@ -119,7 +119,7 @@ def load_autoplan_restrictions():
                 break
         
         if not file_path:
-            st.warning("⚠️ ไม่พบไฟล์ Auto plan - จะไม่มีข้อจำกัดรถ")
+            print("⚠️ ไม่พบไฟล์ Auto plan - จะไม่มีข้อจำกัดรถ")
             return {}
         
         # อ่าน sheet 'Info' (ตัวใหญ่)
@@ -129,7 +129,7 @@ def load_autoplan_restrictions():
             try:
                 df = pd.read_excel(file_path, sheet_name='info')
             except Exception as e:
-                st.warning(f"⚠️ ไม่พบ sheet 'Info' หรือ 'info': {e}")
+                print(f"⚠️ ไม่พบ sheet 'Info' หรือ 'info': {e}")
                 return {}
         
         # ค้นหาคอลัมน์ที่ต้องการ (รองรับ multiline headers)
@@ -144,7 +144,7 @@ def load_autoplan_restrictions():
                 max_truck_type_col = col
         
         if not location_code_col or not max_truck_type_col:
-            st.warning(f"⚠️ ไม่พบคอลัมน์ที่ต้องการใน sheet 'Info': Location Code={location_code_col}, MaxTruckType={max_truck_type_col}")
+            print(f"⚠️ ไม่พบคอลัมน์ที่ต้องการใน sheet 'Info': Location Code={location_code_col}, MaxTruckType={max_truck_type_col}")
             return {}
         
         # แปลงประเภทรถจาก Auto plan เป็นรูปแบบที่ใช้
@@ -197,7 +197,7 @@ def load_autoplan_restrictions():
         
         return branch_restrictions
     except Exception as e:
-        st.error(f"❌ Error loading Auto plan: {e}")
+        print(f"❌ Error loading Auto plan: {e}")
         return {}
 
 @st.cache_data(ttl=3600)  # Cache 1 ชั่วโมง
