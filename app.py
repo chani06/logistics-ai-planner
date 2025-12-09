@@ -1484,9 +1484,12 @@ def predict_trips(test_df, model_data):
                                 w_util, c_util = jb_w_util, jb_c_util
                         # ถ้า JB ก็ยังเกิน ให้เตือนว่าเกิน ไม่ขยายเป็น 6W
                         elif suggested == 'JB':
-                            source = source + " (🚫 เกิน 8 คิว - ควรแยกทริป)"
+                            if total_c >= 8:
+                                source = source + " (ต้องแยกทริป)"
+                            else:
+                                source = source + " (เกินน้ำหนัก - ต้องแยกทริป)"
                         elif suggested == '4W':
-                            source = source + " (🚫 เกิน 5 คิว - ควรแยกทริป)"
+                            source = source + " (ต้องแยกทริป)"
                     else:
                         # ไม่มีข้อจำกัดสาขา สามารถขยายเป็น 6W ได้
                         if suggested == '4W' and 'JB' in LIMITS:
@@ -5202,8 +5205,16 @@ def main():
                                 current_trip = None
                                 color_index = 0
                                 
+                                # เช็คว่ามีคอลัมน์ Trip หรือไม่
+                                trip_col_exists = 'Trip' in punthai_export.columns
+                                
                                 for row_num in range(len(punthai_export)):
-                                    trip = punthai_export.iloc[row_num]['Trip']
+                                    # ดึง trip number (ถ้ามี)
+                                    if trip_col_exists:
+                                        trip = punthai_export.iloc[row_num]['Trip']
+                                    else:
+                                        # ถ้าไม่มีคอลัมน์ Trip ให้ใช้ row_num แทน
+                                        trip = row_num
                                     
                                     # เปลี่ยนสีเมื่อเปลี่ยนทริป
                                     if trip != current_trip:
