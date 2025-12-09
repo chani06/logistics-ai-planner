@@ -44,8 +44,8 @@ LIMITS = {
 BUFFER = 1.05
 
 # จำนวนสาขาต่อทริป - ใช้กับ 4W/JB เท่านั้น (6W ไม่จำกัด)
-MAX_BRANCHES_PER_TRIP = 12  # สูงสุด 12 สาขาต่อทริปสำหรับ 4W/JB (6W ไม่จำกัด)
-TARGET_BRANCHES_PER_TRIP = 12  # เป้าหมาย 12 สาขาต่อทริป
+MAX_BRANCHES_PER_TRIP = 13  # สูงสุด 13 สาขาต่อทริปสำหรับ 4W/JB (6W ไม่จำกัด)
+TARGET_BRANCHES_PER_TRIP = 9  # เป้าหมาย 9 สาขาต่อทริป (ตาม Punthai 8.5)
 
 # Performance Config - Optimized for < 1 minute
 MAX_DETOUR_KM = 12  # ลดจาก 15km เป็น 12km
@@ -2934,7 +2934,7 @@ def predict_trips(test_df, model_data):
                 allowed_priority = vehicle_priority.get(max_allowed_combined, 3)
                 
                 can_fit = False
-                if allowed_priority >= 3 and combined_6w_util <= 110:  # 6W
+                if allowed_priority >= 3 and combined_6w_util <= 105:  # 6W - ตามหลักการ 90-105%
                     can_fit = True
                 elif allowed_priority >= 2 and combined_c <= LIMITS['JB']['max_c'] * BUFFER:  # JB
                     can_fit = True
@@ -3080,13 +3080,13 @@ def predict_trips(test_df, model_data):
             if not can_merge:
                 continue  # ข้ามถ้าสาขาไกลกันเกิน 100km
             
-            # เช็คว่าใส่ได้ไหม (ยอมให้เกิน 125% สำหรับสาขาเดียว)
+            # เช็คว่าใส่ได้ไหม (ยอมให้เกิน 110% สำหรับสาขาเดียว)
             new_util = max(
                 (new_w / LIMITS['6W']['max_w']) * 100,
                 (new_c / LIMITS['6W']['max_c']) * 100
             )
             
-            if new_util <= 125 and new_count <= MAX_BRANCHES_PER_TRIP:
+            if new_util <= 110 and new_count <= MAX_BRANCHES_PER_TRIP:
                 # เช็คข้อจำกัดสาขา
                 trip_codes = trip_codes_set | {branch_code}
                 max_allowed = get_max_vehicle_for_trip(trip_codes)
@@ -3201,8 +3201,8 @@ def predict_trips(test_df, model_data):
                 (combined_c / LIMITS['6W']['max_c']) * 100
             )
             
-            # รวมได้ถ้า ≤120% และสาขา ≤MAX
-            if combined_util <= 120 and combined_count <= MAX_BRANCHES_PER_TRIP:
+            # รวมได้ถ้า ≤105% และสาขา ≤MAX (ตามหลักการ 90-105%)
+            if combined_util <= 105 and combined_count <= MAX_BRANCHES_PER_TRIP:
                 # เช็คข้อจำกัดสาขา
                 combined_codes = low_trip['codes'] | trip_codes_set
                 max_allowed = get_max_vehicle_for_trip(combined_codes)
