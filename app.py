@@ -69,6 +69,10 @@ DC_WANG_NOI_LON = 100.648149
 # ระยะทางที่ต้องใช้รถ 6W (กม.)
 DISTANCE_REQUIRE_6W = 100  # ถ้าห่างจาก DC เกิน 100 กม. ต้องใช้ 6W
 
+# ระยะทางระหว่างสาขา - ป้องกันสาขาข้ามภูมิภาค
+MAX_DISTANCE_BETWEEN_BRANCHES = 100  # km - ระยะห่างระหว่างสาขาติดกัน
+MAX_DC_DISTANCE_SPREAD = 80  # km - ความห่างสูงสุดของ Distance_DC ในทริปเดียวกัน
+
 # ==========================================
 # LOAD MASTER DATA
 # ==========================================
@@ -846,6 +850,44 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     distance = R * c
     
     return distance
+
+def check_branch_distance_compatibility(codes1, codes2, get_lat_lon_func):
+    """
+    ตรวจสอบว่าสาขา 2 กลุ่มสามารถรวมกันได้โดยพิจารณาระยะทางระหว่างสาขา
+    
+    Returns:
+        tuple: (can_merge: bool, max_distance: float, reason: str)
+    """
+    all_coords = []
+    
+    # รวมพิกัดทั้งหมด
+    for code in codes1 | codes2:
+        lat, lon = get_lat_lon_func(code)
+        if lat and lon:
+            all_coords.append((lat, lon, code))
+    
+    if len(all_coords) < 2:
+        return True, 0, "Not enough coordinates"
+    
+    # หาระยะทางสูงสุดระหว่างสาขาทั้งหมด
+    max_dist = 0
+    max_pair = None
+    
+    for i in range(len(all_coords)):
+        for j in range(i + 1, len(all_coords)):
+            lat1, lon1, code1 = all_coords[i]
+            lat2, lon2, code2 = all_coords[j]
+            dist = haversine_distance(lat1, lon1, lat2, lon2)
+            if dist > max_dist:
+                max_dist = dist
+                max_pair = (code1, code2)
+    
+    # ตรวจสอบระยะทางระหว่างสาขา
+    if max_dist > MAX_DISTANCE_BETWEEN_BRANCHES:
+        reason = f"ระยะห่างระหว่างสาขา {max_dist:.1f}km > {MAX_DISTANCE_BETWEEN_BRANCHES}km"
+        return False, max_dist, reason
+    
+    return True, max_dist, "OK"
 
 def get_region_type(province):
     """
@@ -2861,8 +2903,15 @@ def predict_trips(test_df, model_data):
                     if centroid_distance > 80:  # ไกลเกิน 80km ไม่รวม
                         continue
                 
-                # 🚨 เช็คข้อจำกัดรถก่อนรวม
+                # 🚨 เช็คระยะทางระหว่างสาขาทั้งหมด (ป้องกันข้ามภูมิภาค)
                 combined_codes = trip1['codes'] | trip2['codes']
+                can_merge, max_branch_dist, merge_reason = check_branch_distance_compatibility(
+                    trip1['codes'], trip2['codes'], get_lat_lon
+                )
+                if not can_merge:
+                    continue  # ข้ามถ้าสาขาไกลกันเกิน 100km
+                
+                # 🚨 เช็คข้อจำกัดรถก่อนรวม
                 max_allowed_combined = get_max_vehicle_for_trip(combined_codes)
                 
                 # ลองรวมกัน
@@ -3023,6 +3072,14 @@ def predict_trips(test_df, model_data):
             new_c = trip_c + branch_c
             new_count = len(trip_data) + 1
             
+            # เช็คระยะทางระหว่างสาขา (ป้องกันข้ามภูมิภาค)
+            trip_codes_set = set(trip_data['Code'].values)
+            can_merge, max_branch_dist, _ = check_branch_distance_compatibility(
+                trip_codes_set, {branch_code}, get_lat_lon
+            )
+            if not can_merge:
+                continue  # ข้ามถ้าสาขาไกลกันเกิน 100km
+            
             # เช็คว่าใส่ได้ไหม (ยอมให้เกิน 125% สำหรับสาขาเดียว)
             new_util = max(
                 (new_w / LIMITS['6W']['max_w']) * 100,
@@ -3031,7 +3088,7 @@ def predict_trips(test_df, model_data):
             
             if new_util <= 125 and new_count <= MAX_BRANCHES_PER_TRIP:
                 # เช็คข้อจำกัดสาขา
-                trip_codes = set(trip_data['Code'].values) | {branch_code}
+                trip_codes = trip_codes_set | {branch_code}
                 max_allowed = get_max_vehicle_for_trip(trip_codes)
                 
                 # บันทึกทริปที่ใกล้ที่สุด
@@ -3124,6 +3181,14 @@ def predict_trips(test_df, model_data):
             if distance > 50:
                 continue
             
+            # เช็คระยะทางระหว่างสาขา (ป้องกันข้ามภูมิภาค)
+            trip_codes_set = set(trip_data['Code'].values)
+            can_merge, max_branch_dist, _ = check_branch_distance_compatibility(
+                low_trip['codes'], trip_codes_set, get_lat_lon
+            )
+            if not can_merge:
+                continue  # ข้ามถ้าสาขาไกลกันเกิน 100km
+            
             # ตรวจสอบว่ารวมแล้วเกินไหม
             trip_w = trip_data['Weight'].sum()
             trip_c = trip_data['Cube'].sum()
@@ -3139,7 +3204,7 @@ def predict_trips(test_df, model_data):
             # รวมได้ถ้า ≤120% และสาขา ≤MAX
             if combined_util <= 120 and combined_count <= MAX_BRANCHES_PER_TRIP:
                 # เช็คข้อจำกัดสาขา
-                combined_codes = low_trip['codes'] | set(trip_data['Code'].values)
+                combined_codes = low_trip['codes'] | trip_codes_set
                 max_allowed = get_max_vehicle_for_trip(combined_codes)
                 
                 if distance < min_distance:
