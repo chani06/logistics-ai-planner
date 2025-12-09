@@ -83,8 +83,88 @@ def process_trips_simple(df):
     """ประมวลผลทริป - แบบง่ายและเร็ว"""
     start_time = datetime.now()
     
+    # 🔍 หาคอลัมน์ Code (อาจชื่อต่างกัน)
+    code_col = None
+    possible_code_cols = ['Code', 'code', 'รหัส', 'Plan Code', 'Branch Code', 'BRANCH_CODE', 'Branch', 'สาขา']
+    for col in possible_code_cols:
+        if col in df.columns:
+            code_col = col
+            break
+    
+    if code_col is None:
+        # ใช้คอลัมน์แรกที่มี string
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                code_col = col
+                break
+    
+    if code_col is None:
+        st.error("❌ ไม่พบคอลัมน์รหัสสาขา (Code)")
+        st.write("คอลัมน์ที่มี:", list(df.columns))
+        return df, {}
+    
+    # Rename to 'Code' for consistency
+    if code_col != 'Code':
+        df = df.rename(columns={code_col: 'Code'})
+        st.info(f"📝 ใช้คอลัมน์ '{code_col}' เป็นรหัสสาขา")
+    
+    # 🔍 หาคอลัมน์ Name
+    name_col = None
+    possible_name_cols = ['Name', 'name', 'ชื่อ', 'Branch Name', 'ชื่อสาขา', 'BRANCH_NAME']
+    for col in possible_name_cols:
+        if col in df.columns:
+            name_col = col
+            break
+    if name_col and name_col != 'Name':
+        df = df.rename(columns={name_col: 'Name'})
+    elif 'Name' not in df.columns:
+        df['Name'] = df['Code']
+    
+    # 🔍 หาคอลัมน์ Cube
+    cube_col = None
+    possible_cube_cols = ['Cube', 'cube', 'คิว', 'CBM', 'Volume', 'ปริมาตร']
+    for col in possible_cube_cols:
+        if col in df.columns:
+            cube_col = col
+            break
+    if cube_col and cube_col != 'Cube':
+        df = df.rename(columns={cube_col: 'Cube'})
+    elif 'Cube' not in df.columns:
+        df['Cube'] = 0
+    
+    # 🔍 หาคอลัมน์ Weight
+    weight_col = None
+    possible_weight_cols = ['Weight', 'weight', 'น้ำหนัก', 'KG', 'Kg', 'kg']
+    for col in possible_weight_cols:
+        if col in df.columns:
+            weight_col = col
+            break
+    if weight_col and weight_col != 'Weight':
+        df = df.rename(columns={weight_col: 'Weight'})
+    elif 'Weight' not in df.columns:
+        df['Weight'] = 0
+    
+    # 🔍 หาคอลัมน์ Latitude/Longitude
+    lat_col = None
+    possible_lat_cols = ['Latitude', 'latitude', 'lat', 'Lat', 'ละติจูด']
+    for col in possible_lat_cols:
+        if col in df.columns:
+            lat_col = col
+            break
+    if lat_col and lat_col != 'Latitude':
+        df = df.rename(columns={lat_col: 'Latitude'})
+    
+    lon_col = None
+    possible_lon_cols = ['Longitude', 'longitude', 'lon', 'Lon', 'lng', 'Lng', 'ลองจิจูด']
+    for col in possible_lon_cols:
+        if col in df.columns:
+            lon_col = col
+            break
+    if lon_col and lon_col != 'Longitude':
+        df = df.rename(columns={lon_col: 'Longitude'})
+    
     # ตัด DC ออก
-    df = df[~df['Code'].isin(EXCLUDE_BRANCHES)].copy()
+    df = df[~df['Code'].astype(str).isin(EXCLUDE_BRANCHES)].copy()
     
     if len(df) == 0:
         return df, {}
