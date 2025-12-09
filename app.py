@@ -2720,8 +2720,28 @@ def predict_trips(test_df, model_data):
                     max_weight_allowed = LIMITS['4W']['max_w']  # 2500 kg
                     can_fit = trip_weight <= max_weight_allowed and trip_cube <= max_cube_allowed
                 else:
-                    # 6W: ยอมให้เกิน 105%
+                    # 6W: ยอมให้เกิน 105% (21 คิว)
                     can_fit = trip_weight <= max_w and trip_cube <= max_c
+                    
+                    # 🔥 กรณีพิเศษ 6W: ถ้าเกิน 21 คิว ให้เช็คว่าเหลือสาขาใกล้เคียงน้อย (1-2 สาขา)
+                    if not can_fit and trip_cube > LIMITS['6W']['max_c'] * 1.05:  # เกิน 21 คิว
+                        # นับจำนวนสาขาที่เหลือในเส้นทางนี้
+                        remaining_nearby_branches = 0
+                        code_region = get_region_from_province(code_province) if code_province != 'UNKNOWN' else None
+                        
+                        # นับสาขาที่เหลือในภาคเดียวกัน
+                        for remaining_code in all_codes:
+                            if remaining_code == code:
+                                continue
+                            remaining_prov = province_cache.get(remaining_code, 'UNKNOWN')
+                            if remaining_prov != 'UNKNOWN':
+                                remaining_region = get_region_from_province(remaining_prov)
+                                if code_region and remaining_region == code_region:
+                                    remaining_nearby_branches += 1
+                        
+                        # ถ้าเหลือ 1-2 สาขาในเส้นทางนี้ → ยอมรับเกิน
+                        if remaining_nearby_branches <= 2:
+                            can_fit = True
                 
                 # 🚨 กรณีพิเศษ: ถ้ารถไม่เต็ม ให้พิจารณารับสาขาใกล้เคียงเพิ่ม (เฉพาะ 6W)
                 if not can_fit and vehicle_type == '6W':
