@@ -4856,14 +4856,19 @@ def main():
                                 original_file.seek(0)  # Reset file pointer
                                 original_excel = pd.ExcelFile(original_file)
                                 
-                                # รักษาทุกชีตจากไฟล์ต้นฉบับ (ยกเว้น sheet ที่จะแทนที่)
+                                # รักษาทุกชีตจากไฟล์ต้นฉบับ
                                 sheets_to_keep = {}
+                                punthai_template = None
+                                
                                 for sheet_name in original_excel.sheet_names:
-                                    if sheet_name not in ['2.Punthai', 'Summary']:  # ข้าม sheet ที่จะสร้างใหม่
-                                        try:
+                                    try:
+                                        if sheet_name == '2.Punthai':
+                                            # เก็บ template ของ 2.Punthai (รวม header)
+                                            punthai_template = pd.read_excel(original_excel, sheet_name=sheet_name, header=None)
+                                        elif sheet_name != 'Summary':  # ข้าม Summary เพราะจะสร้างใหม่
                                             sheets_to_keep[sheet_name] = pd.read_excel(original_excel, sheet_name=sheet_name)
-                                        except:
-                                            pass  # ข้าม sheet ที่อ่านไม่ได้
+                                    except:
+                                        pass  # ข้าม sheet ที่อ่านไม่ได้
                                 
                                 # 🔥 เตรียมข้อมูลสำหรับ Sheet 2.Punthai
                                 export_df = df.copy()  # เริ่มจากไฟล์ต้นฉบับ
@@ -4912,41 +4917,78 @@ def main():
                                 
                                 export_df['Trip no'] = export_df['Trip'].map(trip_no_map)
                                 
-                                # 📋 จัดคอลัมน์ตามรูปแบบ Punthai: Sep., BU, รหัสสาขา, รหัส WMS, สาขา, Total Cube, Total Wgt, จำนวนชิ้น, Trip, Trip no
-                                # Mapping คอลัมน์เดิม → คอลัมน์ Punthai
-                                punthai_cols = {
-                                    'Trip no': 'Trip no',
-                                    'Trip': 'Trip',
-                                    'Code': 'รหัสสาขา',
-                                    'Name': 'สาขา',
-                                    'Cube': 'Total Cube',
-                                    'Weight': 'Total Wgt'
-                                }
-                                
-                                # เพิ่มคอลัมน์ที่ขาด
-                                if 'Sep.' not in export_df.columns:
-                                    export_df.insert(0, 'Sep.', '')
-                                if 'BU' not in export_df.columns:
-                                    export_df.insert(1, 'BU', 'Punthai')
-                                if 'รหัส WMS' not in export_df.columns:
-                                    export_df['รหัส WMS'] = export_df.get('Code', '')
-                                if 'จำนวนชิ้น' not in export_df.columns:
-                                    export_df['จำนวนชิ้น'] = ''
-                                
-                                # เปลี่ยนชื่อคอลัมน์ตาม Punthai
-                                for old_col, new_col in punthai_cols.items():
-                                    if old_col in export_df.columns and old_col != new_col:
-                                        export_df.rename(columns={old_col: new_col}, inplace=True)
-                                
-                                # จัดลำดับคอลัมน์ตาม Punthai
-                                punthai_order = ['Sep.', 'BU', 'รหัสสาขา', 'รหัส WMS', 'สาขา', 'Total Cube', 'Total Wgt', 'จำนวนชิ้น', 'Trip', 'Trip no']
-                                other_cols = [c for c in export_df.columns if c not in punthai_order]
-                                final_cols = punthai_order + other_cols
-                                final_cols = [c for c in final_cols if c in export_df.columns]
-                                export_df = export_df[final_cols]
-                                
-                                # เรียงตาม Trip แล้ว Total Wgt (มาก→น้อย)
-                                export_df = export_df.sort_values(['Trip', 'Total Wgt'], ascending=[True, False])
+                                # 📋 สร้างข้อมูลสำหรับ Sheet 2.Punthai (ใช้ template ถ้ามี)
+                                if punthai_template is not None:
+                                    # ใช้ template จากไฟล์ต้นฉบับ - รักษา header และโครงสร้าง
+                                    # อ่าน header จากแถวที่ 1 (index 0)
+                                    punthai_headers = punthai_template.iloc[0].tolist()
+                                    
+                                    # เตรียมข้อมูลใหม่
+                                    data_rows = []
+                                    
+                                    # เรียงตาม Trip แล้ว Weight (มาก→น้อย)
+                                    export_df_sorted = export_df.sort_values(['Trip', 'Weight'], ascending=[True, False])
+                                    
+                                    # สร้างแถวข้อมูลตาม header ของ template
+                                    for idx, row in export_df_sorted.iterrows():
+                                        new_row = []
+                                        for header in punthai_headers:
+                                            header_str = str(header).strip()
+                                            
+                                            # Mapping ข้อมูลไปยังคอลัมน์ที่ถูกต้อง
+                                            if 'Trip no' in header_str or 'Trip no' == header_str:
+                                                new_row.append(row.get('Trip no', ''))
+                                            elif 'Trip' in header_str and 'Trip no' not in header_str:
+                                                new_row.append(row.get('Trip', ''))
+                                            elif 'รหัสสาขา' in header_str or 'BranchCode' in header_str:
+                                                new_row.append(row.get('Code', ''))
+                                            elif 'รหัส WMS' in header_str:
+                                                new_row.append(row.get('Code', ''))
+                                            elif 'สาขา' in header_str or 'Branch' in header_str:
+                                                new_row.append(row.get('Name', ''))
+                                            elif 'TOTALCUBE' in header_str or 'Total Cube' in header_str or 'Cube' in header_str:
+                                                new_row.append(row.get('Cube', 0))
+                                            elif 'TOTALWGT' in header_str or 'Total Wgt' in header_str or 'Weight' in header_str:
+                                                new_row.append(row.get('Weight', 0))
+                                            elif 'จำนวนชิ้น' in header_str or 'QTY' in header_str:
+                                                new_row.append('')
+                                            elif 'BU' in header_str:
+                                                new_row.append('Punthai')
+                                            elif 'Sep' in header_str:
+                                                new_row.append('')
+                                            else:
+                                                # คอลัมน์อื่นๆ ลองหาจาก export_df
+                                                new_row.append(row.get(header_str, ''))
+                                        
+                                        data_rows.append(new_row)
+                                    
+                                    # สร้าง DataFrame ใหม่โดยรักษา header เดิม
+                                    punthai_export = pd.DataFrame(data_rows, columns=punthai_headers)
+                                else:
+                                    # ถ้าไม่มี template ให้สร้างแบบปกติ
+                                    punthai_export = export_df.copy()
+                                    
+                                    # Mapping คอลัมน์
+                                    col_mapping = {
+                                        'Code': 'รหัสสาขา',
+                                        'Name': 'สาขา',
+                                        'Cube': 'Total Cube',
+                                        'Weight': 'Total Wgt'
+                                    }
+                                    punthai_export.rename(columns=col_mapping, inplace=True)
+                                    
+                                    # เพิ่มคอลัมน์ที่ขาด
+                                    if 'Sep.' not in punthai_export.columns:
+                                        punthai_export.insert(0, 'Sep.', '')
+                                    if 'BU' not in punthai_export.columns:
+                                        punthai_export.insert(1, 'BU', 'Punthai')
+                                    if 'รหัส WMS' not in punthai_export.columns:
+                                        punthai_export['รหัส WMS'] = punthai_export.get('รหัสสาขา', '')
+                                    if 'จำนวนชิ้น' not in punthai_export.columns:
+                                        punthai_export['จำนวนชิ้น'] = ''
+                                    
+                                    # เรียงตาม Trip แล้ว Weight
+                                    punthai_export = punthai_export.sort_values(['Trip', 'Total Wgt'], ascending=[True, False])
                                 
                                 # อัปเดต summary ให้ใช้เลขทริปใหม่
                                 summary_export = summary.copy()
@@ -4954,7 +4996,8 @@ def main():
                                 summary_export = summary_export.sort_values('Trip')
                                 
                                 # 📝 เขียน Excel - เขียน sheet 2.Punthai และ Summary ก่อน
-                                export_df.to_excel(writer, sheet_name='2.Punthai', index=False)
+                                # ใช้ punthai_export ที่เตรียมไว้แล้ว
+                                punthai_export.to_excel(writer, sheet_name='2.Punthai', index=False)
                                 summary_export.to_excel(writer, sheet_name='Summary', index=False)
                                 
                                 # 📄 เขียน sheet อื่นๆจากไฟล์ต้นฉบับ
@@ -4982,15 +5025,15 @@ def main():
                                 })
                                 
                                 # เขียน header
-                                for col_num, value in enumerate(export_df.columns.values):
+                                for col_num, value in enumerate(punthai_export.columns.values):
                                     worksheet.write(0, col_num, value, header_format)
                                 
                                 # จัดรูปแบบแต่ละแถว (แยกสีตามทริป)
                                 current_trip = None
                                 color_index = 0
                                 
-                                for row_num in range(len(export_df)):
-                                    trip = export_df.iloc[row_num]['Trip']
+                                for row_num in range(len(punthai_export)):
+                                    trip = punthai_export.iloc[row_num]['Trip']
                                     
                                     # เปลี่ยนสีเมื่อเปลี่ยนทริป
                                     if trip != current_trip:
@@ -5004,8 +5047,8 @@ def main():
                                     })
                                     
                                     # ใส่สีทุก cell ในแถว
-                                    for col_num in range(len(export_df.columns)):
-                                        value = export_df.iloc[row_num, col_num]
+                                    for col_num in range(len(punthai_export.columns)):
+                                        value = punthai_export.iloc[row_num, col_num]
                                         
                                         # จัดการค่า NaN/None
                                         if pd.isna(value):
