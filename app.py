@@ -99,14 +99,14 @@ def load_master_data():
 MASTER_DATA = load_master_data()
 
 @st.cache_data(ttl=3600)  # Cache 1 ชั่วโมง
-def load_booking_history_restrictions():
-    """โหลดประวัติการจัดส่งจาก Booking History - ข้อมูลจริง 3,053 booking (Optimized)"""
+def load_autoplan_restrictions():
+    """โหลดข้อจำกัดรถจาก Auto plan sheet 'info' - คอลัมน์ Location Code และ MaxTruckType"""
     try:
-        # ลองหาไฟล์ Booking History (อาจมีชื่อหลายแบบ)
+        # หาไฟล์ Auto plan
         possible_files = [
-            'Dc/ประวัติงานจัดส่ง DC วังน้อย(1).xlsx',
-            'Dc/ประวัติงานจัดส่ง DC วังน้อย.xlsx',
-            'branch_vehicle_restrictions_from_booking.xlsx'
+            'Dc/Auto plan.xlsx',
+            'Auto plan.xlsx',
+            'Dc/Autoplan.xlsx'
         ]
         
         file_path = None
@@ -116,97 +116,78 @@ def load_booking_history_restrictions():
                 break
         
         if not file_path:
-            # ถ้าไม่มีไฟล์ ใช้ข้อมูลที่เคยเรียนรู้ (fallback)
-            return load_learned_restrictions_fallback()
+            st.warning("⚠️ ไม่พบไฟล์ Auto plan - จะไม่มีข้อจำกัดรถ")
+            return {}
         
-        df = pd.read_excel(file_path)
+        # อ่าน sheet 'info'
+        df = pd.read_excel(file_path, sheet_name='info')
         
-        # แปลงประเภทรถ
+        # ค้นหาคอลัมน์ที่ต้องการ
+        location_code_col = None
+        max_truck_type_col = None
+        
+        for col in df.columns:
+            col_str = str(col).strip()
+            if 'Location Code' in col_str or 'รหัสสถานที่' in col_str:
+                location_code_col = col
+            elif 'MaxTruckType' in col_str or 'ประเภทรถบรรทุกใหญ่สุด' in col_str:
+                max_truck_type_col = col
+        
+        if not location_code_col or not max_truck_type_col:
+            st.warning(f"⚠️ ไม่พบคอลัมน์ที่ต้องการใน sheet 'info': Location Code={location_code_col}, MaxTruckType={max_truck_type_col}")
+            return {}
+        
+        # แปลงประเภทรถจาก Auto plan เป็นรูปแบบที่ใช้
         vehicle_mapping = {
-            '4 ล้อ จัมโบ้ ตู้ทึบ': 'JB',
-            '6 ล้อ ตู้ทึบ': '6W',
-            '4 ล้อ ตู้ทึบ': '4W'
+            '10W': '6W',  # 10 ล้อ = 6W
+            '6W': '6W',
+            '6WF': '6W',
+            '4WJ': 'JB',  # 4 ล้อจัมโบ้ = JB
+            'JB': 'JB',
+            '4W': '4W',
+            '4WF': '4W'
         }
-        df['Vehicle_Type'] = df['ประเภทรถ'].map(vehicle_mapping)
         
-        # วิเคราะห์ความสัมพันธ์สาขา-รถ
-        branch_vehicle_history = {}
-        booking_groups = df.groupby('Booking No')
-        
-        for booking_no, booking_data in booking_groups:
-            vehicle_types = booking_data['Vehicle_Type'].dropna().unique()
-            if len(vehicle_types) > 0:
-                vehicle = booking_data['Vehicle_Type'].mode()[0] if len(booking_data['Vehicle_Type'].mode()) > 0 else vehicle_types[0]
-                for branch_code in booking_data['รหัสสาขา'].dropna().unique():
-                    if branch_code not in branch_vehicle_history:
-                        branch_vehicle_history[branch_code] = []
-                    branch_vehicle_history[branch_code].append(vehicle)
-        
-        # สร้าง restrictions
+        # สร้าง restrictions จาก Auto plan
         branch_restrictions = {}
-        vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
         
-        for branch_code, vehicle_list in branch_vehicle_history.items():
-            vehicles_used = set(vehicle_list)
-            vehicle_counts = pd.Series(vehicle_list).value_counts().to_dict()
+        for idx, row in df.iterrows():
+            branch_code = row[location_code_col]
+            max_truck = row[max_truck_type_col]
             
-            if len(vehicles_used) == 1:
-                # STRICT - ใช้รถเดียว
-                vehicle = list(vehicles_used)[0]
-                branch_restrictions[str(branch_code)] = {
-                    'max_vehicle': vehicle,
-                    'allowed': [vehicle],
-                    'total_bookings': len(vehicle_list),
-                    'restriction_type': 'STRICT'
-                }
-            else:
-                # FLEXIBLE - ใช้ได้หลายประเภท
-                max_vehicle = max(vehicles_used, key=lambda v: vehicle_sizes.get(v, 0))
-                branch_restrictions[str(branch_code)] = {
-                    'max_vehicle': max_vehicle,
-                    'allowed': list(vehicles_used),
-                    'total_bookings': len(vehicle_list),
-                    'restriction_type': 'FLEXIBLE'
-                }
+            if pd.isna(branch_code) or pd.isna(max_truck):
+                continue
+            
+            # ทำความสะอาด
+            branch_code = str(branch_code).strip().upper()
+            max_truck_str = str(max_truck).strip().upper()
+            
+            # แปลงประเภทรถ
+            vehicle = vehicle_mapping.get(max_truck_str, '6W')  # default = 6W
+            
+            # สร้าง restriction (STRICT - ตาม MaxTruckType)
+            vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
+            max_size = vehicle_sizes.get(vehicle, 3)
+            
+            allowed = []
+            if max_size >= 1:
+                allowed.append('4W')
+            if max_size >= 2:
+                allowed.append('JB')
+            if max_size >= 3:
+                allowed.append('6W')
+            
+            branch_restrictions[branch_code] = {
+                'max_vehicle': vehicle,
+                'allowed': allowed,
+                'source': 'Auto plan info',
+                'restriction_type': 'STRICT'
+            }
         
-        stats = {
-            'total_branches': len(branch_restrictions),
-            'strict': len([b for b, r in branch_restrictions.items() if r['restriction_type'] == 'STRICT']),
-            'flexible': len([b for b, r in branch_restrictions.items() if r['restriction_type'] == 'FLEXIBLE']),
-            'total_bookings': len(booking_groups)
-        }
-        
-        return {
-            'branch_restrictions': branch_restrictions,
-            'stats': stats
-        }
+        return branch_restrictions
     except Exception as e:
-        # ถ้าเกิด error ใช้ข้อมูลที่เคยเรียนรู้แทน
-        return load_learned_restrictions_fallback()
-
-def load_learned_restrictions_fallback():
-    """
-    ข้อมูลที่เรียนรู้จาก Booking History (backup)
-    ใช้เมื่อไม่สามารถโหลดไฟล์ได้
-    
-    จากการวิเคราะห์ 3,053 bookings, 2,790 สาขา:
-    - JB: รถกลาง (ใช้มากที่สุด 54.7%)
-    - 6W: รถใหญ่ (30.1%)
-    - 4W: รถเล็ก (0.2%)
-    
-    กลยุทธ์: ถ้าไม่มีข้อมูล default เป็น JB (รถกลาง ใช้ได้กับสาขาส่วนใหญ่)
-    """
-    return {
-        'branch_restrictions': {},
-        'stats': {
-            'total_branches': 0,
-            'strict': 0,
-            'flexible': 0,
-            'total_bookings': 0,
-            'fallback': True,
-            'message': 'ใช้ Punthai เป็นหลัก (ไม่พบไฟล์ Booking History)'
-        }
-    }
+        st.error(f"❌ Error loading Auto plan: {e}")
+        return {}
 
 @st.cache_data(ttl=3600)  # Cache 1 ชั่วโมง
 def load_punthai_reference():
@@ -304,8 +285,8 @@ def load_punthai_reference():
     except:
         return {'patterns': {}, 'stats': {}, 'punthai_restrictions': {}}
 
-# โหลด Booking History (ข้อจำกัดรถ)
-BOOKING_RESTRICTIONS = load_booking_history_restrictions()
+# โหลด Auto plan info (ข้อจำกัดรถ)
+AUTOPLAN_RESTRICTIONS = load_autoplan_restrictions()
 
 # โหลด Punthai Reference (location patterns)
 PUNTHAI_PATTERNS = load_punthai_reference()
@@ -335,16 +316,15 @@ def calculate_distance_from_dc(lat, lon):
     return calculate_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
 
 def check_branch_vehicle_compatibility(branch_code, vehicle_type):
-    """ตรวจสอบว่าสาขานี้ใช้รถประเภทนี้ได้ไหม (รวม Booking + Punthai)"""
-    branch_code_str = str(branch_code).strip()
+    """ตรวจสอบว่าสาขานี้ใช้รถประเภทนี้ได้ไหม (จาก Auto plan info + Punthai สำรอง)"""
+    branch_code_str = str(branch_code).strip().upper()
     
-    # 1. ลองหาจาก Booking History ก่อน (ข้อมูลจริง)
-    booking_restrictions = BOOKING_RESTRICTIONS.get('branch_restrictions', {})
-    if branch_code_str in booking_restrictions:
-        allowed = booking_restrictions[branch_code_str].get('allowed', [])
+    # 1. ลองหาจาก Auto plan info ก่อน (MaxTruckType - ข้อมูลหลัก)
+    if branch_code_str in AUTOPLAN_RESTRICTIONS:
+        allowed = AUTOPLAN_RESTRICTIONS[branch_code_str].get('allowed', [])
         return vehicle_type in allowed
     
-    # 2. ถ้าไม่มี ลองหาจาก Punthai (แผน)
+    # 2. ถ้าไม่มี ลองหาจาก Punthai (แผน - สำรอง)
     punthai_restrictions = PUNTHAI_PATTERNS.get('punthai_restrictions', {})
     if branch_code_str in punthai_restrictions:
         allowed = punthai_restrictions[branch_code_str].get('allowed', [])
@@ -354,13 +334,12 @@ def check_branch_vehicle_compatibility(branch_code, vehicle_type):
     return True
 
 def get_max_vehicle_for_branch(branch_code):
-    """ดึงรถใหญ่สุดที่สาขานี้รองรับ (รวม Booking History + Punthai)"""
-    branch_code_str = str(branch_code).strip()
+    """ดึงรถใหญ่สุดที่สาขานี้รองรับ (จาก Auto plan info + Punthai สำรอง)"""
+    branch_code_str = str(branch_code).strip().upper()
     
-    # 1. ลองหาจาก Booking History ก่อน (ข้อมูลจริง - ความเชื่อมั่นสูง)
-    booking_restrictions = BOOKING_RESTRICTIONS.get('branch_restrictions', {})
-    if branch_code_str in booking_restrictions:
-        return booking_restrictions[branch_code_str].get('max_vehicle', '6W')
+    # 1. ลองหาจาก Auto plan info ก่อน (MaxTruckType - ความเชื่อมั่นสูง)
+    if branch_code_str in AUTOPLAN_RESTRICTIONS:
+        return AUTOPLAN_RESTRICTIONS[branch_code_str].get('max_vehicle', '6W')
     
     # 2. ถ้าไม่มี ลองหาจาก Punthai (แผน - สำรอง)
     punthai_restrictions = PUNTHAI_PATTERNS.get('punthai_restrictions', {})
@@ -2931,79 +2910,8 @@ def predict_trips(test_df, model_data):
             else:
                 trip_recommended_vehicles[trip_num] = '6W'
     else:
-        # เก็บข้อมูลทริปที่เหลือ
-        for trip_num in test_df['Trip'].unique():
-            trip_data = test_df[test_df['Trip'] == trip_num]
-            branch_count = len(trip_data)
-            total_w = trip_data['Weight'].sum()
-            total_c = trip_data['Cube'].sum()
-            trip_codes = set(trip_data['Code'].values)
-                if lat and lon:
-                    trip_lats.append(lat)
-                    trip_lons.append(lon)
-            
-            if not trip_lats:
-                continue
-            
-            centroid_lat = sum(trip_lats) / len(trip_lats)
-            centroid_lon = sum(trip_lons) / len(trip_lons)
-            
-            distance = haversine_distance(branch_lat, branch_lon, centroid_lat, centroid_lon)
-            
-            # ถ้าไกลเกิน 50km → ข้าม (เพิ่มจาก 30km)
-            if distance > 50:
-                continue
-            
-            # เช็คว่าเพิ่มแล้วเกินไหม
-            trip_w = trip_data['Weight'].sum()
-            trip_c = trip_data['Cube'].sum()
-            new_w = trip_w + branch_w
-            new_c = trip_c + branch_c
-            new_count = len(trip_data) + 1
-            
-            # เช็คระยะทางระหว่างสาขา (ป้องกันข้ามภูมิภาค)
-            trip_codes_set = set(trip_data['Code'].values)
-            can_merge, max_branch_dist, _ = check_branch_distance_compatibility(
-                trip_codes_set, {branch_code}, get_lat_lon
-            )
-            if not can_merge:
-                continue  # ข้ามถ้าสาขาไกลกันเกิน 100km
-            
-            # เช็คว่าใส่ได้ไหม (ยอมให้เกิน 110% สำหรับสาขาเดียว)
-            new_util = max(
-                (new_w / LIMITS['6W']['max_w']) * 100,
-                (new_c / LIMITS['6W']['max_c']) * 100
-            )
-            
-            if new_util <= 110 and new_count <= MAX_BRANCHES_PER_TRIP:
-                # เช็คข้อจำกัดสาขา
-                trip_codes = trip_codes_set | {branch_code}
-                max_allowed = get_max_vehicle_for_trip(trip_codes)
-                
-                # บันทึกทริปที่ใกล้ที่สุด
-                if distance < min_distance:
-                    min_distance = distance
-                    best_trip = trip_num
-        
-        # ถ้าเจอทริปที่เหมาะสม → ย้าย
-        if best_trip is not None:
-            test_df.loc[test_df['Code'] == branch_code, 'Trip'] = best_trip
-            reassign_count += 1
-    
-    # 🎯 Phase 1.75: รวมทริป utilization ต่ำ (<50%) ให้เต็มขึ้น
-    rebalance_count = 0
-    LOW_UTIL_THRESHOLD = 50  # ทริปที่ต่ำกว่า 50% ถือว่าไม่คุ้ม
-    
-    # หาทริปที่ utilization ต่ำ
-    low_util_trips = []
-    for trip_num in sorted(test_df['Trip'].unique()):
-        if trip_num == 0:
-            continue
-        
-        trip_data = test_df[test_df['Trip'] == trip_num]
-        trip_w = trip_data['Weight'].sum()
-        trip_c = trip_data['Cube'].sum()
-        trip_count = len(trip_data)
+        # ไม่มี optimization - ใช้การจัดทริปแบบปกติ
+        pass
         
         trip_util = max(
             (trip_w / LIMITS['6W']['max_w']) * 100,
