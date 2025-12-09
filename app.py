@@ -2657,6 +2657,29 @@ def predict_trips(test_df, model_data):
                     
                     return 0
                 
+                # 🔥 เช็คภูมิภาคก่อน - ห้ามผสมภาค
+                code_region = None
+                trip_regions = set()
+                
+                # หาภูมิภาคของสาขาใหม่
+                if code_province != 'UNKNOWN':
+                    code_region = get_region_from_province(code_province)
+                
+                # หาภูมิภาคของทริปปัจจุบัน
+                for trip_code in current_trip:
+                    trip_prov = province_cache.get(trip_code, 'UNKNOWN')
+                    if trip_prov != 'UNKNOWN':
+                        trip_reg = get_region_from_province(trip_prov)
+                        if trip_reg:
+                            trip_regions.add(trip_reg)
+                
+                # ตรวจสอบความเข้ากันได้ของภูมิภาค
+                if code_region and trip_regions:
+                    regions_compatible = all(check_region_compatibility(code_region, tr) for tr in trip_regions)
+                    if not regions_compatible:
+                        # ต่างภาค → ข้ามสาขานี้ (จะสร้างทริปใหม่)
+                        continue
+                
                 # 🚨 เช็คข้อจำกัดรถของสาขาใหม่ก่อน
                 code_max_vehicle = get_max_vehicle_for_branch(code)
                 current_trip_with_new = current_trip + [code]
@@ -2680,11 +2703,28 @@ def predict_trips(test_df, model_data):
                     if avg_dist_to_trip > 25:
                         continue  # ไกลเกินไป - ควรไปทริปอื่น
                 
-                # เช็คว่าเกินขีดจำกัดหรือไม่
-                can_fit = trip_weight <= max_w and trip_cube <= max_c
+                # 🔥 เช็คขนาดอย่างเข้มงวด: JB ≤ 8 คิว (100%), 4W ≤ 5 คิว (100%)
+                can_fit = False
+                max_cube_allowed = max_c
+                max_weight_allowed = max_w
                 
-                # 🚨 กรณีพิเศษ: ถ้ารถไม่เต็ม ให้พิจารณารับสาขาใกล้เคียงเพิ่ม
-                if not can_fit:
+                # กำหนด threshold ตามประเภทรถ
+                if vehicle_type == 'JB':
+                    # JB: ห้ามเกิน 100% (7 คิว max, ใช้ 7 คิว = 100%)
+                    max_cube_allowed = LIMITS['JB']['max_c']  # 7 คิว
+                    max_weight_allowed = LIMITS['JB']['max_w']  # 3500 kg
+                    can_fit = trip_weight <= max_weight_allowed and trip_cube <= max_cube_allowed
+                elif vehicle_type == '4W':
+                    # 4W: ห้ามเกิน 100% (5 คิว max)
+                    max_cube_allowed = LIMITS['4W']['max_c']  # 5 คิว
+                    max_weight_allowed = LIMITS['4W']['max_w']  # 2500 kg
+                    can_fit = trip_weight <= max_weight_allowed and trip_cube <= max_cube_allowed
+                else:
+                    # 6W: ยอมให้เกิน 105%
+                    can_fit = trip_weight <= max_w and trip_cube <= max_c
+                
+                # 🚨 กรณีพิเศษ: ถ้ารถไม่เต็ม ให้พิจารณารับสาขาใกล้เคียงเพิ่ม (เฉพาะ 6W)
+                if not can_fit and vehicle_type == '6W':
                     # คำนวณ % การใช้รถปัจจุบัน (ก่อนเพิ่มสาขาใหม่)
                     current_weight = test_df[test_df['Code'].isin(current_trip)]['Weight'].sum()
                     current_cube = test_df[test_df['Code'].isin(current_trip)]['Cube'].sum()
@@ -2713,8 +2753,8 @@ def predict_trips(test_df, model_data):
                             if weight_exceed <= 0.15 and cube_exceed <= 0.15:
                                 can_fit = True  # รับสาขานี้เพื่อประหยัดรถ
                 
-                # ถ้ายังเกิน → เช็คว่าเกินนิดหน่อยและอยู่ใกล้กันไหม
-                if not can_fit:
+                # ถ้ายังเกิน → เช็คว่าเกินนิดหน่อยและอยู่ใกล้กันไหม (เฉพาะ 6W)
+                if not can_fit and vehicle_type == '6W':
                     # เกินเล็กน้อย = เกินไม่เกิน 10%
                     weight_exceed = (trip_weight - max_w) / max_w if max_w > 0 else 0
                     cube_exceed = (trip_cube - max_c) / max_c if max_c > 0 else 0
@@ -2744,6 +2784,12 @@ def predict_trips(test_df, model_data):
                             # ถ้ารถเล็กไม่เต็ม 50% = สิ้นเปลือง → ยอมรับให้รวมกันแม้เกิน
                             if small_vehicle_fill < 0.5:
                                 can_fit = True  # ยอมรับเกินเพื่อประหยัดรถ
+                
+                # 🔥 สำหรับ JB และ 4W: ห้ามเกิน 100% - ถ้าเกินต้องสร้างทริปใหม่
+                if not can_fit and vehicle_type in ['JB', '4W']:
+                    # ตัดสาขานี้ออก ไม่ใส่เข้าทริปปัจจุบัน
+                    # สาขานี้จะถูกสร้างเป็นทริปใหม่ในรอบถัดไป
+                    continue  # ข้ามสาขานี้
                 
                 if can_fit:
                     current_trip.append(code)
