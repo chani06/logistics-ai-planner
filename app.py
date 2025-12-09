@@ -104,6 +104,7 @@ def load_autoplan_restrictions():
     try:
         # หาไฟล์ Auto plan
         possible_files = [
+            'Dc/Auto planning (1).xlsx',
             'Dc/Auto plan.xlsx',
             'Auto plan.xlsx',
             'Dc/Autoplan.xlsx'
@@ -119,22 +120,29 @@ def load_autoplan_restrictions():
             st.warning("⚠️ ไม่พบไฟล์ Auto plan - จะไม่มีข้อจำกัดรถ")
             return {}
         
-        # อ่าน sheet 'info'
-        df = pd.read_excel(file_path, sheet_name='info')
+        # อ่าน sheet 'Info' (ตัวใหญ่)
+        try:
+            df = pd.read_excel(file_path, sheet_name='Info')
+        except:
+            try:
+                df = pd.read_excel(file_path, sheet_name='info')
+            except Exception as e:
+                st.warning(f"⚠️ ไม่พบ sheet 'Info' หรือ 'info': {e}")
+                return {}
         
-        # ค้นหาคอลัมน์ที่ต้องการ
+        # ค้นหาคอลัมน์ที่ต้องการ (รองรับ multiline headers)
         location_code_col = None
         max_truck_type_col = None
         
         for col in df.columns:
-            col_str = str(col).strip()
+            col_str = str(col).replace('\n', ' ').strip()
             if 'Location Code' in col_str or 'รหัสสถานที่' in col_str:
                 location_code_col = col
             elif 'MaxTruckType' in col_str or 'ประเภทรถบรรทุกใหญ่สุด' in col_str:
                 max_truck_type_col = col
         
         if not location_code_col or not max_truck_type_col:
-            st.warning(f"⚠️ ไม่พบคอลัมน์ที่ต้องการใน sheet 'info': Location Code={location_code_col}, MaxTruckType={max_truck_type_col}")
+            st.warning(f"⚠️ ไม่พบคอลัมน์ที่ต้องการใน sheet 'Info': Location Code={location_code_col}, MaxTruckType={max_truck_type_col}")
             return {}
         
         # แปลงประเภทรถจาก Auto plan เป็นรูปแบบที่ใช้
@@ -142,7 +150,8 @@ def load_autoplan_restrictions():
             '10W': '6W',  # 10 ล้อ = 6W
             '6W': '6W',
             '6WF': '6W',
-            '4WJ': 'JB',  # 4 ล้อจัมโบ้ = JB
+            '4WJB': 'JB',  # 4 ล้อจัมโบ้ = JB
+            '4WJ': 'JB',
             'JB': 'JB',
             '4W': '4W',
             '4WF': '4W'
