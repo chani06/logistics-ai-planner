@@ -33,19 +33,19 @@ except ImportError:
 # ==========================================
 MODEL_PATH = 'models/decision_tree_model.pkl'
 
-# ขีดจำกัดรถแต่ละประเภท
+# ขีดจำกัดรถแต่ละประเภท (ตาม simple_trip_planner_v2.py)
 LIMITS = {
-    '4W': {'max_w': 2500, 'max_c': 5.0, 'max_drops': 12},   # ≤2,500 kg, Cube ≤5 (PT)/3.5 (Mix), ≤12 drops
-    'JB': {'max_w': 3500, 'max_c': 7.0, 'max_drops': 7},    # ≤3,500 kg, Cube ≤7, ≤7 drops (ถ้า PT ล้วน)
-    '6W': {'max_w': 7000, 'max_c': 20.0, 'min_c': 18.0, 'max_drops': float('inf')}  # ≤7,000 kg, 18-20 คิว (ยอมให้ >20 ถ้าจำเป็น), ไม่จำกัด drops
+    '6W': {'max_c': 20, 'min_c': 18, 'max_w': 7000, 'max_drops': float('inf')},  # 6W: 18-20 คิว, ไม่เกิน 7,000 kg, ไม่จำกัด drops
+    'JB': {'max_c': 7, 'max_w': 3500, 'max_drops': 7},  # JB: ≤7 คิว, ≤3,500 kg, ≤7 drops (ถ้า PT ล้วน)
+    '4W': {'max_c': 5, 'max_w': 2500, 'max_drops': 12}  # 4W: 5คิว(PT)/3.5คิว(Mix), ≤2,500 kg, ≤12 drops
 }
 
 # เผื่อการใช้รถได้เกิน 5%
 BUFFER = 1.05
 
 # จำนวนสาขาต่อทริป - ใช้กับ 4W/JB เท่านั้น (6W ไม่จำกัด)
-MAX_BRANCHES_PER_TRIP = 13  # สูงสุด 13 สาขาต่อทริปสำหรับ 4W/JB (6W ไม่จำกัด)
-TARGET_BRANCHES_PER_TRIP = 9  # เป้าหมาย 9 สาขาต่อทริป (ตาม Punthai 8.5)
+MAX_BRANCHES_PER_TRIP = 12  # สูงสุด 12 สาขาต่อทริปสำหรับ 4W/JB (6W ไม่จำกัด)
+TARGET_BRANCHES_PER_TRIP = 9  # เป้าหมาย 9 สาขาต่อทริป
 
 # Performance Config - Optimized for < 1 minute
 MAX_DETOUR_KM = 12  # ลดจาก 15km เป็น 12km
@@ -66,12 +66,14 @@ EXCLUDE_NAMES = ['Distribution Center', 'PTG Distribution', 'บ.พีทีจ
 DC_WANG_NOI_LAT = 14.179394
 DC_WANG_NOI_LON = 100.648149
 
-# ระยะทางที่ต้องใช้รถ 6W (กม.)
-DISTANCE_REQUIRE_6W = 100  # ถ้าห่างจาก DC เกิน 100 กม. ต้องใช้ 6W
+# ระยะทางที่กำหนดประเภทรถ (ตาม simple_trip_planner_v2.py)
+NEAR_DC_THRESHOLD = 150  # km - บริเวณใกล้ DC ให้ใช้รถเล็ก (4W/JB)
+FAR_DC_THRESHOLD = 290  # km - บริเวณไกล DC (>290km) ให้ใช้รถใหญ่ (6W)
+DISTANCE_REQUIRE_6W = 100  # ถ้าห่างจาก DC เกิน 100 กม. แนะนำใช้ 6W
 
-# ระยะทางระหว่างสาขา - ป้องกันสาขาข้ามภูมิภาค
+# ระยะทางระหว่างสาขา - ป้องกันสาขาข้ามภูมิภาค (ห้ามกระโดด)
 MAX_DISTANCE_BETWEEN_BRANCHES = 100  # km - ระยะห่างระหว่างสาขาติดกัน
-MAX_DC_DISTANCE_SPREAD = 80  # km - ความห่างสูงสุดของ Distance_DC ในทริปเดียวกัน
+MAX_DC_DISTANCE_SPREAD = 80  # km - ความห่างสูงสุดของ Distance_DC ในทริปเดียวกัน (ป้องกันข้ามภูมิภาค)
 
 # ==========================================
 # LOAD MASTER DATA
@@ -323,6 +325,89 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 def calculate_distance_from_dc(lat, lon):
     """คำนวณระยะทางจาก DC วังน้อย (กม.)"""
     return calculate_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
+
+def get_direction_from_dc(lat, lon):
+    """คำนวณทิศทางจาก DC (N/S/E/W/NE/NW/SE/SW) - ตาม simple_trip_planner_v2.py"""
+    import math
+    if not lat or not lon or lat == 0 or lon == 0:
+        return 'UNKNOWN'
+    
+    dlat = lat - DC_WANG_NOI_LAT
+    dlon = lon - DC_WANG_NOI_LON
+    
+    # คำนวณมุม (0° = เหนือ, 90° = ตะวันออก)
+    angle = math.atan2(dlon, dlat) * 180 / math.pi
+    
+    # แปลงมุมเป็นทิศ 8 ทิศ
+    if -22.5 <= angle < 22.5:
+        return 'N'  # เหนือ
+    elif 22.5 <= angle < 67.5:
+        return 'NE'  # ตะวันออกเฉียงเหนือ
+    elif 67.5 <= angle < 112.5:
+        return 'E'  # ตะวันออก
+    elif 112.5 <= angle < 157.5:
+        return 'SE'  # ตะวันออกเฉียงใต้
+    elif angle >= 157.5 or angle < -157.5:
+        return 'S'  # ใต้
+    elif -157.5 <= angle < -112.5:
+        return 'SW'  # ตะวันตกเฉียงใต้
+    elif -112.5 <= angle < -67.5:
+        return 'W'  # ตะวันตก
+    else:  # -67.5 <= angle < -22.5
+        return 'NW'  # ตะวันตกเฉียงเหนือ
+
+def get_region_from_province(province):
+    """จัดจังหวัดเข้ากลุ่มภูมิภาค (NORTH/NORTHEAST/CENTRAL/SOUTH) - ตาม simple_trip_planner_v2.py"""
+    if not province or province == 'UNKNOWN':
+        return 'UNKNOWN'
+    
+    prov = str(province).strip()
+    
+    # ภาคเหนือ
+    north_provinces = [
+        'เชียงใหม่', 'เชียงราย', 'ลำปาง', 'ลำพูน', 'แม่ฮ่องสอน', 'น่าน', 'พะเยา', 'แพร่',
+        'นครสวรรค์', 'อุทัยธานี', 'กำแพงเพชร', 'ตาก', 'สุโขทัย', 'พิษณุโลก', 'พิจิตร', 
+        'เพชรบูรณ์', 'อุตรดิตถ์'
+    ]
+    
+    # ภาคอีสาน
+    northeast_provinces = [
+        'นครราชสีมา', 'โคราช', 'บุรีรัมย์', 'สุรินทร์', 'ศรีสะเกษ', 'อุบลราชธานี', 'ยโสธร', 
+        'ชัยภูมิ', 'อำนาจเจริญ', 'หนองบัวลำภู', 'ขอนแก่น', 'อุดรธานี', 'เลย', 'หนองคาย', 
+        'มหาสารคาม', 'ร้อยเอ็ด', 'กาฬสินธุ์', 'สกลนคร', 'นครพนม', 'มุกดาหาร', 'บึงกาฬ'
+    ]
+    
+    # ภาคใต้
+    south_provinces = [
+        'ชุมพร', 'ระนอง', 'สุราษฎร์ธานี', 'พังงา', 'กระบี่', 'ภูเก็ต', 'นครศรีธรรมราช', 
+        'ตรัง', 'พัทลุง', 'สงขลา', 'สตูล', 'ปัตตานี', 'ยะลา', 'นราธิวาส'
+    ]
+    
+    # ภาคกลาง (รวมปริมณฑล, ตะวันออก, ตะวันตก)
+    # ที่เหลือทั้งหมดเป็นภาคกลาง
+    
+    if prov in north_provinces:
+        return 'NORTH'
+    elif prov in northeast_provinces:
+        return 'NORTHEAST'
+    elif prov in south_provinces:
+        return 'SOUTH'
+    else:
+        return 'CENTRAL'  # กรุงเทพ, ปริมณฑล, ตะวันออก, ตะวันตก
+
+def check_region_compatibility(region1, region2):
+    """เช็คว่า 2 ภูมิภาคสามารถรวมทริปได้หรือไม่ - CENTRAL ต้องแยกเด็ดขาด"""
+    if not region1 or not region2 or region1 == 'UNKNOWN' or region2 == 'UNKNOWN':
+        return True  # ถ้าไม่รู้ภูมิภาค ให้ผ่าน
+    
+    # 🔒 CENTRAL ต้องแยกจาก NORTH/NORTHEAST/SOUTH โดยเด็ดขาด
+    if region1 == 'CENTRAL' and region2 != 'CENTRAL':
+        return False
+    if region2 == 'CENTRAL' and region1 != 'CENTRAL':
+        return False
+    
+    # ภูมิภาคอื่นๆ ต้องเหมือนกัน
+    return region1 == region2
 
 def check_branch_vehicle_compatibility(branch_code, vehicle_type):
     """ตรวจสอบว่าสาขานี้ใช้รถประเภทนี้ได้ไหม (จาก Auto plan info + Punthai สำรอง)"""
@@ -4577,6 +4662,86 @@ def predict_trips(test_df, model_data):
             return f"✅ {trip_branch_count} สาขา - {truck_type}"
     
     test_df['BranchCount'] = test_df.apply(check_branch_count, axis=1)
+    
+    # 🔢 Renumber trips: เรียงเลขทริปต่อเนื่อง 1,2,3... ตาม Region → Direction → Distance_DC → Province
+    # เพื่อไม่ให้เลขทริปกระโดด และจัดกลุ่มตามภูมิภาค
+    def renumber_trips_by_region(df):
+        """เรียงเลขทริปใหม่ตามลำดับ Region → Direction → Distance_DC (avg) → Province"""
+        if df.empty or 'Trip' not in df.columns:
+            return df
+        
+        # คำนวณข้อมูลสรุปของแต่ละทริป
+        trip_info = []
+        for trip_num in df['Trip'].unique():
+            trip_data = df[df['Trip'] == trip_num]
+            
+            # ดึงข้อมูลภูมิภาค, ทิศทาง, ระยะทาง, จังหวัด
+            provinces = trip_data['Province'].dropna().unique() if 'Province' in trip_data.columns else []
+            main_province = provinces[0] if len(provinces) > 0 else 'UNKNOWN'
+            
+            # ดึง Region จากจังหวัดหลัก
+            region = get_region_from_province(main_province)
+            
+            # ดึง Direction และ Distance_DC เฉลี่ย
+            if 'Distance_from_DC' in trip_data.columns:
+                avg_distance = trip_data['Distance_from_DC'].mean()
+            elif 'Distance_DC' in trip_data.columns:
+                avg_distance = trip_data['Distance_DC'].mean()
+            else:
+                avg_distance = 0
+            
+            # ดึง Direction จากพิกัดเฉลี่ย
+            if not MASTER_DATA.empty:
+                lats, lons = [], []
+                for code in trip_data['Code'].values:
+                    master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                    if len(master_row) > 0:
+                        lat = master_row.iloc[0].get('ละติจูด', 0)
+                        lon = master_row.iloc[0].get('ลองติจูด', 0)
+                        if lat and lon:
+                            lats.append(lat)
+                            lons.append(lon)
+                if lats and lons:
+                    avg_lat = sum(lats) / len(lats)
+                    avg_lon = sum(lons) / len(lons)
+                    direction = get_direction_from_dc(avg_lat, avg_lon)
+                else:
+                    direction = 'UNKNOWN'
+            else:
+                direction = 'UNKNOWN'
+            
+            trip_info.append({
+                'old_trip': trip_num,
+                'region': region,
+                'direction': direction,
+                'avg_distance': avg_distance,
+                'main_province': main_province
+            })
+        
+        # เรียงตาม Region → Direction → Distance (ไกล→ใกล้) → Province
+        trip_info_df = pd.DataFrame(trip_info)
+        trip_info_df = trip_info_df.sort_values(
+            by=['region', 'direction', 'avg_distance', 'main_province'],
+            ascending=[True, True, False, True]  # Distance: False = ไกล→ใกล้
+        )
+        
+        # สร้าง mapping: old_trip → new_trip (1,2,3...)
+        trip_mapping = {}
+        for new_num, row in enumerate(trip_info_df.itertuples(), start=1):
+            trip_mapping[row.old_trip] = new_num
+        
+        # อัปเดตเลขทริปใน DataFrame
+        df['Trip'] = df['Trip'].map(trip_mapping)
+        
+        return df
+    
+    test_df = renumber_trips_by_region(test_df)
+    
+    # อัปเดต summary_df ด้วย
+    if not summary_df.empty and 'Trip' in summary_df.columns:
+        old_to_new = dict(zip(test_df['Trip'].unique(), range(1, len(test_df['Trip'].unique()) + 1)))
+        summary_df['Trip'] = summary_df['Trip'].map(lambda x: old_to_new.get(x, x))
+        summary_df = summary_df.sort_values('Trip').reset_index(drop=True)
     
     return test_df, summary_df
 
