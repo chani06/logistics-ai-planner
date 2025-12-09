@@ -1460,33 +1460,40 @@ def predict_trips(test_df, model_data):
                         suggested = '4W'
                         source = source + " (🔒 จำกัดสาขา)"
 
-            # ตรวจสอบว่ารถที่เลือกใส่ของได้จริงหรือไม่ (ห้ามเกิน 105%)
+            # ตรวจสอบว่ารถที่เลือกใส่ของได้จริงหรือไม่ (ห้ามเกิน 100% สำหรับรถเล็ก)
             if suggested in LIMITS:
                 w_util = (total_w / LIMITS[suggested]['max_w']) * 100
                 c_util = (total_c / LIMITS[suggested]['max_c']) * 100
                 max_util = max(w_util, c_util)
 
-                # ถ้าเกิน 105% ต้องเพิ่มขนาดรถ
-                if max_util > 105:
+                # 🔥 กฎใหม่: JB ห้ามเกิน 8 คิว (100%), 4W ห้ามเกิน 5 คิว (100%)
+                overload_threshold = 100 if suggested in ['JB', '4W'] else 105
+                
+                # ถ้าเกิน threshold ต้องเพิ่มขนาดรถหรือแยกทริป
+                if max_util > overload_threshold:
                     # ถ้ามีข้อจำกัดสาขา ห้ามขยายเป็น 6W
                     if min_max_size < 3:
                         # บังคับ JB หรือ 4W เท่านั้น
                         if 'JB' in allowed and suggested == '4W':
                             jb_w_util = (total_w / LIMITS['JB']['max_w']) * 100
                             jb_c_util = (total_c / LIMITS['JB']['max_c']) * 100
-                            if max(jb_w_util, jb_c_util) <= 105:
+                            # JB ห้ามเกิน 100% (8 คิว)
+                            if max(jb_w_util, jb_c_util) <= 100:
                                 suggested = 'JB'
                                 source = source + " → JB"
                                 w_util, c_util = jb_w_util, jb_c_util
                         # ถ้า JB ก็ยังเกิน ให้เตือนว่าเกิน ไม่ขยายเป็น 6W
                         elif suggested == 'JB':
-                            source = source + " (🚫 เกินขนาดแต่ห้ามใช้ 6W)"
+                            source = source + " (🚫 เกิน 8 คิว - ควรแยกทริป)"
+                        elif suggested == '4W':
+                            source = source + " (🚫 เกิน 5 คิว - ควรแยกทริป)"
                     else:
                         # ไม่มีข้อจำกัดสาขา สามารถขยายเป็น 6W ได้
                         if suggested == '4W' and 'JB' in LIMITS:
                             jb_w_util = (total_w / LIMITS['JB']['max_w']) * 100
                             jb_c_util = (total_c / LIMITS['JB']['max_c']) * 100
-                            if max(jb_w_util, jb_c_util) <= 105:
+                            # JB ห้ามเกิน 100% (8 คิว)
+                            if max(jb_w_util, jb_c_util) <= 100:
                                 suggested = 'JB'
                                 source = source + " → JB"
                                 w_util, c_util = jb_w_util, jb_c_util
@@ -5119,9 +5126,11 @@ def main():
                                     'valign': 'vcenter'
                                 })
                                 
-                                # เขียน header
+                                # เขียน header (แปลงเป็น string ก่อน)
                                 for col_num, value in enumerate(punthai_export.columns.values):
-                                    worksheet.write(0, col_num, value, header_format)
+                                    # แปลงเป็น string เพื่อป้องกัน error
+                                    header_value = str(value) if pd.notna(value) else ''
+                                    worksheet.write(0, col_num, header_value, header_format)
                                 
                                 # จัดรูปแบบแต่ละแถว (แยกสีตามทริป)
                                 current_trip = None
