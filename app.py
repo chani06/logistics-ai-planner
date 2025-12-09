@@ -37,7 +37,7 @@ MODEL_PATH = 'models/decision_tree_model.pkl'
 LIMITS = {
     '4W': {'max_w': 2500, 'max_c': 5.0, 'max_drops': 12},   # ≤2,500 kg, Cube ≤5 (PT)/3.5 (Mix), ≤12 drops
     'JB': {'max_w': 3500, 'max_c': 7.0, 'max_drops': 7},    # ≤3,500 kg, Cube ≤7, ≤7 drops (ถ้า PT ล้วน)
-    '6W': {'max_w': 7000, 'max_c': 20.0, 'min_c': 18.0, 'max_drops': float('inf')}  # ≤7,000 kg, 18-20 คิว, ไม่จำกัด drops
+    '6W': {'max_w': 7000, 'max_c': 20.0, 'min_c': 18.0, 'max_drops': float('inf')}  # ≤7,000 kg, 18-20 คิว (ยอมให้ >20 ถ้าจำเป็น), ไม่จำกัด drops
 }
 
 # เผื่อการใช้รถได้เกิน 5%
@@ -2839,168 +2839,84 @@ def predict_trips(test_df, model_data):
     # เรียงตามจังหวัดหลัก → ระยะทาง → จำนวนสาขา → utilization
     all_trips.sort(key=lambda x: (x['primary_province'], x['distance_from_dc'], x['count'], x['util']))
     
-    # 🎯 Phase 1: รวมทริปเล็ก (≤3 สาขา) กับทริปใกล้เคียง (FAST VERSION)
-    merged = True
+    # 🎯 Phase 1: รวมทริปเล็ก (< 3 สาขา) เท่านั้น - แบบ simple_trip_planner_v2.py
+    MIN_BRANCHES = 3
     merge_count = 0
-    iteration = 0
-    max_iterations = 2  # ⚡ ลดจาก len(all_trips)*2 เหลือแค่ 2 รอบ
     
-    while merged and len(all_trips) > 1 and iteration < max_iterations:
-        merged = False
-        iteration += 1
+    # หาทริปเล็ก (< 3 สาขา)
+    small_trips = [t for t in all_trips if t and t['count'] < MIN_BRANCHES]
+    
+    for trip1 in small_trips:
         
-        # ⚡ Speed: สร้าง index ตามจังหวัดเพื่อหาทริปใกล้เคียงได้เร็ว
-        province_to_trips = {}
-        for idx, trip in enumerate(all_trips):
-            if trip is None:
-                continue
-            for prov in trip['provinces']:
-                if prov not in province_to_trips:
-                    province_to_trips[prov] = []
-                province_to_trips[prov].append(idx)
+        best_merge = None
+        best_distance = float('inf')
         
-        # เริ่มจากทริปเล็กก่อน (เร็วกว่า)
-        small_trips = [(idx, t) for idx, t in enumerate(all_trips) if t and t['count'] <= 3]
-        small_trips.sort(key=lambda x: x[1]['count'])
-        
-        for i, trip1 in small_trips:
-            if all_trips[i] is None:
+        # หาทริปที่ใกล้ที่สุดและรวมได้
+        for trip2 in all_trips:
+            if not trip2 or trip2['trip'] == trip1['trip']:
                 continue
             
-            # ⚡ หาทริปที่จะรวมได้จากจังหวัดเดียวกันเท่านั้น
-            candidate_indices = set()
-            for prov in trip1['provinces']:
-                for idx in province_to_trips.get(prov, []):
-                    if idx != i and all_trips[idx] is not None:
-                        candidate_indices.add(idx)
+            # เช็คระยะทางระหว่างสาขา
+            can_merge, max_branch_dist, _ = check_branch_distance_compatibility(
+                trip1['codes'], trip2['codes'], get_lat_lon
+            )
+            if not can_merge:
+                continue
             
-            # ⚡ จำกัดแค่ 10 candidates ที่ใกล้ที่สุด (ตาม centroid)
-            if len(candidate_indices) > 10 and 'centroid_lat' in trip1:
-                candidates_with_dist = []
-                for idx in candidate_indices:
-                    trip2 = all_trips[idx]
-                    if 'centroid_lat' in trip2:
-                        dist = haversine_distance(
-                            trip1['centroid_lat'], trip1['centroid_lon'],
-                            trip2['centroid_lat'], trip2['centroid_lon']
-                        )
-                        candidates_with_dist.append((idx, dist))
-                candidates_with_dist.sort(key=lambda x: x[1])
-                candidate_indices = {x[0] for x in candidates_with_dist[:10]}
+            # เช็ค limits
+            combined_codes = trip1['codes'] | trip2['codes']
+            combined_w = trip1['weight'] + trip2['weight']
+            combined_c = trip1['cube'] + trip2['cube']
+            combined_count = trip1['count'] + trip2['count']
             
-            for j in candidate_indices:
-                if all_trips[j] is None:
-                    continue
-                
-                trip2 = all_trips[j]
-                
-                # เช็คระยะทางระหว่าง centroid
-                if 'centroid_lat' in trip1 and 'centroid_lat' in trip2:
-                    centroid_distance = haversine_distance(
-                        trip1['centroid_lat'], trip1['centroid_lon'],
-                        trip2['centroid_lat'], trip2['centroid_lon']
-                    )
-                    if centroid_distance > 80:  # ไกลเกิน 80km ไม่รวม
-                        continue
-                
-                # 🚨 เช็คระยะทางระหว่างสาขาทั้งหมด (ป้องกันข้ามภูมิภาค)
-                combined_codes = trip1['codes'] | trip2['codes']
-                can_merge, max_branch_dist, merge_reason = check_branch_distance_compatibility(
-                    trip1['codes'], trip2['codes'], get_lat_lon
-                )
-                if not can_merge:
-                    continue  # ข้ามถ้าสาขาไกลกันเกิน 100km
-                
-                # 🚨 เช็คข้อจำกัดรถก่อนรวม
-                max_allowed_combined = get_max_vehicle_for_trip(combined_codes)
-                
-                # ลองรวมกัน
-                combined_w = trip1['weight'] + trip2['weight']
-                combined_c = trip1['cube'] + trip2['cube']
-                combined_count = trip1['count'] + trip2['count']
-                
-                # เช็คว่ารวมแล้วใส่รถได้หรือไม่
-                if combined_count > MAX_BRANCHES_PER_TRIP:
-                    continue
-                
-                # คำนวณ % การใช้รถหลังรวม
-                combined_6w_util = max(
-                    (combined_w / LIMITS['6W']['max_w']) * 100,
-                    (combined_c / LIMITS['6W']['max_c']) * 100
-                )
-                
-                # เช็คว่าใส่รถที่อนุญาตได้หรือไม่
-                vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
-                allowed_priority = vehicle_priority.get(max_allowed_combined, 3)
-                
-                can_fit = False
-                if allowed_priority >= 3 and combined_6w_util <= 105:  # 6W - ตามหลักการ 90-105%
-                    can_fit = True
-                elif allowed_priority >= 2 and combined_c <= LIMITS['JB']['max_c'] * BUFFER:  # JB
-                    can_fit = True
-                elif allowed_priority >= 1 and combined_c <= LIMITS['4W']['max_c'] * BUFFER:  # 4W
-                    can_fit = True
-                
-                if can_fit:
-                    # รวมทริป
-                    for code in trip2['codes']:
-                        test_df.loc[test_df['Code'] == code, 'Trip'] = trip1['trip']
-                    
-                    # อัปเดตข้อมูล trip1
-                    trip1['weight'] = combined_w
-                    trip1['cube'] = combined_c
-                    trip1['count'] = combined_count
-                    trip1['codes'] |= trip2['codes']
-                    trip1['provinces'] |= trip2['provinces']
-                    trip1['util'] = combined_6w_util
-                    
-                    # อัพเดต centroid
-                    lats, lons = [], []
-                    for code in trip1['codes']:
-                        lat, lon = coord_cache.get(code, (None, None))
-                        if lat:
-                            lats.append(lat)
-                            lons.append(lon)
-                    if lats:
-                        trip1['centroid_lat'] = sum(lats) / len(lats)
-                        trip1['centroid_lon'] = sum(lons) / len(lons)
-                    
-                    # ลบ trip2 ออก
-                    all_trips[j] = None
-                    merged = True
-                    merge_count += 1
-                    break
+            # เช็คข้อจำกัดรถ
+            max_allowed = get_max_vehicle_for_trip(combined_codes)
             
-            if merged:
-                break
+            # ตรวจสอบตาม truck type
+            can_fit = False
+            if max_allowed == '6W':
+                # 6W: ยอมให้ >20 คิว ถ้าจำเป็น (เหลือสาขาที่ต้องไปทางนั้น)
+                if combined_w <= LIMITS['6W']['max_w']:
+                    can_fit = True
+            elif max_allowed == 'JB':
+                if combined_c <= LIMITS['JB']['max_c'] and combined_w <= LIMITS['JB']['max_w']:
+                    can_fit = True
+            elif max_allowed == '4W':
+                if combined_c <= LIMITS['4W']['max_c'] and combined_w <= LIMITS['4W']['max_w']:
+                    can_fit = True
+            
+            if can_fit and max_branch_dist < best_distance:
+                best_distance = max_branch_dist
+                best_merge = trip2
         
-        # ลบ None ออก
-        all_trips = [t for t in all_trips if t is not None]
+        # รวมกับทริปที่เลือก
+        if best_merge:
+            for code in trip1['codes']:
+                test_df.loc[test_df['Code'] == code, 'Trip'] = best_merge['trip']
+            merge_count += 1
     
-    # 🎯 Phase 1.25: ย้ายสาขาเดียวที่ใช้รถเล็กไปยังทริปใกล้เคียงที่ใหญ่กว่า
-    # 🆕 พิเศษ: เช็คจังหวัด+อำเภอเดียวกันด้วย
+    print(f"✅ Phase 1: รวมทริปเล็ก (< {MIN_BRANCHES} สาขา) = {merge_count} ทริป")
+    
+    # ข้าม Phase 1.25, 1.75 และ 1.5 (simple version ไม่ใช้)
     reassign_count = 0
+    rebalance_count = 0
+    pickup_count = 0
+    restriction_split_count = 0
     
-    # หาทริปที่มีเพียง 1 สาขา และ utilization ต่ำ (<40%)
-    single_branch_trips = []
-    for trip_num in test_df['Trip'].unique():
-        if trip_num == 0:
-            continue
-        trip_data = test_df[test_df['Trip'] == trip_num]
-        if len(trip_data) == 1:
-            branch_code = trip_data['Code'].values[0]
-            branch_w = trip_data['Weight'].values[0]
-            branch_c = trip_data['Cube'].values[0]
-            
-            # คำนวณ utilization (ใช้รถที่เล็กที่สุดที่พอดี)
-            util_4w = max((branch_w / LIMITS['4W']['max_w']) * 100, 
-                         (branch_c / LIMITS['4W']['max_c']) * 100)
-            util_jb = max((branch_w / LIMITS['JB']['max_w']) * 100,
-                         (branch_c / LIMITS['JB']['max_c']) * 100)
-            
-            # 🆕 ดึงจังหวัด+อำเภอ
-            branch_province = get_province(branch_code)
-            branch_district = ''
+    # 🎯 Phase 2: เลือกรถที่เหมาะสม (เริ่มจาก 4W → JB → 6W หรือ 2 คัน) - Optimized
+    vehicle_assignment_count = 0
+    downsize_count = 0
+    region_changes = {
+        '4w': 0, 
+        'jb': 0, 
+        '6w': 0, 
+        'split_2_vehicles': 0,
+        'nearby_6w_to_jb': 0,
+        'far_keep_6w': 0,
+        'other': 0
+    }
+    
+    # ⚡ Early stopping - ถ้าใช้เวลามากกว่า 55 วินาที
             if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
                 master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == branch_code]
                 if len(master_row) > 0:
