@@ -2713,10 +2713,10 @@ def predict_trips(test_df, model_data):
                 
                 # กำหนด threshold ตามประเภทรถ
                 if vehicle_type == 'JB':
-                    # JB: ≤ 7.99 คิว (ไม่ถึง 8), ≤ 3500 kg
-                    max_cube_allowed = LIMITS['JB']['max_c'] + 0.99  # 7.99 คิว
+                    # JB: < 8.0 คิว (น้อยกว่า 8, ไม่เท่ากับ), ≤ 3500 kg
+                    max_cube_allowed = 8.0  # ต้องน้อยกว่า 8
                     max_weight_allowed = LIMITS['JB']['max_w']  # 3500 kg
-                    can_fit = trip_weight <= max_weight_allowed and trip_cube <= max_cube_allowed
+                    can_fit = trip_weight <= max_weight_allowed and trip_cube < max_cube_allowed
                 elif vehicle_type == '4W':
                     # 4W: ≤ 5.00 คิว (ไม่เกิน 5), ≤ 2500 kg
                     max_cube_allowed = LIMITS['4W']['max_c']  # 5.00 คิว
