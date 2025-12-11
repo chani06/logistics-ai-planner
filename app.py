@@ -522,18 +522,21 @@ def can_fit_truck(total_weight, total_cube, truck_type):
     max_c = limits['max_c'] * BUFFER
     return total_weight <= max_w and total_cube <= max_c
 
-def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None):
+def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None, prefer_jb_for_nearby=False):
     """
     แนะนำรถที่เหมาะสม โดยเลือกรถที่:
     1. ใส่ของได้พอดี (ไม่เกินขีดจำกัด 105%)
     2. ใช้งานได้ใกล้ 100% มากที่สุด (เป้าหมาย: 90-100%)
     3. เคารพข้อจำกัดของสาขา (ถ้าสาขาใช้แค่ 4W = ต้องใช้ 4W เท่านั้น)
+    4. 🆕 พื้นที่ใกล้ DC (กทม/ปริมณฑล/ภาคกลาง) → ใช้ JB ก่อน 4W
     """
     vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
     max_size = vehicle_sizes.get(max_allowed, 3)
     
     # ตรวจสอบข้อจำกัดของสาขาทั้งหมดในกลุ่ม
     branch_max_vehicle = '4W'  # 🔒 เริ่มต้นที่ 4W (เล็กสุด) แล้วขยายเมื่อจำเป็น
+    is_nearby_area = False  # เช็คว่าเป็นพื้นที่ใกล้ DC หรือไม่
+    
     if trip_codes is not None and len(trip_codes) > 0:
         for code in trip_codes:
             branch_max = get_max_vehicle_for_branch(code)
@@ -545,12 +548,28 @@ def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None):
         if vehicle_sizes.get(branch_max_vehicle, 3) < max_size:
             max_allowed = branch_max_vehicle
             max_size = vehicle_sizes.get(max_allowed, 3)
+        
+        # 🆕 เช็คว่าเป็นพื้นที่ใกล้ DC หรือไม่
+        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+            for code in trip_codes:
+                master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                if len(master_row) > 0:
+                    prov = master_row.iloc[0].get('จังหวัด', '')
+                    if pd.notna(prov) and get_region_type(prov) == 'nearby':
+                        is_nearby_area = True
+                        break
+    
+    # 🆕 พื้นที่ใกล้ DC หรือ prefer_jb_for_nearby=True → ลำดับ JB ก่อน 4W
+    if is_nearby_area or prefer_jb_for_nearby:
+        truck_order = ['JB', '4W', '6W']  # JB ก่อน 4W
+    else:
+        truck_order = ['4W', 'JB', '6W']  # ปกติ 4W ก่อน
     
     best_truck = None
     best_utilization = 0
     best_distance_from_100 = 999  # ระยะห่างจาก 100%
     
-    for truck in ['4W', 'JB', '6W']:
+    for truck in truck_order:
         truck_size = vehicle_sizes.get(truck, 0)
         # ถ้ารถใหญ่กว่าที่อนุญาต ข้ามไป
         if truck_size > max_size:
@@ -2213,10 +2232,12 @@ def predict_trips(test_df, model_data):
     def group_by_name_and_subdistrict(codes):
         """
         จัดกลุ่มสาขาตามลำดับ แล้วเรียงตามระยะทาง nearest neighbor:
-        1. ชื่อเหมือนกัน + ตำบลเดียวกัน + จังหวัดเดียวกัน (สำคัญที่สุด)
-        2. ชื่อเหมือนกัน + จังหวัดเดียวกัน
-        3. ชื่อเหมือนกัน (ต่างจังหวัด)
-        4. จังหวัด + อำเภอเดียวกัน
+        🔥 ลำดับใหม่: ตำบล > ชื่อ > อำเภอ > จังหวัด
+        0. 🆕 ตำบลเดียวกัน + จังหวัดเดียวกัน (สำคัญที่สุด - บังคับรวม)
+        1. ชื่อเหมือนกัน + ตำบลเดียวกัน + จังหวัดเดียวกัน
+        2. ชื่อเหมือนกัน + อำเภอเดียวกัน + จังหวัดเดียวกัน
+        3. ตำบลเดียวกัน (แม้ชื่อต่าง) → รวมก่อน
+        4. อำเภอเดียวกัน + จังหวัดเดียวกัน
         5. จังหวัดเดียวกัน
         6. ที่เหลือ
         
@@ -2232,25 +2253,32 @@ def predict_trips(test_df, model_data):
             district = district_cache.get(code, '')
             province = province_cache.get(code, '')
             
-            # สร้าง group key - ใช้ลำดับความสำคัญ (เลขน้อย = สำคัญกว่า)
-            if base_name and subdistrict and province:
-                # ลำดับ 1: ชื่อ + ตำบล + จังหวัด (เหมาะสมที่สุด)
+            # 🔥 สร้าง group key - ใช้ลำดับความสำคัญ (เลขน้อย = สำคัญกว่า)
+            # ให้ความสำคัญกับตำบลเดียวกันก่อน!
+            if subdistrict and province:
+                # ลำดับ 0: ตำบลเดียวกัน + จังหวัดเดียวกัน (🔥 สำคัญที่สุด - บังคับรวม)
+                key = (0, province, district, '', subdistrict)
+            elif base_name and subdistrict and province:
+                # ลำดับ 1: ชื่อ + ตำบล + จังหวัด
                 key = (1, province, district, base_name, subdistrict)
-            elif base_name and province:
-                # ลำดับ 2: ชื่อ + จังหวัด (🔥 สำคัญมาก - รวมสาขาชื่อเดียวกัน)
+            elif base_name and district and province:
+                # ลำดับ 2: ชื่อ + อำเภอ + จังหวัด
                 key = (2, province, district, base_name, '')
+            elif base_name and province:
+                # ลำดับ 3: ชื่อ + จังหวัด
+                key = (3, province, district, base_name, '')
             elif base_name:
-                # ลำดับ 3: ชื่อเดียวกัน (แม้ต่างจังหวัด - เช่น โลตัส กทม กับ โลตัส ชลบุรี)
-                key = (3, province, '', base_name, '')
+                # ลำดับ 4: ชื่อเดียวกัน (แม้ต่างจังหวัด - เช่น โลตัส กทม กับ โลตัส ชลบุรี)
+                key = (4, province, '', base_name, '')
             elif province and district:
-                # ลำดับ 4: จังหวัด + อำเภอ (รวมสาขาในอำเภอเดียวกัน)
-                key = (4, province, district, '', '')
+                # ลำดับ 5: จังหวัด + อำเภอ (รวมสาขาในอำเภอเดียวกัน)
+                key = (5, province, district, '', '')
             elif province:
-                # ลำดับ 5: จังหวัดเดียวกัน
-                key = (5, province, '', '', '')
+                # ลำดับ 6: จังหวัดเดียวกัน
+                key = (6, province, '', '', '')
             else:
-                # ลำดับ 6: ที่เหลือ
-                key = (6, province if province else code, '', '', '', '')
+                # ลำดับ 7: ที่เหลือ
+                key = (7, province if province else code, '', '', '', '')
             
             if key not in groups:
                 groups[key] = []
@@ -2409,17 +2437,27 @@ def predict_trips(test_df, model_data):
         max_weight = LIMITS['6W']['max_w'] * BUFFER  # 6000 kg
         
         # 🔄 หาสาขาถัดไปที่ใกล้สุด (ระยะจากสาขาสุดท้าย ≤ 50km)
+        # 🆕 ให้ความสำคัญกับตำบลเดียวกันก่อน
+        seed_subdistrict = subdistrict_cache.get(seed_code, '')
+        seed_district = district_cache.get(seed_code, '')
+        
         while all_codes:
             best_code = None
             best_dist = 9999
+            best_same_subdistrict = False
+            best_same_district = False
             
             # หาสาขาที่ใกล้ที่สุดจากสาขาสุดท้ายในทริป
             last_code = current_trip[-1]
             last_lat, last_lon = coord_cache.get(last_code, (None, None))
+            last_subdistrict = subdistrict_cache.get(last_code, '')
+            last_district = district_cache.get(last_code, '')
             
             for code in all_codes:
                 code_province = get_province(code)
                 code_lat, code_lon = coord_cache.get(code, (None, None))
+                code_subdistrict = subdistrict_cache.get(code, '')
+                code_district = district_cache.get(code, '')
                 
                 if not last_lat or not code_lat:
                     continue
@@ -2432,10 +2470,46 @@ def predict_trips(test_df, model_data):
                 if dist_from_last > MAX_DISTANCE_IN_TRIP:
                     continue
                 
-                # เลือกสาขาที่ใกล้ที่สุด
-                if dist_from_last < best_dist:
-                    best_dist = dist_from_last
+                # 🆕 เช็คว่าเป็นตำบล/อำเภอเดียวกันหรือไม่
+                same_subdistrict = (code_subdistrict and code_subdistrict == last_subdistrict)
+                same_district = (code_district and code_district == last_district)
+                
+                # 🔥 เลือกสาขา: 1) ตำบลเดียวกัน > 2) อำเภอเดียวกัน > 3) ใกล้ที่สุด
+                if best_code is None:
                     best_code = code
+                    best_dist = dist_from_last
+                    best_same_subdistrict = same_subdistrict
+                    best_same_district = same_district
+                elif same_subdistrict and not best_same_subdistrict:
+                    # ตำบลเดียวกัน ดีกว่าที่เลือกไว้
+                    best_code = code
+                    best_dist = dist_from_last
+                    best_same_subdistrict = same_subdistrict
+                    best_same_district = same_district
+                elif same_subdistrict and best_same_subdistrict and dist_from_last < best_dist:
+                    # ทั้งคู่ตำบลเดียวกัน เลือกที่ใกล้กว่า
+                    best_code = code
+                    best_dist = dist_from_last
+                    best_same_subdistrict = same_subdistrict
+                    best_same_district = same_district
+                elif not best_same_subdistrict and same_district and not best_same_district:
+                    # อำเภอเดียวกัน ดีกว่าที่เลือกไว้ (ถ้าไม่มีตำบลเดียวกัน)
+                    best_code = code
+                    best_dist = dist_from_last
+                    best_same_subdistrict = same_subdistrict
+                    best_same_district = same_district
+                elif not best_same_subdistrict and same_district and best_same_district and dist_from_last < best_dist:
+                    # ทั้งคู่อำเภอเดียวกัน เลือกที่ใกล้กว่า
+                    best_code = code
+                    best_dist = dist_from_last
+                    best_same_subdistrict = same_subdistrict
+                    best_same_district = same_district
+                elif not best_same_subdistrict and not best_same_district and dist_from_last < best_dist:
+                    # ทั้งคู่ไม่ใช่ตำบล/อำเภอเดียวกัน เลือกที่ใกล้กว่า
+                    best_code = code
+                    best_dist = dist_from_last
+                    best_same_subdistrict = same_subdistrict
+                    best_same_district = same_district
             
             if not best_code:
                 break  # ไม่มีสาขาที่เหมาะสม ตัดทริปใหม่
