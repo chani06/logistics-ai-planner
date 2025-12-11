@@ -2765,6 +2765,108 @@ def predict_trips(test_df, model_data):
     # เรียงตามจังหวัดหลัก → ระยะทาง → จำนวนสาขา → utilization
     all_trips.sort(key=lambda x: (x['primary_province'], x['distance_from_dc'], x['count'], x['util']))
     
+    # ===============================================
+    # 🎯 Phase 0.5: รวมทริปภาคเหนือ/ใต้ ที่ยังไม่เต็ม 6W
+    # จังหวัดในภาคเดียวกัน (เช่น น่าน + พะเยา) ควรรวมกันเป็น 6W
+    # ===============================================
+    def get_region_group(province):
+        """คืนค่ากลุ่มภาค (เหนือตอนบน, เหนือตอนล่าง, ใต้ฝั่งอันดามัน, ใต้ฝั่งอ่าวไทย)"""
+        region_groups = {
+            'เหนือตอนบน': ['น่าน', 'พะเยา', 'ลำปาง', 'ลำพูน', 'เชียงราย', 'เชียงใหม่', 'แพร่', 'แม่ฮ่องสอน'],
+            'เหนือตอนล่าง': ['กำแพงเพชร', 'ตาก', 'นครสวรรค์', 'พิจิตร', 'พิษณุโลก', 'สุโขทัย', 'อุตรดิตถ์', 'อุทัยธานี', 'เพชรบูรณ์'],
+            'ใต้ฝั่งอันดามัน': ['กระบี่', 'ตรัง', 'พังงา', 'ภูเก็ต', 'ระนอง', 'สตูล'],
+            'ใต้ฝั่งอ่าวไทย': ['ชุมพร', 'นครศรีธรรมราช', 'พัทลุง', 'ยะลา', 'สงขลา', 'สุราษฎร์ธานี', 'ปัตตานี', 'นราธิวาส']
+        }
+        prov_str = str(province).strip()
+        for group, provinces in region_groups.items():
+            for p in provinces:
+                if p in prov_str:
+                    return group
+        return None
+    
+    # หาทริปภาคเหนือ/ใต้ที่ยังไม่เต็ม 6W
+    north_south_trips = []
+    for idx, trip in enumerate(all_trips):
+        if trip is None:
+            continue
+        primary_prov = trip['primary_province']
+        region = get_region_type(primary_prov)
+        
+        # เฉพาะภาคเหนือ/ใต้
+        if region in ['north', 'south']:
+            region_group = get_region_group(primary_prov)
+            cube_6w = (trip['cube'] / LIMITS['6W']['max_c']) * 100
+            
+            # ยังไม่เต็ม 6W (< 95%)
+            if cube_6w < 95:
+                north_south_trips.append({
+                    'idx': idx,
+                    'trip': trip,
+                    'region': region,
+                    'region_group': region_group,
+                    'cube': trip['cube'],
+                    'weight': trip['weight'],
+                    'count': trip['count'],
+                    'cube_6w': cube_6w
+                })
+    
+    # รวมทริปในภาคเดียวกัน
+    merge_north_south_count = 0
+    merged_indices = set()
+    
+    for i, t1 in enumerate(north_south_trips):
+        if t1['idx'] in merged_indices:
+            continue
+        
+        for j, t2 in enumerate(north_south_trips):
+            if i >= j or t2['idx'] in merged_indices:
+                continue
+            
+            # ต้องอยู่ในกลุ่มภาคเดียวกัน (เช่น เหนือตอนบน หรือ ใต้ฝั่งอ่าวไทย)
+            if t1['region_group'] != t2['region_group'] or t1['region_group'] is None:
+                continue
+            
+            # เช็ค capacity รวมกัน (ต้องไม่เกิน 6W)
+            combined_cube = t1['cube'] + t2['cube']
+            combined_weight = t1['weight'] + t2['weight']
+            combined_count = t1['count'] + t2['count']
+            
+            if combined_cube > LIMITS['6W']['max_c'] * BUFFER:
+                continue
+            if combined_weight > LIMITS['6W']['max_w'] * BUFFER:
+                continue
+            
+            # รวมได้! ย้ายสาขาจาก trip2 ไป trip1
+            trip1 = all_trips[t1['idx']]
+            trip2 = all_trips[t2['idx']]
+            
+            if trip1 is None or trip2 is None:
+                continue
+            
+            # ย้ายสาขา
+            for code in trip2['codes']:
+                test_df.loc[test_df['Code'] == code, 'Trip'] = trip1['num']
+            
+            # อัปเดต trip1
+            trip1['codes'].extend(trip2['codes'])
+            trip1['cube'] = combined_cube
+            trip1['weight'] = combined_weight
+            trip1['count'] = combined_count
+            trip1['provinces'].update(trip2['provinces'])
+            
+            # ลบ trip2
+            all_trips[t2['idx']] = None
+            merged_indices.add(t2['idx'])
+            merge_north_south_count += 1
+            
+            # อัปเดต t1 สำหรับ iteration ถัดไป
+            t1['cube'] = combined_cube
+            t1['weight'] = combined_weight
+            t1['count'] = combined_count
+    
+    # ลบทริปที่ถูกรวมแล้ว
+    all_trips = [t for t in all_trips if t is not None]
+    
     # 🎯 Phase 1: รวมทริปเล็ก (≤3 สาขา) กับทริปใกล้เคียง (FAST VERSION)
     merged = True
     merge_count = 0
