@@ -125,6 +125,38 @@ def load_master_data():
 # โหลด Master Data
 MASTER_DATA = load_master_data()
 
+# ==========================================
+# 🆕 โหลดไฟล์ สถานที่ส่ง.xlsx สำหรับจับกลุ่มสาขาที่อยู่ที่เดียวกัน (Reference)
+# ==========================================
+@st.cache_data(ttl=7200)
+def load_location_reference():
+    """โหลดไฟล์ สถานที่ส่ง.xlsx และสร้าง Reference mapping"""
+    try:
+        df = pd.read_excel('Dc/สถานที่ส่ง.xlsx')
+        if 'Reference' in df.columns and 'Plan Code' in df.columns:
+            # สร้าง mapping: branch_code -> reference
+            code_to_ref = {}
+            # สร้าง reverse mapping: reference -> [branch_codes]
+            ref_to_codes = {}
+            
+            for _, row in df.iterrows():
+                code = str(row['Plan Code']).strip().upper()
+                ref = str(row['Reference']).strip()
+                
+                if code and ref and code != 'NAN' and ref != 'NAN':
+                    code_to_ref[code] = ref
+                    if ref not in ref_to_codes:
+                        ref_to_codes[ref] = []
+                    ref_to_codes[ref].append(code)
+            
+            return code_to_ref, ref_to_codes
+        return {}, {}
+    except Exception as e:
+        return {}, {}
+
+# โหลด Reference mapping
+LOCATION_CODE_TO_REF, LOCATION_REF_TO_CODES = load_location_reference()
+
 @st.cache_data(ttl=3600)  # Cache 1 ชั่วโมง
 def load_booking_history_restrictions():
     """โหลดประวัติการจัดส่งจาก Booking History - ข้อมูลจริง 3,053 booking (Optimized)"""
@@ -2435,7 +2467,7 @@ def predict_trips(test_df, model_data):
         seed_subdistrict = subdistrict_cache.get(seed_code, '')
         seed_district = district_cache.get(seed_code, '')
         
-        # 🔥🔥🔥 ขั้นตอนที่ 0: หาสาขาตำบลเดียวกันทั้งหมด แล้วเพิ่มเข้าทริปก่อน!
+        # 🔥🔥🔥 ขั้นตอนที่ 0: หาสาขาที่ต้องไปด้วยกัน (Reference เดียวกัน / เคยไปด้วยกัน / ตำบลเดียวกัน)
         # 🔒 เช็คข้อห้ามรถของ seed ก่อน
         seed_max_vehicle = get_max_vehicle_for_branch(seed_code)
         if seed_max_vehicle == '4W':
@@ -2445,6 +2477,62 @@ def predict_trips(test_df, model_data):
             max_cube = LIMITS['JB']['max_c'] * BUFFER
             max_weight = LIMITS['JB']['max_w'] * BUFFER
         
+        # 🆕 ลำดับที่ 0.1: หาสาขาที่มี Reference เดียวกัน (อยู่ที่เดียวกัน)
+        seed_ref = LOCATION_CODE_TO_REF.get(seed_code, '')
+        if seed_ref:
+            same_ref_codes = [c for c in all_codes if LOCATION_CODE_TO_REF.get(c, '') == seed_ref]
+            for same_code in same_ref_codes:
+                next_weight = test_df[test_df['Code'] == same_code]['Weight'].sum()
+                next_cube = test_df[test_df['Code'] == same_code]['Cube'].sum()
+                
+                # เช็คข้อห้ามรถ
+                branch_max = get_max_vehicle_for_branch(same_code)
+                temp_max_cube = max_cube
+                temp_max_weight = max_weight
+                if branch_max == '4W':
+                    temp_max_cube = min(max_cube, LIMITS['4W']['max_c'] * BUFFER)
+                    temp_max_weight = min(max_weight, LIMITS['4W']['max_w'] * BUFFER)
+                elif branch_max == 'JB' and seed_max_vehicle == '6W':
+                    temp_max_cube = min(max_cube, LIMITS['JB']['max_c'] * BUFFER)
+                    temp_max_weight = min(max_weight, LIMITS['JB']['max_w'] * BUFFER)
+                
+                if current_cube + next_cube <= temp_max_cube and current_weight + next_weight <= temp_max_weight:
+                    all_codes.remove(same_code)
+                    current_trip.append(same_code)
+                    assigned_trips[same_code] = trip_counter
+                    current_weight += next_weight
+                    current_cube += next_cube
+                    max_cube = temp_max_cube
+                    max_weight = temp_max_weight
+        
+        # 🆕 ลำดับที่ 0.2: หาสาขาที่เคยไปด้วยกันในประวัติ (trip_pairs)
+        for pair_code in list(all_codes):
+            pair_key = tuple(sorted([seed_code, pair_code]))
+            if pair_key in trip_pairs:
+                next_weight = test_df[test_df['Code'] == pair_code]['Weight'].sum()
+                next_cube = test_df[test_df['Code'] == pair_code]['Cube'].sum()
+                
+                # เช็คข้อห้ามรถ
+                branch_max = get_max_vehicle_for_branch(pair_code)
+                temp_max_cube = max_cube
+                temp_max_weight = max_weight
+                if branch_max == '4W':
+                    temp_max_cube = min(max_cube, LIMITS['4W']['max_c'] * BUFFER)
+                    temp_max_weight = min(max_weight, LIMITS['4W']['max_w'] * BUFFER)
+                elif branch_max == 'JB' and seed_max_vehicle == '6W':
+                    temp_max_cube = min(max_cube, LIMITS['JB']['max_c'] * BUFFER)
+                    temp_max_weight = min(max_weight, LIMITS['JB']['max_w'] * BUFFER)
+                
+                if current_cube + next_cube <= temp_max_cube and current_weight + next_weight <= temp_max_weight:
+                    all_codes.remove(pair_code)
+                    current_trip.append(pair_code)
+                    assigned_trips[pair_code] = trip_counter
+                    current_weight += next_weight
+                    current_cube += next_cube
+                    max_cube = temp_max_cube
+                    max_weight = temp_max_weight
+        
+        # 🆕 ลำดับที่ 0.3: หาสาขาตำบลเดียวกัน
         if seed_subdistrict:
             # หาสาขาทั้งหมดที่อยู่ตำบลเดียวกัน
             same_sd_codes = [c for c in all_codes if subdistrict_cache.get(c, '') == seed_subdistrict]
