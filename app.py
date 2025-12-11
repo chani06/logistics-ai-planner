@@ -2600,6 +2600,37 @@ def predict_trips(test_df, model_data):
             if max_vehicle_allowed == 'JB' and (new_cube > LIMITS['JB']['max_c'] * BUFFER or new_weight > LIMITS['JB']['max_w'] * BUFFER):
                 break
             
+            # 🆕 เช็คระยะทางรวมทั้งทริป (DC → สาขาแรก → ... → สาขาสุดท้าย → DC)
+            # คำนวณระยะทางแบบ consecutive (DC → สาขา1 → สาขา2 → ... → สาขาสุดท้าย → DC)
+            trip_codes_for_dist = current_trip + [best_code]
+            total_trip_distance = 0
+            
+            # DC → สาขาแรก
+            first_code = trip_codes_for_dist[0]
+            first_lat, first_lon = coord_cache.get(first_code, (None, None))
+            if first_lat and first_lon:
+                total_trip_distance += haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, first_lat, first_lon)
+            
+            # สาขา → สาขาถัดไป
+            for i in range(len(trip_codes_for_dist) - 1):
+                c1 = trip_codes_for_dist[i]
+                c2 = trip_codes_for_dist[i + 1]
+                lat1, lon1 = coord_cache.get(c1, (None, None))
+                lat2, lon2 = coord_cache.get(c2, (None, None))
+                if lat1 and lon1 and lat2 and lon2:
+                    total_trip_distance += haversine_distance(lat1, lon1, lat2, lon2)
+            
+            # สาขาสุดท้าย → DC
+            last_code_dist = trip_codes_for_dist[-1]
+            last_lat_dist, last_lon_dist = coord_cache.get(last_code_dist, (None, None))
+            if last_lat_dist and last_lon_dist:
+                total_trip_distance += haversine_distance(last_lat_dist, last_lon_dist, DC_WANG_NOI_LAT, DC_WANG_NOI_LON)
+            
+            # 🔒 จำกัดระยะทางรวมทั้งทริป: 4W/JB = 400km, 6W = 1000km
+            max_trip_distance = 1000 if max_vehicle_allowed == '6W' else 400
+            if total_trip_distance > max_trip_distance:
+                break
+            
             # ✅ ผ่านทุกเงื่อนไข → เพิ่มสาขานี้
             all_codes.remove(best_code)
             current_trip.append(best_code)
