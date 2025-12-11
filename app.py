@@ -6617,26 +6617,26 @@ def main():
                         
                         # ดาวน์โหลด - เขียนทับชีต 2.Punthai ในไฟล์ต้นฉบับ พร้อมสลับสีเหลืองโทนส้ม-ขาว
                         output = io.BytesIO()
-                            
-                            # สร้าง Trip_No map (JB ใช้ prefix 4WJ)
-                            trip_no_map = {}
-                            vehicle_counts = {'4W': 0, '4WJ': 0, '6W': 0}
-                            
-                            for trip_num in sorted(result_df['Trip'].unique()):
-                                if trip_num == 0:
-                                    continue
-                                trip_summary = summary[summary['Trip'] == trip_num]
-                                if len(trip_summary) > 0:
-                                    truck_info = trip_summary.iloc[0]['Truck']
-                                    vehicle_type = truck_info.split()[0] if truck_info else '6W'
-                                    # JB ใช้ prefix 4WJ แทน
-                                    if vehicle_type == 'JB':
-                                        vehicle_type = '4WJ'
-                                    vehicle_counts[vehicle_type] = vehicle_counts.get(vehicle_type, 0) + 1
-                                    trip_no = f"{vehicle_type}{vehicle_counts[vehicle_type]:03d}"
-                                    trip_no_map[trip_num] = trip_no
-                            
-                            # โหลดไฟล์ต้นฉบับเพื่อ copy ทุกชีต
+                        
+                        # สร้าง Trip_No map (JB ใช้ prefix 4WJ)
+                        trip_no_map = {}
+                        vehicle_counts = {'4W': 0, '4WJ': 0, '6W': 0}
+                        
+                        for trip_num in sorted(result_df['Trip'].unique()):
+                            if trip_num == 0:
+                                continue
+                            trip_summary = summary[summary['Trip'] == trip_num]
+                            if len(trip_summary) > 0:
+                                truck_info = trip_summary.iloc[0]['Truck']
+                                vehicle_type = truck_info.split()[0] if truck_info else '6W'
+                                # JB ใช้ prefix 4WJ แทน
+                                if vehicle_type == 'JB':
+                                    vehicle_type = '4WJ'
+                                vehicle_counts[vehicle_type] = vehicle_counts.get(vehicle_type, 0) + 1
+                                trip_no = f"{vehicle_type}{vehicle_counts[vehicle_type]:03d}"
+                                trip_no_map[trip_num] = trip_no
+                        
+                        # โหลดไฟล์ต้นฉบับเพื่อ copy ทุกชีต
                         from openpyxl import load_workbook
                         from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
                         from copy import copy
