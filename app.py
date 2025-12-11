@@ -2392,20 +2392,16 @@ def predict_trips(test_df, model_data):
             return haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
         return 0  # ไม่มีพิกัด ถือว่าใกล้ DC
     
-    # 🚀 **NEW ALGORITHM: Farthest First + Nearest Neighbor**
-    # 1. เริ่มจากสาขาที่ไกลจาก DC ที่สุด
-    # 2. หาสาขาใกล้สุดที่อยู่ในจังหวัดเดียวกัน และระยะไม่เกิน MAX_DISTANCE_IN_TRIP
-    # 3. เติมรถจนเต็ม (Cube limit)
-    # 4. ตัดทริปใหม่เมื่อ: เต็ม / ระยะเกิน / ข้ามจังหวัด
-    # 5. หาสาขาที่ยังไม่ได้จัดที่ไกลสุดเป็น seed ใหม่
+    # 🚀 **NEW ALGORITHM: ใช้ลำดับไฟล์ต้นฉบับ + เช็คข้อห้ามรถ**
+    # ไฟล์ต้นฉบับเรียงสาขาที่ใกล้กันไว้แล้ว → ใช้ลำดับนั้นเลย
+    # 1. วนทีละสาขาตามลำดับไฟล์
+    # 2. เช็คว่าเพิ่มเข้าทริปปัจจุบันได้ไหม (capacity + ระยะทาง + ข้อห้ามรถ)
+    # 3. ถ้าได้ → เพิ่มเข้าทริป
+    # 4. ถ้าไม่ได้ → ตัดทริปใหม่
     
-    # รวม codes จาก spatial_clusters
-    all_codes_flat = []
-    for cluster in spatial_clusters:
-        all_codes_flat.extend(cluster)
-    
-    # เรียงตามระยะทางจาก DC (ไกลสุดอยู่หน้า)
-    all_codes = sorted(all_codes_flat, key=lambda c: get_distance_from_dc(c), reverse=True)
+    # ใช้ลำดับดั้งเดิมจากไฟล์ต้นฉบับ (ไม่ sort)
+    all_codes_ordered = test_df['Code'].unique().tolist()
+    all_codes = all_codes_ordered.copy()
     
     def get_lat_lon(branch_code):
         return coord_cache.get(branch_code, (None, None))
@@ -2440,6 +2436,15 @@ def predict_trips(test_df, model_data):
         seed_district = district_cache.get(seed_code, '')
         
         # 🔥🔥🔥 ขั้นตอนที่ 0: หาสาขาตำบลเดียวกันทั้งหมด แล้วเพิ่มเข้าทริปก่อน!
+        # 🔒 เช็คข้อห้ามรถของ seed ก่อน
+        seed_max_vehicle = get_max_vehicle_for_branch(seed_code)
+        if seed_max_vehicle == '4W':
+            max_cube = LIMITS['4W']['max_c'] * BUFFER
+            max_weight = LIMITS['4W']['max_w'] * BUFFER
+        elif seed_max_vehicle == 'JB':
+            max_cube = LIMITS['JB']['max_c'] * BUFFER
+            max_weight = LIMITS['JB']['max_w'] * BUFFER
+        
         if seed_subdistrict:
             # หาสาขาทั้งหมดที่อยู่ตำบลเดียวกัน
             same_sd_codes = [c for c in all_codes if subdistrict_cache.get(c, '') == seed_subdistrict]
@@ -2450,10 +2455,27 @@ def predict_trips(test_df, model_data):
                     *coord_cache.get(c, (seed_lat, seed_lon))
                 ))
             
-            # เพิ่มสาขาตำบลเดียวกันเข้าทริป (ถ้า capacity พอ)
+            # เพิ่มสาขาตำบลเดียวกันเข้าทริป (ถ้า capacity พอ และ ข้อห้ามรถตรงกัน)
             for same_code in same_sd_codes:
                 next_weight = test_df[test_df['Code'] == same_code]['Weight'].sum()
                 next_cube = test_df[test_df['Code'] == same_code]['Cube'].sum()
+                
+                # 🔒 เช็คข้อห้ามรถของสาขาใหม่
+                branch_max = get_max_vehicle_for_branch(same_code)
+                if branch_max == '4W':
+                    # ถ้าสาขาใหม่ใช้ได้แค่ 4W → ต้องปรับ limit ลง
+                    if current_cube + next_cube > LIMITS['4W']['max_c'] * BUFFER:
+                        continue
+                    if current_weight + next_weight > LIMITS['4W']['max_w'] * BUFFER:
+                        continue
+                    max_cube = LIMITS['4W']['max_c'] * BUFFER
+                    max_weight = LIMITS['4W']['max_w'] * BUFFER
+                elif branch_max == 'JB' and seed_max_vehicle == '6W':
+                    # ถ้าสาขาใหม่ใช้ได้ถึง JB แต่ seed ใช้ 6W ได้ → ปรับ limit เป็น JB
+                    if current_cube + next_cube > LIMITS['JB']['max_c'] * BUFFER:
+                        continue
+                    max_cube = LIMITS['JB']['max_c'] * BUFFER
+                    max_weight = LIMITS['JB']['max_w'] * BUFFER
                 
                 if current_cube + next_cube <= max_cube and current_weight + next_weight <= max_weight:
                     all_codes.remove(same_code)
@@ -2558,6 +2580,24 @@ def predict_trips(test_df, model_data):
             
             # ถ้าเกิน capacity → ตัดทริปใหม่
             if new_cube > max_cube or new_weight > max_weight:
+                break
+            
+            # 🔒 เช็คข้อห้ามรถ: สาขาใหม่ต้องใช้รถร่วมกับสาขาเดิมได้
+            # หารถที่ใหญ่ที่สุดที่ทุกสาขาในทริปใช้ได้
+            trip_codes_with_new = current_trip + [best_code]
+            max_vehicle_allowed = '6W'
+            for trip_code in trip_codes_with_new:
+                branch_max = get_max_vehicle_for_branch(trip_code)
+                if branch_max == '4W':
+                    max_vehicle_allowed = '4W'
+                    break
+                elif branch_max == 'JB' and max_vehicle_allowed == '6W':
+                    max_vehicle_allowed = 'JB'
+            
+            # ถ้ารถที่อนุญาตไม่พอใส่ของ → ตัดทริปใหม่
+            if max_vehicle_allowed == '4W' and (new_cube > LIMITS['4W']['max_c'] * BUFFER or new_weight > LIMITS['4W']['max_w'] * BUFFER):
+                break
+            if max_vehicle_allowed == 'JB' and (new_cube > LIMITS['JB']['max_c'] * BUFFER or new_weight > LIMITS['JB']['max_w'] * BUFFER):
                 break
             
             # ✅ ผ่านทุกเงื่อนไข → เพิ่มสาขานี้
