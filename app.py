@@ -2217,17 +2217,7 @@ def predict_trips(test_df, model_data):
         if 'คลอง' in name_lower:
             # ถ้ามีตัวเลข เช่น "คลอง 3" -> "คลอง"
             if re.search(r'คลอง\s*\d+', name_lower):
-KeyError: This app has encountered an error. The original error message is redacted to prevent data leaks. Full error details have been recorded in the logs (if you're on Streamlit Cloud, click on 'Manage app' in the lower right of your app).
-Traceback:
-File "/mount/src/logistics-ai-planner/app.py", line 6971, in <module>
-    main()
-    ~~~~^^
-File "/mount/src/logistics-ai-planner/app.py", line 6368, in main
-    result_df, summary = predict_trips(df.copy(), model_data)
-                         ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
-File "/mount/src/logistics-ai-planner/app.py", line 2848, in predict_trips
-    test_df.loc[test_df['Code'] == code, 'Trip'] = trip1['num']
-                                                   ~~~~~^^^^^^^                return "คลอง"
+                return "คลอง"
         
         # ตัดตัวเลขท้ายชื่อและ whitespace
         base = re.sub(r'\s*\d+\s*$', '', str(name).strip())
