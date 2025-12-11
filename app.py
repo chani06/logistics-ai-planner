@@ -791,7 +791,7 @@ def is_similar_name(name1, name2, similarity_threshold=85):
     def extract_keywords(name):
         """ดึงคำสำคัญจากชื่อสาขา"""
         if pd.isna(name) or name is None:
-            return set(), "", ""
+            return set(), "", "", ""
         s = str(name).strip().upper()
         
         # คำสำคัญที่ต้องการจับคู่ (ไทย + อังกฤษ) - เพิ่มเติมคำเฉพาะของสาขา
@@ -6389,6 +6389,16 @@ def main():
         initial_sidebar_state="collapsed"
     )
     
+    # 🔧 Initialize session state สำหรับเก็บผลลัพธ์
+    if 'result_df' not in st.session_state:
+        st.session_state.result_df = None
+    if 'summary' not in st.session_state:
+        st.session_state.summary = None
+    if 'processed' not in st.session_state:
+        st.session_state.processed = False
+    if 'original_file_content' not in st.session_state:
+        st.session_state.original_file_content = None
+    
     # 🔄 Auto-refresh ทุกเที่ยงคืน (ล้างแคช)
     if AUTOREFRESH_AVAILABLE:
         now = datetime.now()
@@ -6454,12 +6464,15 @@ def main():
     )
     
     if uploaded_file:
-        # เก็บ file content ไว้ใช้ตอน export
-        original_file_content = uploaded_file.read()
+        # เก็บ file content ไว้ใช้ตอน export - เก็บใน session_state
+        file_content = uploaded_file.read()
         uploaded_file.seek(0)  # reset pointer
         
+        # เก็บไว้ใน session_state
+        st.session_state.original_file_content = file_content
+        
         with st.spinner("⏳ กำลังอ่านข้อมูล..."):
-            df = load_excel(original_file_content)
+            df = load_excel(file_content)
             df = process_dataframe(df)
             
             if df is not None and 'Code' in df.columns:
@@ -6495,104 +6508,115 @@ def main():
                         with st.spinner("⏳ กำลังประมวลผล..."):
                             result_df, summary = predict_trips(df.copy(), model_data)
                             
+                            # 🔧 เก็บผลลัพธ์ใน session_state เพื่อไม่ให้หายเมื่อกด download
+                            st.session_state.result_df = result_df
+                            st.session_state.summary = summary
+                            st.session_state.processed = True
+                            
                             st.balloons()
-                            st.success(f"✅ **จัดทริปเสร็จสมบูรณ์!** รวม **{len(summary)}** ทริป")
+                    
+                    # 🔧 แสดงผลลัพธ์จาก session_state (ถ้ามี)
+                    if st.session_state.processed and st.session_state.result_df is not None:
+                        result_df = st.session_state.result_df
+                        summary = st.session_state.summary
+                        
+                        st.success(f"✅ **จัดทริปเสร็จสมบูรณ์!** รวม **{len(summary)}** ทริป")
+                        
+                        st.markdown("---")
+                        
+                        # สถิติโดยรวม
+                        st.markdown("### 📊 สรุปผลการจัดทริป")
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric("🚚 จำนวนทริป", len(summary))
+                        with col2:
+                            st.metric("📍 จำนวนสาขา", len(result_df))
+                        with col3:
+                            avg_branches = len(result_df) / result_df['Trip'].nunique()
+                            st.metric("📊 เฉลี่ยสาขา/ทริป", f"{avg_branches:.1f}")
+                        with col4:
+                            avg_util = summary['Cube_Use%'].mean()
+                            st.metric("📈 การใช้รถเฉลี่ย", f"{avg_util:.0f}%")
+                        
+                        st.markdown("---")
+                        
+                        # ตารางสรุปแต่ละทริป
+                        st.markdown("### 🚛 รายละเอียดแต่ละทริป")
+                        
+                        # แสดงสรุปทริปที่ไม่ผ่าน (ถ้ามี)
+                        failed_trips = summary[summary['Status'] != '✅ ผ่าน']
+                        if len(failed_trips) > 0:
+                            st.warning(f"⚠️ พบ **{len(failed_trips)}** ทริปที่ไม่ผ่านเกณฑ์")
+                        
+                        st.dataframe(
+                            summary.style.format({
+                                'Weight': '{:.2f}',
+                                'Cube': '{:.2f}',
+                                'Weight_Use%': '{:.1f}%',
+                                'Cube_Use%': '{:.1f}%',
+                                'Max_Util%': '{:.1f}%',
+                                'Total_Distance': '{:.1f} km'
+                            }).background_gradient(
+                                subset=['Max_Util%'],
+                                cmap='RdYlGn',
+                                vmin=0,
+                                vmax=100
+                            ),
+                            use_container_width=True,
+                            height=400
+                        )
+                        
+                        # ตารางรายละเอียดทั้งหมด (มีคอลัมน์รถและระยะทาง)
+                        with st.expander("📋 ดูรายละเอียดรายสาขา (เรียงตามน้ำหนัก)"):
+                            # จัดเรียงคอลัมน์ที่สำคัญ
+                            display_cols = ['Trip', 'Code', 'Name']
+                            if 'Province' in result_df.columns:
+                                display_cols.append('Province')
+                            if 'District' in result_df.columns:
+                                display_cols.append('District')
+                            if 'Subdistrict' in result_df.columns:
+                                display_cols.append('Subdistrict')
+                            if 'Region' in result_df.columns:
+                                display_cols.append('Region')
+                            display_cols.extend(['Max_Distance_in_Trip', 'Weight', 'Cube', 'Truck', 'VehicleCheck'])
                             
-                            st.markdown("---")
+                            # กรองคอลัมน์ที่มีอยู่จริง
+                            display_cols = [col for col in display_cols if col in result_df.columns]
+                            display_df = result_df[display_cols].copy()
                             
-                            # สถิติโดยรวม
-                            st.markdown("### 📊 สรุปผลการจัดทริป")
+                            # ตั้งชื่อคอลัมน์ภาษาไทย
+                            col_names = {'Trip': 'ทริป', 'Code': 'รหัส', 'Name': 'ชื่อสาขา', 'Province': 'จังหวัด', 
+                                       'District': 'อำเภอ', 'Subdistrict': 'ตำบล',
+                                       'Region': 'ภาค', 'Max_Distance_in_Trip': 'ระยะทาง Max(km)', 
+                                       'Weight': 'น้ำหนัก(kg)', 'Cube': 'คิว(m³)', 'Truck': 'รถ', 'VehicleCheck': 'ตรวจสอบรถ'}
+                            display_df.columns = [col_names.get(c, c) for c in display_cols]
                             
-                            col1, col2, col3, col4 = st.columns(4)
-                            with col1:
-                                st.metric("🚚 จำนวนทริป", len(summary))
-                            with col2:
-                                st.metric("📍 จำนวนสาขา", len(result_df))
-                            with col3:
-                                avg_branches = len(result_df) / result_df['Trip'].nunique()
-                                st.metric("📊 เฉลี่ยสาขา/ทริป", f"{avg_branches:.1f}")
-                            with col4:
-                                avg_util = summary['Cube_Use%'].mean()
-                                st.metric("📈 การใช้รถเฉลี่ย", f"{avg_util:.0f}%")
-                            
-                            st.markdown("---")
-                            
-                            # ตารางสรุปแต่ละทริป
-                            st.markdown("### 🚛 รายละเอียดแต่ละทริป")
-                            
-                            # แสดงสรุปทริปที่ไม่ผ่าน (ถ้ามี)
-                            failed_trips = summary[summary['Status'] != '✅ ผ่าน']
-                            if len(failed_trips) > 0:
-                                st.warning(f"⚠️ พบ **{len(failed_trips)}** ทริปที่ไม่ผ่านเกณฑ์")
-                            
+                            # จัดรูปแบบคอลัมน์ระยะทาง
                             st.dataframe(
-                                summary.style.format({
-                                    'Weight': '{:.2f}',
-                                    'Cube': '{:.2f}',
-                                    'Weight_Use%': '{:.1f}%',
-                                    'Cube_Use%': '{:.1f}%',
-                                    'Max_Util%': '{:.1f}%',
-                                    'Total_Distance': '{:.1f} km'
-                                }).background_gradient(
-                                    subset=['Max_Util%'],
-                                    cmap='RdYlGn',
-                                    vmin=0,
-                                    vmax=100
-                                ),
-                                use_container_width=True,
+                                display_df.style.format({
+                                    'ระยะทาง(km)': '{:.1f}',
+                                    'น้ำหนัก(kg)': '{:.2f}',
+                                    'คิว(m³)': '{:.2f}'
+                                }),
+                                use_container_width=True, 
                                 height=400
                             )
-                            
-                            # ตารางรายละเอียดทั้งหมด (มีคอลัมน์รถและระยะทาง)
-                            with st.expander("📋 ดูรายละเอียดรายสาขา (เรียงตามน้ำหนัก)"):
-                                # จัดเรียงคอลัมน์ที่สำคัญ
-                                display_cols = ['Trip', 'Code', 'Name']
-                                if 'Province' in result_df.columns:
-                                    display_cols.append('Province')
-                                if 'District' in result_df.columns:
-                                    display_cols.append('District')
-                                if 'Subdistrict' in result_df.columns:
-                                    display_cols.append('Subdistrict')
-                                if 'Region' in result_df.columns:
-                                    display_cols.append('Region')
-                                display_cols.extend(['Max_Distance_in_Trip', 'Weight', 'Cube', 'Truck', 'VehicleCheck'])
-                                
-                                # กรองคอลัมน์ที่มีอยู่จริง
-                                display_cols = [col for col in display_cols if col in result_df.columns]
-                                display_df = result_df[display_cols].copy()
-                                
-                                # ตั้งชื่อคอลัมน์ภาษาไทย
-                                col_names = {'Trip': 'ทริป', 'Code': 'รหัส', 'Name': 'ชื่อสาขา', 'Province': 'จังหวัด', 
-                                           'District': 'อำเภอ', 'Subdistrict': 'ตำบล',
-                                           'Region': 'ภาค', 'Max_Distance_in_Trip': 'ระยะทาง Max(km)', 
-                                           'Weight': 'น้ำหนัก(kg)', 'Cube': 'คิว(m³)', 'Truck': 'รถ', 'VehicleCheck': 'ตรวจสอบรถ'}
-                                display_df.columns = [col_names.get(c, c) for c in display_cols]
-                                
-                                # จัดรูปแบบคอลัมน์ระยะทาง
-                                st.dataframe(
-                                    display_df.style.format({
-                                        'ระยะทาง(km)': '{:.1f}',
-                                        'น้ำหนัก(kg)': '{:.2f}',
-                                        'คิว(m³)': '{:.2f}'
-                                    }),
-                                    use_container_width=True, 
-                                    height=400
-                                )
-                            
-                            # แสดงสาขาที่มีคำเตือน
-                            warning_branches = result_df[result_df['VehicleCheck'].str.contains('⚠️', na=False)]
-                            if len(warning_branches) > 0:
-                                with st.expander(f"⚠️ สาขาที่ใช้รถต่างจากปกติ ({len(warning_branches)} สาขา)"):
-                                    st.warning("สาขาเหล่านี้ปกติใช้รถประเภทอื่น แต่ถูกจัดให้ใช้รถประเภทที่ต่างออกไป")
-                                    display_cols_warn = ['Trip', 'Code', 'Name', 'Truck', 'VehicleCheck']
-                                    display_warn_df = warning_branches[display_cols_warn].copy()
-                                    display_warn_df.columns = ['ทริป', 'รหัส', 'ชื่อสาขา', 'รถที่จัด', 'ประวัติการใช้รถ']
-                                    st.dataframe(display_warn_df, use_container_width=True)
-                            
-                            st.markdown("---")
-                            
-                            # ดาวน์โหลด - เขียนทับชีต 2.Punthai ในไฟล์ต้นฉบับ พร้อมสลับสีเหลืองโทนส้ม-ขาว
-                            output = io.BytesIO()
+                        
+                        # แสดงสาขาที่มีคำเตือน
+                        warning_branches = result_df[result_df['VehicleCheck'].str.contains('⚠️', na=False)]
+                        if len(warning_branches) > 0:
+                            with st.expander(f"⚠️ สาขาที่ใช้รถต่างจากปกติ ({len(warning_branches)} สาขา)"):
+                                st.warning("สาขาเหล่านี้ปกติใช้รถประเภทอื่น แต่ถูกจัดให้ใช้รถประเภทที่ต่างออกไป")
+                                display_cols_warn = ['Trip', 'Code', 'Name', 'Truck', 'VehicleCheck']
+                                display_warn_df = warning_branches[display_cols_warn].copy()
+                                display_warn_df.columns = ['ทริป', 'รหัส', 'ชื่อสาขา', 'รถที่จัด', 'ประวัติการใช้รถ']
+                                st.dataframe(display_warn_df, use_container_width=True)
+                        
+                        st.markdown("---")
+                        
+                        # ดาวน์โหลด - เขียนทับชีต 2.Punthai ในไฟล์ต้นฉบับ พร้อมสลับสีเหลืองโทนส้ม-ขาว
+                        output = io.BytesIO()
                             
                             # สร้าง Trip_No map (JB ใช้ prefix 4WJ)
                             trip_no_map = {}
@@ -6613,112 +6637,83 @@ def main():
                                     trip_no_map[trip_num] = trip_no
                             
                             # โหลดไฟล์ต้นฉบับเพื่อ copy ทุกชีต
-                            from openpyxl import load_workbook
-                            from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
-                            from copy import copy
+                        from openpyxl import load_workbook
+                        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+                        from copy import copy
+                        
+                        try:
+                            # โหลด workbook ต้นฉบับ จาก session_state
+                            wb = load_workbook(io.BytesIO(st.session_state.original_file_content))
                             
-                            try:
-                                # โหลด workbook ต้นฉบับ
-                                wb = load_workbook(io.BytesIO(original_file_content))
-                                
-                                # หาชีตเป้าหมาย (2.Punthai)
-                                target_sheet = None
-                                for sheet_name in wb.sheetnames:
-                                    if 'punthai' in sheet_name.lower() or '2.' in sheet_name.lower():
-                                        target_sheet = sheet_name
+                            # หาชีตเป้าหมาย (2.Punthai)
+                            target_sheet = None
+                            for sheet_name in wb.sheetnames:
+                                if 'punthai' in sheet_name.lower() or '2.' in sheet_name.lower():
+                                    target_sheet = sheet_name
+                                    break
+                            
+                            if not target_sheet:
+                                target_sheet = '2.Punthai'
+                                if target_sheet not in wb.sheetnames:
+                                    wb.create_sheet(target_sheet)
+                            
+                            ws = wb[target_sheet]
+                            
+                            # ลบข้อมูลเก่า (เก็บแถวแรก header)
+                            # หา header row (แถวที่มี "รหัสสาขา" หรือ "Trip")
+                            header_row = 1
+                            for row_idx in range(1, min(5, ws.max_row + 1)):
+                                for col_idx in range(1, min(15, ws.max_column + 1)):
+                                    cell_val = str(ws.cell(row=row_idx, column=col_idx).value or '')
+                                    if 'รหัสสาขา' in cell_val or 'Trip' in cell_val.upper():
+                                        header_row = row_idx
                                         break
+                            
+                            # ลบข้อมูลตั้งแต่แถวหลัง header
+                            if ws.max_row > header_row:
+                                ws.delete_rows(header_row + 1, ws.max_row - header_row)
+                            
+                            # สีเหลืองโทนส้ม-ขาว
+                            yellow_orange = PatternFill(start_color='FFE699', end_color='FFE699', fill_type='solid')
+                            white_fill = PatternFill(start_color='FFFFFF', end_color='FFFFFF', fill_type='solid')
+                            thin_border = Border(
+                                left=Side(style='thin'),
+                                right=Side(style='thin'),
+                                top=Side(style='thin'),
+                                bottom=Side(style='thin')
+                            )
+                            
+                            # เขียนข้อมูลใหม่ (แถวที่ header_row + 1 เป็นต้นไป)
+                            current_trip = None
+                            use_yellow = True
+                            row_num = header_row + 1
+                            sep_num = 1  # เริ่มนับ Sep. จาก 1
+                            
+                            for trip_num in sorted(result_df['Trip'].unique()):
+                                if trip_num == 0:
+                                    continue
+                                trip_data = result_df[result_df['Trip'] == trip_num].copy()
+                                trip_no = trip_no_map.get(trip_num, '')
                                 
-                                if not target_sheet:
-                                    target_sheet = '2.Punthai'
-                                    if target_sheet not in wb.sheetnames:
-                                        wb.create_sheet(target_sheet)
+                                # เปลี่ยนสีเมื่อเปลี่ยนทริป
+                                if current_trip != trip_num:
+                                    current_trip = trip_num
+                                    use_yellow = not use_yellow
                                 
-                                ws = wb[target_sheet]
+                                fill = yellow_orange if use_yellow else white_fill
                                 
-                                # ลบข้อมูลเก่า (เก็บแถวแรก header)
-                                # หา header row (แถวที่มี "รหัสสาขา" หรือ "Trip")
-                                header_row = 1
-                                for row_idx in range(1, min(5, ws.max_row + 1)):
-                                    for col_idx in range(1, min(15, ws.max_column + 1)):
-                                        cell_val = str(ws.cell(row=row_idx, column=col_idx).value or '')
-                                        if 'รหัสสาขา' in cell_val or 'Trip' in cell_val.upper():
-                                            header_row = row_idx
-                                            break
-                                
-                                # ลบข้อมูลตั้งแต่แถวหลัง header
-                                if ws.max_row > header_row:
-                                    ws.delete_rows(header_row + 1, ws.max_row - header_row)
-                                
-                                # สีเหลืองโทนส้ม-ขาว
-                                yellow_orange = PatternFill(start_color='FFE699', end_color='FFE699', fill_type='solid')
-                                white_fill = PatternFill(start_color='FFFFFF', end_color='FFFFFF', fill_type='solid')
-                                thin_border = Border(
-                                    left=Side(style='thin'),
-                                    right=Side(style='thin'),
-                                    top=Side(style='thin'),
-                                    bottom=Side(style='thin')
-                                )
-                                
-                                # เขียนข้อมูลใหม่ (แถวที่ header_row + 1 เป็นต้นไป)
-                                current_trip = None
-                                use_yellow = True
-                                row_num = header_row + 1
-                                sep_num = 1  # เริ่มนับ Sep. จาก 1
-                                
-                                for trip_num in sorted(result_df['Trip'].unique()):
-                                    if trip_num == 0:
-                                        continue
-                                    trip_data = result_df[result_df['Trip'] == trip_num].copy()
-                                    trip_no = trip_no_map.get(trip_num, '')
-                                    
-                                    # เปลี่ยนสีเมื่อเปลี่ยนทริป
-                                    if current_trip != trip_num:
-                                        current_trip = trip_num
-                                        use_yellow = not use_yellow
-                                    
-                                    fill = yellow_orange if use_yellow else white_fill
-                                    
-                                    for _, row in trip_data.iterrows():
-                                        # เขียนข้อมูลตามโครงสร้างไฟล์ต้นฉบับ
-                                        # คอลัมน์: A=Sep, B=BU, C=รหัสสาขา, D=รหัส WMS, E=สาขา, F=Cube, G=Weight, H=Original QTY, I=Trip, J=Trip no
-                                        data = [
-                                            sep_num,  # A: Sep (ลำดับแถว)
-                                            row.get('BU', 211),  # B: BU (จากต้นฉบับ)
-                                            row.get('Code', ''),  # C: รหัสสาขา
-                                            row.get('Code', ''),  # D: รหัส WMS
-                                            row.get('Name', ''),  # E: สาขา
-                                            round(row.get('Cube', 0), 2) if pd.notna(row.get('Cube')) else 0,  # F: Cube
-                                            round(row.get('Weight', 0), 2) if pd.notna(row.get('Weight')) else 0,  # G: Weight
-                                            row.get('OriginalQty', 0) if pd.notna(row.get('OriginalQty')) else 0,  # H: Original QTY (จากต้นฉบับ)
-                                            int(trip_num),  # I: Trip
-                                            trip_no,  # J: Trip no
-                                            '',  # K: วันที่โหลด
-                                            '',  # L: เวลาโหลด
-                                            '',  # M: ประตู
-                                            '',  # N: WAVE
-                                            '',  # O: remark
-                                            '',  # P: lat (เว้นว่าง)
-                                            '',  # Q: lon (เว้นว่าง)
-                                        ]
-                                        
-                                        for col_idx, value in enumerate(data, 1):
-                                            cell = ws.cell(row=row_num, column=col_idx, value=value)
-                                            cell.fill = fill
-                                            cell.border = thin_border
-                                        
-                                        row_num += 1
-                                        sep_num += 1  # เพิ่มลำดับ Sep
-                                    
-                                    # 🚛 เพิ่ม DC011 ปิดท้ายทุกทริป
-                                    dc_data = [
-                                        sep_num,  # A: Sep
-                                        'PROJECT',  # B: BU
-                                        'DC011',  # C: รหัสสาขา
-                                        'DC011',  # D: รหัส WMS
-                                        'บ.พีทีจี เอ็นเนอยี จำกัด (มหาชน) (DCวังน้อย)',  # E: สาขา
-                                        0,  # F: Cube
-                                        0,  # G: Weight
-                                        0,  # H: Original QTY
+                                for _, row in trip_data.iterrows():
+                                    # เขียนข้อมูลตามโครงสร้างไฟล์ต้นฉบับ
+                                    # คอลัมน์: A=Sep, B=BU, C=รหัสสาขา, D=รหัส WMS, E=สาขา, F=Cube, G=Weight, H=Original QTY, I=Trip, J=Trip no
+                                    data = [
+                                        sep_num,  # A: Sep (ลำดับแถว)
+                                        row.get('BU', 211),  # B: BU (จากต้นฉบับ)
+                                        row.get('Code', ''),  # C: รหัสสาขา
+                                        row.get('Code', ''),  # D: รหัส WMS
+                                        row.get('Name', ''),  # E: สาขา
+                                        round(row.get('Cube', 0), 2) if pd.notna(row.get('Cube')) else 0,  # F: Cube
+                                        round(row.get('Weight', 0), 2) if pd.notna(row.get('Weight')) else 0,  # G: Weight
+                                        row.get('OriginalQty', 0) if pd.notna(row.get('OriginalQty')) else 0,  # H: Original QTY (จากต้นฉบับ)
                                         int(trip_num),  # I: Trip
                                         trip_no,  # J: Trip no
                                         '',  # K: วันที่โหลด
@@ -6730,80 +6725,109 @@ def main():
                                         '',  # Q: lon (เว้นว่าง)
                                     ]
                                     
-                                    for col_idx, value in enumerate(dc_data, 1):
+                                    for col_idx, value in enumerate(data, 1):
                                         cell = ws.cell(row=row_num, column=col_idx, value=value)
                                         cell.fill = fill
                                         cell.border = thin_border
                                     
                                     row_num += 1
-                                    sep_num += 1
+                                    sep_num += 1  # เพิ่มลำดับ Sep
                                 
-                                # บันทึกลง BytesIO
-                                wb.save(output)
-                                output.seek(0)
+                                # 🚛 เพิ่ม DC011 ปิดท้ายทุกทริป
+                                dc_data = [
+                                    sep_num,  # A: Sep
+                                    'PROJECT',  # B: BU
+                                    'DC011',  # C: รหัสสาขา
+                                    'DC011',  # D: รหัส WMS
+                                    'บ.พีทีจี เอ็นเนอยี จำกัด (มหาชน) (DCวังน้อย)',  # E: สาขา
+                                    0,  # F: Cube
+                                    0,  # G: Weight
+                                    0,  # H: Original QTY
+                                    int(trip_num),  # I: Trip
+                                    trip_no,  # J: Trip no
+                                    '',  # K: วันที่โหลด
+                                    '',  # L: เวลาโหลด
+                                '',  # M: ประตู
+                                    '',  # N: WAVE
+                                    '',  # O: remark
+                                    '',  # P: lat (เว้นว่าง)
+                                    '',  # Q: lon (เว้นว่าง)
+                                ]
                                 
-                            except Exception as e:
-                                st.warning(f"⚠️ ไม่สามารถเขียนทับไฟล์ต้นฉบับได้: {e}")
-                                # Fallback: สร้างไฟล์ใหม่
-                                from openpyxl import Workbook
-                                wb = Workbook()
-                                ws = wb.active
-                                ws.title = '2.Punthai'
+                                for col_idx, value in enumerate(dc_data, 1):
+                                    cell = ws.cell(row=row_num, column=col_idx, value=value)
+                                    cell.fill = fill
+                                    cell.border = thin_border
                                 
-                                # เขียน header
-                                headers = ['Sep.', 'BU', 'รหัสสาขา', 'รหัส WMS', 'สาขา', 'Total Cube', 'Total Wgt', 'Original QTY', 'Trip', 'Trip no']
-                                for col_num, header in enumerate(headers, 1):
-                                    ws.cell(row=1, column=col_num, value=header)
+                                row_num += 1
+                                sep_num += 1
+                            
+                            # บันทึกลง BytesIO
+                            wb.save(output)
+                            output.seek(0)
+                            
+                        except Exception as e:
+                            st.warning(f"⚠️ ไม่สามารถเขียนทับไฟล์ต้นฉบับได้: {e}")
+                            # Fallback: สร้างไฟล์ใหม่
+                            from openpyxl import Workbook
+                            wb = Workbook()
+                            ws = wb.active
+                            ws.title = '2.Punthai'
+                            
+                            # เขียน header
+                            headers = ['Sep.', 'BU', 'รหัสสาขา', 'รหัส WMS', 'สาขา', 'Total Cube', 'Total Wgt', 'Original QTY', 'Trip', 'Trip no']
+                            for col_num, header in enumerate(headers, 1):
+                                ws.cell(row=1, column=col_num, value=header)
+                            
+                            row_num = 2
+                            sep_num = 1  # เริ่มนับ Sep. จาก 1
+                            current_trip = None
+                            use_yellow = True
+                            yellow_orange = PatternFill(start_color='FFE699', end_color='FFE699', fill_type='solid')
+                            white_fill = PatternFill(start_color='FFFFFF', end_color='FFFFFF', fill_type='solid')
+                            
+                            for trip_num in sorted(result_df['Trip'].unique()):
+                                if trip_num == 0:
+                                    continue
+                                trip_data = result_df[result_df['Trip'] == trip_num]
+                                trip_no = trip_no_map.get(trip_num, '')
                                 
-                                row_num = 2
-                                sep_num = 1  # เริ่มนับ Sep. จาก 1
-                                current_trip = None
-                                use_yellow = True
-                                yellow_orange = PatternFill(start_color='FFE699', end_color='FFE699', fill_type='solid')
-                                white_fill = PatternFill(start_color='FFFFFF', end_color='FFFFFF', fill_type='solid')
+                                if current_trip != trip_num:
+                                    current_trip = trip_num
+                                    use_yellow = not use_yellow
+                                fill = yellow_orange if use_yellow else white_fill
                                 
-                                for trip_num in sorted(result_df['Trip'].unique()):
-                                    if trip_num == 0:
-                                        continue
-                                    trip_data = result_df[result_df['Trip'] == trip_num]
-                                    trip_no = trip_no_map.get(trip_num, '')
-                                    
-                                    if current_trip != trip_num:
-                                        current_trip = trip_num
-                                        use_yellow = not use_yellow
-                                    fill = yellow_orange if use_yellow else white_fill
-                                    
-                                    for _, row in trip_data.iterrows():
-                                        original_qty = row.get('OriginalQty', 0) if pd.notna(row.get('OriginalQty')) else 0
-                                        data = [sep_num, row.get('BU', 211), row.get('Code', ''), row.get('Code', ''), row.get('Name', ''),
-                                                round(row.get('Cube', 0), 2), round(row.get('Weight', 0), 2), original_qty, int(trip_num), trip_no]
-                                        for col_idx, value in enumerate(data, 1):
-                                            cell = ws.cell(row=row_num, column=col_idx, value=value)
-                                            cell.fill = fill
-                                        row_num += 1
-                                        sep_num += 1
-                                    
-                                    # 🚛 เพิ่ม DC011 ปิดท้ายทุกทริป
-                                    dc_data = [sep_num, 'PROJECT', 'DC011', 'DC011', 'บ.พีทีจี เอ็นเนอยี จำกัด (มหาชน) (DCวังน้อย)',
-                                               0, 0, 0, int(trip_num), trip_no]
-                                    for col_idx, value in enumerate(dc_data, 1):
+                                for _, row in trip_data.iterrows():
+                                    original_qty = row.get('OriginalQty', 0) if pd.notna(row.get('OriginalQty')) else 0
+                                    data = [sep_num, row.get('BU', 211), row.get('Code', ''), row.get('Code', ''), row.get('Name', ''),
+                                            round(row.get('Cube', 0), 2), round(row.get('Weight', 0), 2), original_qty, int(trip_num), trip_no]
+                                    for col_idx, value in enumerate(data, 1):
                                         cell = ws.cell(row=row_num, column=col_idx, value=value)
                                         cell.fill = fill
                                     row_num += 1
                                     sep_num += 1
                                 
-                                wb.save(output)
-                                output.seek(0)
+                                # 🚛 เพิ่ม DC011 ปิดท้ายทุกทริป
+                                dc_data = [sep_num, 'PROJECT', 'DC011', 'DC011', 'บ.พีทีจี เอ็นเนอยี จำกัด (มหาชน) (DCวังน้อย)',
+                                           0, 0, 0, int(trip_num), trip_no]
+                                for col_idx, value in enumerate(dc_data, 1):
+                                    cell = ws.cell(row=row_num, column=col_idx, value=value)
+                                    cell.fill = fill
+                                row_num += 1
+                                sep_num += 1
                             
-                            col1, col2, col3 = st.columns([1, 2, 1])
-                            with col2:
-                                st.download_button(
-                                    label="📥 ดาวน์โหลดผลลัพธ์ (Excel)",
-                                    data=output.getvalue(),
-                                    file_name=f"ผลจัดทริป_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    use_container_width=True
-                                )
+                            wb.save(output)
+                            output.seek(0)
+                        
+                        col1, col2, col3 = st.columns([1, 2, 1])
+                        with col2:
+                            st.download_button(
+                                label="📥 ดาวน์โหลดผลลัพธ์ (Excel)",
+                                data=output.getvalue(),
+                                file_name=f"ผลจัดทริป_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True
+                            )
                 
                 # ==========================================
                 # แท็บ 2: จัดกลุ่มสาขาตามภาค (ไม่สนน้ำหนัก)
