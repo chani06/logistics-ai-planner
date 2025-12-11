@@ -2465,14 +2465,25 @@ def predict_trips(test_df, model_data):
                 # ระยะจากสาขาสุดท้าย (สาขาติดกัน)
                 dist_from_last = haversine_distance(last_lat, last_lon, code_lat, code_lon)
                 
-                # 🔒 กฎใหม่: ระยะจากสาขาสุดท้าย (สาขาติดกัน) ต้องไม่เกิน MAX_DISTANCE_IN_TRIP
-                # ไม่ใช่ระยะจากทุกสาขา แต่เป็นระยะจากสาขาก่อนหน้าเท่านั้น
-                if dist_from_last > MAX_DISTANCE_IN_TRIP:
-                    continue
-                
                 # 🆕 เช็คว่าเป็นตำบล/อำเภอเดียวกันหรือไม่
                 same_subdistrict = (code_subdistrict and code_subdistrict == last_subdistrict)
                 same_district = (code_district and code_district == last_district)
+                
+                # 🔒 กฎใหม่: 
+                # - ตำบลเดียวกัน → ไม่จำกัดระยะ (บังคับรวม)
+                # - อำเภอเดียวกัน → ยืดหยุ่นระยะเป็น 80km
+                # - อื่นๆ → ระยะจากสาขาก่อนหน้าต้องไม่เกิน MAX_DISTANCE_IN_TRIP (50km)
+                if same_subdistrict:
+                    # ตำบลเดียวกัน → ไม่จำกัดระยะ
+                    pass
+                elif same_district:
+                    # อำเภอเดียวกัน → ยืดหยุ่นเป็น 80km
+                    if dist_from_last > 80:
+                        continue
+                else:
+                    # อื่นๆ → ไม่เกิน MAX_DISTANCE_IN_TRIP
+                    if dist_from_last > MAX_DISTANCE_IN_TRIP:
+                        continue
                 
                 # 🔥 เลือกสาขา: 1) ตำบลเดียวกัน > 2) อำเภอเดียวกัน > 3) ใกล้ที่สุด
                 if best_code is None:
@@ -2764,6 +2775,99 @@ def predict_trips(test_df, model_data):
     
     # เรียงตามจังหวัดหลัก → ระยะทาง → จำนวนสาขา → utilization
     all_trips.sort(key=lambda x: (x['primary_province'], x['distance_from_dc'], x['count'], x['util']))
+    
+    # ===============================================
+    # 🎯 Phase 0.3: บังคับรวมสาขาตำบลเดียวกันที่ถูกแยกทริป
+    # ถ้ามีสาขาตำบลเดียวกันอยู่คนละทริป → ย้ายไปรวมกัน
+    # ===============================================
+    def get_subdistrict_for_trip(trip_num):
+        """หาตำบลหลักของทริป"""
+        trip_data = test_df[test_df['Trip'] == trip_num]
+        subdistricts = {}
+        for code in trip_data['Code'].values:
+            sd = subdistrict_cache.get(code, '')
+            if sd:
+                subdistricts[sd] = subdistricts.get(sd, 0) + 1
+        if subdistricts:
+            return max(subdistricts.items(), key=lambda x: x[1])[0]
+        return ''
+    
+    # สร้าง mapping: ตำบล → ทริปที่มีสาขาในตำบลนี้
+    subdistrict_to_trips = {}
+    for trip in all_trips:
+        if trip is None:
+            continue
+        for code in trip['codes']:
+            sd = subdistrict_cache.get(code, '')
+            prov = province_cache.get(code, '')
+            if sd and prov:
+                key = (sd, prov)  # ตำบล + จังหวัด
+                if key not in subdistrict_to_trips:
+                    subdistrict_to_trips[key] = []
+                subdistrict_to_trips[key].append(trip)
+    
+    # หาตำบลที่มีสาขาอยู่หลายทริป
+    merge_same_subdistrict_count = 0
+    for (sd, prov), trips in subdistrict_to_trips.items():
+        if len(trips) <= 1:
+            continue
+        
+        # หาทริปหลัก (มีสาขาในตำบลนี้มากที่สุด)
+        main_trip = None
+        max_count = 0
+        for trip in trips:
+            if trip is None:
+                continue
+            count = sum(1 for c in trip['codes'] if subdistrict_cache.get(c, '') == sd)
+            if count > max_count:
+                max_count = count
+                main_trip = trip
+        
+        if main_trip is None:
+            continue
+        
+        # ย้ายสาขาตำบลนี้จากทริปอื่นมาทริปหลัก
+        for trip in trips:
+            if trip is None or trip == main_trip:
+                continue
+            
+            # หาสาขาในตำบลนี้
+            codes_to_move = [c for c in trip['codes'] if subdistrict_cache.get(c, '') == sd]
+            
+            if not codes_to_move:
+                continue
+            
+            # เช็คว่ารวมแล้วไม่เกิน capacity
+            codes_weight = sum(test_df[test_df['Code'] == c]['Weight'].sum() for c in codes_to_move)
+            codes_cube = sum(test_df[test_df['Code'] == c]['Cube'].sum() for c in codes_to_move)
+            
+            new_weight = main_trip['weight'] + codes_weight
+            new_cube = main_trip['cube'] + codes_cube
+            
+            # ใช้ 6W capacity เป็น limit (เพราะจะเลือกรถทีหลัง)
+            if new_cube > LIMITS['6W']['max_c'] * BUFFER:
+                continue
+            if new_weight > LIMITS['6W']['max_w'] * BUFFER:
+                continue
+            
+            # ย้ายสาขา
+            for code in codes_to_move:
+                test_df.loc[test_df['Code'] == code, 'Trip'] = main_trip['trip']
+                trip['codes'].discard(code)  # ลบจากทริปเดิม
+                main_trip['codes'].add(code)  # เพิ่มเข้าทริปหลัก
+            
+            # อัปเดต weight/cube
+            main_trip['weight'] = new_weight
+            main_trip['cube'] = new_cube
+            main_trip['count'] = len(main_trip['codes'])
+            trip['weight'] -= codes_weight
+            trip['cube'] -= codes_cube
+            trip['count'] = len(trip['codes'])
+            
+            merge_same_subdistrict_count += 1
+    
+    # ลบทริปที่ไม่มีสาขาแล้ว
+    all_trips = [t for t in all_trips if t is not None and len(t['codes']) > 0]
     
     # ===============================================
     # 🎯 Phase 0.5: รวมทริปภาคเหนือ/ใต้ ที่ยังไม่เต็ม 6W
@@ -6569,8 +6673,8 @@ def main():
                                             '',  # M: ประตู
                                             '',  # N: WAVE
                                             '',  # O: remark
-                                            row.get('Latitude', 0) if pd.notna(row.get('Latitude')) else 0,  # P: lat
-                                            row.get('Longitude', 0) if pd.notna(row.get('Longitude')) else 0,  # Q: lon
+                                            '',  # P: lat (เว้นว่าง)
+                                            '',  # Q: lon (เว้นว่าง)
                                         ]
                                         
                                         for col_idx, value in enumerate(data, 1):
@@ -6598,8 +6702,8 @@ def main():
                                         '',  # M: ประตู
                                         '',  # N: WAVE
                                         '',  # O: remark
-                                        14.2167,  # P: lat (DC วังน้อย)
-                                        100.6167,  # Q: lon (DC วังน้อย)
+                                        '',  # P: lat (เว้นว่าง)
+                                        '',  # Q: lon (เว้นว่าง)
                                     ]
                                     
                                     for col_idx, value in enumerate(dc_data, 1):
