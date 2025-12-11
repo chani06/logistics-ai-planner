@@ -2436,10 +2436,34 @@ def predict_trips(test_df, model_data):
         max_cube = LIMITS['6W']['max_c'] * BUFFER  # 20 cube
         max_weight = LIMITS['6W']['max_w'] * BUFFER  # 6000 kg
         
-        # 🔄 หาสาขาถัดไปที่ใกล้สุด (ระยะจากสาขาสุดท้าย ≤ 50km)
-        # 🆕 ให้ความสำคัญกับตำบลเดียวกันก่อน
         seed_subdistrict = subdistrict_cache.get(seed_code, '')
         seed_district = district_cache.get(seed_code, '')
+        
+        # 🔥🔥🔥 ขั้นตอนที่ 0: หาสาขาตำบลเดียวกันทั้งหมด แล้วเพิ่มเข้าทริปก่อน!
+        if seed_subdistrict:
+            # หาสาขาทั้งหมดที่อยู่ตำบลเดียวกัน
+            same_sd_codes = [c for c in all_codes if subdistrict_cache.get(c, '') == seed_subdistrict]
+            # เรียงตามระยะจาก seed
+            if same_sd_codes and seed_lat and seed_lon:
+                same_sd_codes.sort(key=lambda c: haversine_distance(
+                    seed_lat, seed_lon, 
+                    *coord_cache.get(c, (seed_lat, seed_lon))
+                ))
+            
+            # เพิ่มสาขาตำบลเดียวกันเข้าทริป (ถ้า capacity พอ)
+            for same_code in same_sd_codes:
+                next_weight = test_df[test_df['Code'] == same_code]['Weight'].sum()
+                next_cube = test_df[test_df['Code'] == same_code]['Cube'].sum()
+                
+                if current_cube + next_cube <= max_cube and current_weight + next_weight <= max_weight:
+                    all_codes.remove(same_code)
+                    current_trip.append(same_code)
+                    assigned_trips[same_code] = trip_counter
+                    current_weight += next_weight
+                    current_cube += next_cube
+        
+        # 🔄 หาสาขาถัดไปที่ใกล้สุด (ระยะจากสาขาสุดท้าย ≤ MAX_DISTANCE_IN_TRIP)
+        # 🆕 ให้ความสำคัญกับตำบลเดียวกันก่อน
         
         while all_codes:
             best_code = None
