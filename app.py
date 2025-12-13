@@ -1632,25 +1632,31 @@ def predict_trips(test_df, model_data):
     
     # 🔒 Final enforcement of vehicle constraints (ต้องนิยามก่อนเรียกใช้)
     def enforce_vehicle_constraints(test_df_input):
-        """บังคับข้อจำกัดรถขั้นสุดท้าย - ไม่อนุญาต 6W หากสาขาจำกัด 4W/JB หรืออยู่ในปริมณฑล"""
+        """บังคับข้อจำกัดรถขั้นสุดท้าย - ไม่อนุญาต 6W หากสาขาจำกัด 4W/JB หรืออยู่ในกรุงเทพ/ปริมณฑล"""
         vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
         
         for trip_num in test_df_input['Trip'].unique():
+            if pd.isna(trip_num):
+                continue
             trip_data = test_df_input[test_df_input['Trip'] == trip_num]
             trip_codes = trip_data['Code'].unique()
             
-            # 🔒 เช็คจังหวัด - ห้าม 6W ในปริมณฑล!
-            provinces = set()
+            # 🔒 เช็คจังหวัด - ห้าม 6W ถ้ามีแม้แค่สาขาเดียวอยู่ในกรุงเทพ/ปริมณฑล!
+            has_any_nearby = False  # เปลี่ยนจาก all_nearby เป็น has_any_nearby
             for code in trip_codes:
-                prov = get_province(code) if 'get_province' in dir() else None
+                prov = None
+                # หาจังหวัดจาก test_df_input
+                code_data = test_df_input[test_df_input['Code'] == code]
+                if 'Province' in code_data.columns and len(code_data) > 0:
+                    prov = code_data['Province'].iloc[0]
+                # หาจาก MASTER_DATA ถ้าไม่มี
                 if not prov and not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
                     master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
                     if len(master_row) > 0:
                         prov = master_row.iloc[0].get('จังหวัด', '')
-                if prov and prov != 'UNKNOWN':
-                    provinces.add(prov)
-            
-            all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
+                if prov and prov != 'UNKNOWN' and get_region_type(str(prov)) == 'nearby':
+                    has_any_nearby = True
+                    break  # พบแม้แค่สาขาเดียวก็พอ
             
             # ตรวจสอบข้อจำกัดที่เข้มงวดที่สุดในทริป
             max_vehicles = []
@@ -1658,19 +1664,20 @@ def predict_trips(test_df, model_data):
                 max_vehicle = get_max_vehicle_for_branch(code)
                 max_vehicles.append(max_vehicle)
             
-            min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles)
+            min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles) if max_vehicles else 3
             
-            # 🔒 ปริมณฑล = บังคับ JB หรือเล็กกว่า (ห้าม 6W)
-            if all_nearby and min_max_size == 3:
+            # 🔒 กรุงเทพ/ปริมณฑล = บังคับ JB หรือเล็กกว่า (ห้าม 6W เด็ดขาด!)
+            if has_any_nearby and min_max_size == 3:
                 min_max_size = 2  # บังคับลงมาเป็น JB
             
-            # หากมีสาขาใดจำกัด 4W/JB หรืออยู่ในปริมณฑล → ห้าม 6W
+            # หากมีสาขาใดจำกัด 4W/JB หรืออยู่ในกรุงเทพ/ปริมณฑล → ห้าม 6W
             if min_max_size < 3:
                 # บังคับเปลี่ยนเป็น JB หรือ 4W
                 allowed_vehicle = 'JB' if min_max_size >= 2 else '4W'
                 current_truck = test_df_input.loc[test_df_input['Trip'] == trip_num, 'Truck'].iloc[0] if len(test_df_input[test_df_input['Trip'] == trip_num]) > 0 else ''
                 if '6W' in str(current_truck):
-                    test_df_input.loc[test_df_input['Trip'] == trip_num, 'Truck'] = f'{allowed_vehicle} 🔒 {"ปริมณฑล" if all_nearby else "บังคับสาขา"}'
+                    reason = 'กทม/ปริมณฑล' if has_any_nearby else 'บังคับสาขา'
+                    test_df_input.loc[test_df_input['Trip'] == trip_num, 'Truck'] = f'{allowed_vehicle} 🔒 {reason}'
         
         return test_df_input
     
@@ -1705,11 +1712,23 @@ def predict_trips(test_df, model_data):
             # ตรวจสอบข้อจำกัดของสาขาในทริป
             trip_codes = trip_data['Code'].unique()
             max_vehicles = []
+            has_any_nearby_branch = False  # เช็คกรุงเทพ/ปริมณฑล
             for c in trip_codes:
                 max_vehicles.append(get_max_vehicle_for_branch(c))
+                # เช็คว่าสาขาอยู่ในกรุงเทพ/ปริมณฑลไหม
+                code_data = trip_data[trip_data['Code'] == c]
+                if 'Province' in code_data.columns and len(code_data) > 0:
+                    prov = code_data['Province'].iloc[0]
+                    if prov and pd.notna(prov) and get_region_type(str(prov)) == 'nearby':
+                        has_any_nearby_branch = True
             
             vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
-            min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles)
+            min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles) if max_vehicles else 3
+            
+            # 🔒 กรุงเทพ/ปริมณฑล → บังคับ JB หรือ 4W (ห้าม 6W เด็ดขาด!)
+            if has_any_nearby_branch and min_max_size == 3:
+                min_max_size = 2  # บังคับลงมาเป็น JB
+            
             max_allowed_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(min_max_size, '6W')
             
 
@@ -1726,7 +1745,8 @@ def predict_trips(test_df, model_data):
                 # If suggested vehicle is not allowed, override to strictest allowed
                 if suggested not in allowed:
                     suggested = allowed[0]
-                    source = f"📋 ไฟล์ → {suggested} (🔒 จำกัดสาขา)"
+                    reason = 'กทม/ปริมณฑล' if has_any_nearby_branch else 'จำกัดสาขา'
+                    source = f"📋 ไฟล์ → {suggested} (🔒 {reason})"
                 else:
                     source = "📋 ไฟล์"
             else:
@@ -1734,7 +1754,8 @@ def predict_trips(test_df, model_data):
                 ai_suggested = suggest_truck(total_w, total_c, max_allowed_vehicle, trip_codes)
                 if ai_suggested not in allowed:
                     suggested = allowed[0]
-                    source = f"🤖 AI → {suggested} (🔒 จำกัดสาขา)"
+                    reason = 'กทม/ปริมณฑล' if has_any_nearby_branch else 'จำกัดสาขา'
+                    source = f"🤖 AI → {suggested} (🔒 {reason})"
                 else:
                     suggested = ai_suggested
                     source = "🤖 AI"
@@ -1746,7 +1767,8 @@ def predict_trips(test_df, model_data):
                     # fallback to JB if possible, else 4W
                     if 'JB' in allowed:
                         suggested = 'JB'
-                        source = source + " (🔒 จำกัดสาขา)"
+                        reason = 'กทม/ปริมณฑล' if has_any_nearby_branch else 'จำกัดสาขา'
+                        source = source + f" (🔒 {reason})"
                     else:
                         suggested = '4W'
                         source = source + " (🔒 จำกัดสาขา)"
@@ -1831,6 +1853,85 @@ def predict_trips(test_df, model_data):
         test_df_result['Truck'] = test_df_result['Trip'].map(trip_truck_display)
         # 🔒 Final enforcement: Never allow 6W if any branch restricts to 4W/JB
         test_df_result = enforce_vehicle_constraints(test_df_result)
+        
+        # 🔍 Validate trip grouping - เพิ่มคอลัมน์ TripValidation
+        def validate_trip_grouping(row):
+            """ตรวจสอบว่าสาขาในทริปนี้ควรอยู่ด้วยกันหรือไม่"""
+            trip_num = row['Trip']
+            code = row['Code']
+            if pd.isna(trip_num):
+                return '❓ ไม่มีทริป'
+            
+            trip_data = test_df_result[test_df_result['Trip'] == trip_num]
+            trip_codes = [c for c in trip_data['Code'].unique() if c != code]
+            
+            if len(trip_codes) == 0:
+                return '✅ สาขาเดี่ยว'
+            
+            issues = []
+            valid_reasons = []
+            
+            # เช็ค 1: เคยไปด้วยกันในประวัติ?
+            paired_with_history = False
+            for other_code in trip_codes:
+                pair = tuple(sorted([code, other_code]))
+                if pair in trip_pairs:
+                    paired_with_history = True
+                    break
+            
+            if paired_with_history:
+                valid_reasons.append('📜 ประวัติ')
+            
+            # เช็ค 2: Reference เดียวกัน?
+            same_reference = False
+            code_ref = LOCATION_CODE_TO_REF.get(code)
+            if code_ref:
+                for other_code in trip_codes:
+                    other_ref = LOCATION_CODE_TO_REF.get(other_code)
+                    if other_ref and code_ref == other_ref:
+                        same_reference = True
+                        break
+            
+            if same_reference:
+                valid_reasons.append('🏠 Reference')
+            
+            # เช็ค 3: ตำบลเดียวกัน?
+            same_subdistrict = False
+            code_data = test_df_result[test_df_result['Code'] == code]
+            my_subdistrict = code_data['Subdistrict'].iloc[0] if 'Subdistrict' in code_data.columns and len(code_data) > 0 else None
+            if my_subdistrict and pd.notna(my_subdistrict):
+                for other_code in trip_codes:
+                    other_data = test_df_result[test_df_result['Code'] == other_code]
+                    other_subdist = other_data['Subdistrict'].iloc[0] if 'Subdistrict' in other_data.columns and len(other_data) > 0 else None
+                    if other_subdist and my_subdistrict == other_subdist:
+                        same_subdistrict = True
+                        break
+            
+            if same_subdistrict:
+                valid_reasons.append('📍 ตำบล')
+            
+            # เช็ค 4: ระยะทางใกล้กันพอ?
+            close_distance = False
+            code_coords = get_branch_coordinates(code)
+            if code_coords:
+                for other_code in trip_codes:
+                    other_coords = get_branch_coordinates(other_code)
+                    if other_coords:
+                        dist = haversine_distance(code_coords[0], code_coords[1], other_coords[0], other_coords[1])
+                        if dist <= MAX_DISTANCE_IN_TRIP:
+                            close_distance = True
+                            break
+            
+            if close_distance:
+                valid_reasons.append('📏 ใกล้')
+            
+            # สรุปผล
+            if valid_reasons:
+                return '✅ ' + ', '.join(valid_reasons)
+            else:
+                return '⚠️ ไม่พบเหตุผลจับคู่'
+        
+        test_df_result['TripValidation'] = test_df_result.apply(validate_trip_grouping, axis=1)
         
         # Mark VehicleCheck if strict constraint enforced
         def vehicle_check_str(row):
