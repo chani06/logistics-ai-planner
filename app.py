@@ -1630,6 +1630,50 @@ def predict_trips(test_df, model_data):
                 'longitude': 0.0
             }
     
+    # 🔒 Final enforcement of vehicle constraints (ต้องนิยามก่อนเรียกใช้)
+    def enforce_vehicle_constraints(test_df_input):
+        """บังคับข้อจำกัดรถขั้นสุดท้าย - ไม่อนุญาต 6W หากสาขาจำกัด 4W/JB หรืออยู่ในปริมณฑล"""
+        vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
+        
+        for trip_num in test_df_input['Trip'].unique():
+            trip_data = test_df_input[test_df_input['Trip'] == trip_num]
+            trip_codes = trip_data['Code'].unique()
+            
+            # 🔒 เช็คจังหวัด - ห้าม 6W ในปริมณฑล!
+            provinces = set()
+            for code in trip_codes:
+                prov = get_province(code) if 'get_province' in dir() else None
+                if not prov and not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                    master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                    if len(master_row) > 0:
+                        prov = master_row.iloc[0].get('จังหวัด', '')
+                if prov and prov != 'UNKNOWN':
+                    provinces.add(prov)
+            
+            all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
+            
+            # ตรวจสอบข้อจำกัดที่เข้มงวดที่สุดในทริป
+            max_vehicles = []
+            for code in trip_codes:
+                max_vehicle = get_max_vehicle_for_branch(code)
+                max_vehicles.append(max_vehicle)
+            
+            min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles)
+            
+            # 🔒 ปริมณฑล = บังคับ JB หรือเล็กกว่า (ห้าม 6W)
+            if all_nearby and min_max_size == 3:
+                min_max_size = 2  # บังคับลงมาเป็น JB
+            
+            # หากมีสาขาใดจำกัด 4W/JB หรืออยู่ในปริมณฑล → ห้าม 6W
+            if min_max_size < 3:
+                # บังคับเปลี่ยนเป็น JB หรือ 4W
+                allowed_vehicle = 'JB' if min_max_size >= 2 else '4W'
+                current_truck = test_df_input.loc[test_df_input['Trip'] == trip_num, 'Truck'].iloc[0] if len(test_df_input[test_df_input['Trip'] == trip_num]) > 0 else ''
+                if '6W' in str(current_truck):
+                    test_df_input.loc[test_df_input['Trip'] == trip_num, 'Truck'] = f'{allowed_vehicle} 🔒 {"ปริมณฑล" if all_nearby else "บังคับสาขา"}'
+        
+        return test_df_input
+    
     # ★★★ ถ้ามีคอลัมน์ Trip ในไฟล์ ใช้โดยตรงเลย ★★★
     if use_file_trips:
         # ใช้ Trip จากไฟล์โดยตรง
@@ -1797,50 +1841,6 @@ def predict_trips(test_df, model_data):
         test_df_result['VehicleCheck'] = test_df_result.apply(vehicle_check_str, axis=1)
 
         return test_df_result, summary_df
-    
-    # 🔒 Final enforcement of vehicle constraints
-    def enforce_vehicle_constraints(test_df):
-        """บังคับข้อจำกัดรถขั้นสุดท้าย - ไม่อนุญาต 6W หากสาขาจำกัด 4W/JB หรืออยู่ในปริมณฑล"""
-        vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
-        
-        for trip_num in test_df['Trip'].unique():
-            trip_data = test_df[test_df['Trip'] == trip_num]
-            trip_codes = trip_data['Code'].unique()
-            
-            # 🔒 เช็คจังหวัด - ห้าม 6W ในปริมณฑล!
-            provinces = set()
-            for code in trip_codes:
-                prov = get_province(code) if 'get_province' in dir() else None
-                if not prov and not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
-                    master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
-                    if len(master_row) > 0:
-                        prov = master_row.iloc[0].get('จังหวัด', '')
-                if prov and prov != 'UNKNOWN':
-                    provinces.add(prov)
-            
-            all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
-            
-            # ตรวจสอบข้อจำกัดที่เข้มงวดที่สุดในทริป
-            max_vehicles = []
-            for code in trip_codes:
-                max_vehicle = get_max_vehicle_for_branch(code)
-                max_vehicles.append(max_vehicle)
-            
-            min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles)
-            
-            # 🔒 ปริมณฑล = บังคับ JB หรือเล็กกว่า (ห้าม 6W)
-            if all_nearby and min_max_size == 3:
-                min_max_size = 2  # บังคับลงมาเป็น JB
-            
-            # หากมีสาขาใดจำกัด 4W/JB หรืออยู่ในปริมณฑล → ห้าม 6W
-            if min_max_size < 3:
-                # บังคับเปลี่ยนเป็น JB หรือ 4W
-                allowed_vehicle = 'JB' if min_max_size >= 2 else '4W'
-                current_truck = test_df.loc[test_df['Trip'] == trip_num, 'Truck'].iloc[0] if len(test_df[test_df['Trip'] == trip_num]) > 0 else ''
-                if '6W' in str(current_truck):
-                    test_df.loc[test_df['Trip'] == trip_num, 'Truck'] = f'{allowed_vehicle} 🔒 {"ปริมณฑล" if all_nearby else "บังคับสาขา"}'
-        
-        return test_df
     
     # ถ้าไม่มีคอลัมน์ Trip ให้จัดทริปใหม่
     
