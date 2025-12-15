@@ -6690,7 +6690,7 @@ def main():
     with col1:
         st.title("🚚 ระบบจัดเที่ยว")
     with col2:
-        st.image("https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/1f69a.svg", width=100)
+        st.markdown("# 🚚")
     
     # Show Punthai learning stats
     if PUNTHAI_PATTERNS and 'stats' in PUNTHAI_PATTERNS and PUNTHAI_PATTERNS['stats']:
