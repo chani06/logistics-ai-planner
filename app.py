@@ -1512,6 +1512,11 @@ def process_dataframe(df):
     if 'Code' in df.columns:
         df['Code'] = df['Code'].apply(normalize)
         
+        # 🔒 กรองข้อมูลที่ไม่ถูกต้องออก (NaN, nan, NAN, ว่าง)
+        df = df[df['Code'].notna()]  # กรอง NaN
+        df = df[df['Code'].astype(str).str.upper() != 'NAN']  # กรอง "NAN", "nan"
+        df = df[df['Code'].astype(str).str.strip() != '']  # กรองค่าว่าง
+        
         # ตัดสาขาที่ไม่ต้องการออก (รหัส)
         df = df[~df['Code'].isin(EXCLUDE_BRANCHES)]
         
@@ -1519,6 +1524,9 @@ def process_dataframe(df):
         if 'Name' in df.columns:
             exclude_pattern = '|'.join(EXCLUDE_NAMES)
             df = df[~df['Name'].str.contains(exclude_pattern, case=False, na=False)]
+            # 🔒 กรองชื่อสาขาที่เป็น nan ออกด้วย
+            df = df[df['Name'].notna()]
+            df = df[df['Name'].astype(str).str.lower() != 'nan']
     
     for col in ['Weight', 'Cube']:
         if col not in df.columns:
