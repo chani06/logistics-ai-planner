@@ -1763,6 +1763,40 @@ def predict_trips(test_df, model_data):
         
         return df
     
+    # 🔒 ฟังก์ชันแยกสาขาที่อยู่คนละภูมิภาค (nearby vs far)
+    def split_mixed_regions(df):
+        """แยกสาขา nearby (กทม/ปริมณฑล) ออกจากสาขา far (ต่างจังหวัด) ในทริปเดียวกัน"""
+        for trip_num in df['Trip'].dropna().unique():
+            trip_data = df[df['Trip'] == trip_num]
+            trip_codes = list(trip_data['Code'].unique())
+            
+            if len(trip_codes) < 2:
+                continue
+            
+            # แยกสาขาตามภูมิภาค
+            codes_nearby = []  # กทม/ปริมณฑล
+            codes_far = []  # ต่างจังหวัด
+            
+            for code in trip_codes:
+                prov = get_province(code)
+                if prov and get_region_type(str(prov)) == 'nearby':
+                    codes_nearby.append(code)
+                else:
+                    codes_far.append(code)
+            
+            # 🚨 ถ้ามีทั้ง nearby และ far → ต้องแยก!
+            if len(codes_nearby) > 0 and len(codes_far) > 0:
+                if len(codes_nearby) >= len(codes_far):
+                    new_trip_num = df['Trip'].max() + 1
+                    for code in codes_far:
+                        df.loc[df['Code'] == code, 'Trip'] = new_trip_num
+                else:
+                    new_trip_num = df['Trip'].max() + 1
+                    for code in codes_nearby:
+                        df.loc[df['Code'] == code, 'Trip'] = new_trip_num
+        
+        return df
+    
     # ★★★ ถ้ามีคอลัมน์ Trip ในไฟล์ ใช้โดยตรงเลย ★★★
     if use_file_trips:
         # ใช้ Trip จากไฟล์โดยตรง
@@ -1770,6 +1804,9 @@ def predict_trips(test_df, model_data):
         
         # 🔒 แยกสาขาที่มีข้อจำกัดรถออกก่อน
         test_df_result = split_restricted_branches(test_df_result)
+        
+        # 🔒 แยกสาขาที่อยู่คนละภูมิภาค (nearby vs far)
+        test_df_result = split_mixed_regions(test_df_result)
         
         # ดึงประเภทรถจาก TripNo
         trip_truck_map_file = {}
@@ -3961,6 +3998,44 @@ def predict_trips(test_df, model_data):
                     test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip
             
             restriction_split_count += 1
+    
+    # 🚨 Phase 1.76: แยกสาขาที่อยู่คนละภูมิภาค (nearby vs far) ออกจากกัน
+    region_split_count = 0
+    
+    for trip_num in sorted(test_df['Trip'].unique()):
+        if trip_num == 0:
+            continue
+        
+        trip_data = test_df[test_df['Trip'] == trip_num]
+        trip_codes = list(trip_data['Code'].values)
+        
+        if len(trip_codes) < 2:
+            continue
+        
+        # แยกสาขาตามภูมิภาค
+        codes_nearby = []  # กทม/ปริมณฑล
+        codes_far = []  # ต่างจังหวัด (ใช้ 6W ได้)
+        
+        for code in trip_codes:
+            prov = get_province(code)
+            if prov and get_region_type(str(prov)) == 'nearby':
+                codes_nearby.append(code)
+            else:
+                codes_far.append(code)
+        
+        # 🚨 ถ้าทริปมีทั้ง nearby และ far → ต้องแยก!
+        if len(codes_nearby) > 0 and len(codes_far) > 0:
+            # เก็บทริปเดิมให้กับกลุ่มที่มีสาขามากกว่า
+            if len(codes_nearby) >= len(codes_far):
+                new_trip = test_df['Trip'].max() + 1
+                for code in codes_far:
+                    test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip
+            else:
+                new_trip = test_df['Trip'].max() + 1
+                for code in codes_nearby:
+                    test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip
+            
+            region_split_count += 1
     
     # 🎯 Phase 2: เลือกรถที่เหมาะสม (เริ่มจาก 4W → JB → 6W หรือ 2 คัน) - Optimized
     vehicle_assignment_count = 0
