@@ -26,7 +26,7 @@ try:
     AUTOREFRESH_AVAILABLE = True
 except ImportError:
     AUTOREFRESH_AVAILABLE = False
-    st.warning("⚠️ ติดตั้ง streamlit-autorefresh: pip install streamlit-autorefresh")
+    # Skip warning - streamlit-autorefresh is optional
 
 # ==========================================
 # CONFIG
@@ -6675,8 +6675,8 @@ def main():
         # คำนวณเวลาที่เหลือ (วินาที)
         seconds_until_midnight = int((next_midnight - now).total_seconds())
         
-        # Refresh ทุกเที่ยงคืน
-        if seconds_until_midnight > 0:
+        # Refresh ทุกเที่ยงคืน (เฉพาะเมื่อมี autorefresh component)
+        if AUTOREFRESH_AVAILABLE and seconds_until_midnight > 0:
             # เช็คในช่วง 5 นาทีก่อนเที่ยงคืน (หลัง 23:55)
             if seconds_until_midnight <= 300:  # 5 minutes
                 st.info(f"🔄 ระบบจะ Refresh อัตโนมัติใน {seconds_until_midnight // 60} นาที")
