@@ -1763,6 +1763,82 @@ def predict_trips(test_df, model_data):
         
         return df
     
+    # 🔒 ฟังก์ชันแยกสาขาที่ห่างกันเกินไป (ป้องกันทริปกระโดด)
+    def split_distant_branches(df, max_distance_km=30):
+        """แยกสาขาที่ห่างกันเกิน max_distance_km ออกจากทริปเดียวกัน"""
+        for trip_num in df['Trip'].dropna().unique():
+            trip_data = df[df['Trip'] == trip_num]
+            trip_codes = list(trip_data['Code'].unique())
+            
+            if len(trip_codes) < 2:
+                continue
+            
+            # หาพิกัดของแต่ละสาขา
+            code_coords = {}
+            for code in trip_codes:
+                if code in coord_cache:
+                    code_coords[code] = coord_cache[code]
+                elif not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                    master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                    if len(master_row) > 0:
+                        lat = master_row.iloc[0].get('Latitude') or master_row.iloc[0].get('lat')
+                        lon = master_row.iloc[0].get('Longitude') or master_row.iloc[0].get('lng')
+                        if pd.notna(lat) and pd.notna(lon):
+                            code_coords[code] = (float(lat), float(lon))
+            
+            if len(code_coords) < 2:
+                continue
+            
+            # หาคู่สาขาที่ห่างกันมากที่สุด
+            max_dist = 0
+            farthest_pair = None
+            codes_with_coords = list(code_coords.keys())
+            
+            for i, code1 in enumerate(codes_with_coords):
+                for code2 in codes_with_coords[i+1:]:
+                    lat1, lon1 = code_coords[code1]
+                    lat2, lon2 = code_coords[code2]
+                    dist = haversine_distance(lat1, lon1, lat2, lon2)
+                    if dist > max_dist:
+                        max_dist = dist
+                        farthest_pair = (code1, code2)
+            
+            # ถ้าห่างเกิน max_distance_km → ต้องแยก!
+            if max_dist > max_distance_km and farthest_pair:
+                # แบ่งสาขาเป็น 2 กลุ่มตามระยะทาง (cluster)
+                code1, code2 = farthest_pair
+                lat1, lon1 = code_coords[code1]
+                lat2, lon2 = code_coords[code2]
+                
+                # แบ่งกลุ่มตามว่าใกล้ code1 หรือ code2 มากกว่า
+                group1 = []  # ใกล้ code1
+                group2 = []  # ใกล้ code2
+                
+                for code in trip_codes:
+                    if code in code_coords:
+                        lat, lon = code_coords[code]
+                        dist1 = haversine_distance(lat, lon, lat1, lon1)
+                        dist2 = haversine_distance(lat, lon, lat2, lon2)
+                        if dist1 <= dist2:
+                            group1.append(code)
+                        else:
+                            group2.append(code)
+                    else:
+                        group1.append(code)  # ไม่มีพิกัด → ใส่กลุ่มแรก
+                
+                # ย้ายกลุ่มที่มีสาขาน้อยกว่าไปทริปใหม่
+                if len(group1) > 0 and len(group2) > 0:
+                    if len(group1) >= len(group2):
+                        new_trip_num = df['Trip'].max() + 1
+                        for code in group2:
+                            df.loc[df['Code'] == code, 'Trip'] = new_trip_num
+                    else:
+                        new_trip_num = df['Trip'].max() + 1
+                        for code in group1:
+                            df.loc[df['Code'] == code, 'Trip'] = new_trip_num
+        
+        return df
+    
     # 🔒 ฟังก์ชันแยกสาขาที่อยู่คนละภูมิภาค (nearby vs far)
     def split_mixed_regions(df):
         """แยกสาขา nearby (กทม/ปริมณฑล) ออกจากสาขา far (ต่างจังหวัด) ในทริปเดียวกัน"""
@@ -1807,6 +1883,9 @@ def predict_trips(test_df, model_data):
         
         # 🔒 แยกสาขาที่อยู่คนละภูมิภาค (nearby vs far)
         test_df_result = split_mixed_regions(test_df_result)
+        
+        # 🔒 Phase 1.78: แยกสาขาที่ห่างกันเกิน 30km (ป้องกันทริปกระโดด)
+        test_df_result = split_distant_branches(test_df_result, max_distance_km=30)
         
         # ดึงประเภทรถจาก TripNo
         trip_truck_map_file = {}
@@ -4041,6 +4120,76 @@ def predict_trips(test_df, model_data):
                     test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip
             
             region_split_count += 1
+    
+    # 🚨 Phase 1.78: แยกสาขาที่ห่างกันเกิน 30km (ป้องกันทริปกระโดด เช่น วังน้อย+กทม)
+    distance_split_count = 0
+    MAX_TRIP_DISTANCE_KM = 30  # ระยะห่างสูงสุดระหว่างสาขาในทริปเดียวกัน
+    
+    for trip_num in sorted(test_df['Trip'].unique()):
+        if trip_num == 0:
+            continue
+        
+        trip_data = test_df[test_df['Trip'] == trip_num]
+        trip_codes = list(trip_data['Code'].unique())
+        
+        if len(trip_codes) < 2:
+            continue
+        
+        # หาพิกัดของแต่ละสาขา
+        code_coords = {}
+        for code in trip_codes:
+            if code in coord_cache:
+                code_coords[code] = coord_cache[code]
+        
+        if len(code_coords) < 2:
+            continue
+        
+        # หาคู่สาขาที่ห่างกันมากที่สุด
+        max_dist = 0
+        farthest_pair = None
+        codes_with_coords = list(code_coords.keys())
+        
+        for i, code1 in enumerate(codes_with_coords):
+            for code2 in codes_with_coords[i+1:]:
+                lat1, lon1 = code_coords[code1]
+                lat2, lon2 = code_coords[code2]
+                dist = haversine_distance(lat1, lon1, lat2, lon2)
+                if dist > max_dist:
+                    max_dist = dist
+                    farthest_pair = (code1, code2)
+        
+        # ถ้าห่างเกิน MAX_TRIP_DISTANCE_KM → ต้องแยก!
+        if max_dist > MAX_TRIP_DISTANCE_KM and farthest_pair:
+            # แบ่งสาขาเป็น 2 กลุ่มตามระยะทาง
+            code1, code2 = farthest_pair
+            lat1, lon1 = code_coords[code1]
+            lat2, lon2 = code_coords[code2]
+            
+            group1, group2 = [], []
+            for code in trip_codes:
+                if code in code_coords:
+                    lat, lon = code_coords[code]
+                    dist1 = haversine_distance(lat, lon, lat1, lon1)
+                    dist2 = haversine_distance(lat, lon, lat2, lon2)
+                    if dist1 <= dist2:
+                        group1.append(code)
+                    else:
+                        group2.append(code)
+                else:
+                    group1.append(code)
+            
+            # ย้ายกลุ่มที่มีสาขาน้อยกว่าไปทริปใหม่
+            if len(group1) > 0 and len(group2) > 0:
+                if len(group1) >= len(group2):
+                    new_trip = test_df['Trip'].max() + 1
+                    for code in group2:
+                        test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip
+                else:
+                    new_trip = test_df['Trip'].max() + 1
+                    for code in group1:
+                        test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip
+                
+                distance_split_count += 1
     
     # 🎯 Phase 2: เลือกรถที่เหมาะสม (เริ่มจาก 4W → JB → 6W หรือ 2 คัน) - Optimized
     vehicle_assignment_count = 0
