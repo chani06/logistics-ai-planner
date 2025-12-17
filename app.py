@@ -1948,6 +1948,25 @@ def predict_trips(test_df, model_data):
         
         test_df_result['TripValidation'] = test_df_result.apply(validate_trip_grouping, axis=1)
         
+        # 🆕 เพิ่มคอลัมน์แสดงสาขาที่อยู่ในทริปเดียวกัน
+        def get_trip_partners(row):
+            """แสดงสาขาอื่นที่อยู่ในทริปเดียวกัน"""
+            trip_num = row['Trip']
+            code = row['Code']
+            if pd.isna(trip_num):
+                return ''
+            
+            trip_data = test_df_result[test_df_result['Trip'] == trip_num]
+            trip_codes = [c for c in trip_data['Code'].unique() if c != code]
+            
+            if len(trip_codes) == 0:
+                return '(สาขาเดี่ยว)'
+            
+            # แสดงรหัสสาขาที่อยู่ด้วยกัน
+            return ', '.join(trip_codes[:5]) + ('...' if len(trip_codes) > 5 else '')
+        
+        test_df_result['TripPartners'] = test_df_result.apply(get_trip_partners, axis=1)
+        
         # Mark VehicleCheck if strict constraint enforced
         def vehicle_check_str(row):
             truck = str(row.get('Truck', '')) if pd.notna(row.get('Truck')) else ''
