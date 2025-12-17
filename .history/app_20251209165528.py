@@ -26,7 +26,7 @@ try:
     AUTOREFRESH_AVAILABLE = True
 except ImportError:
     AUTOREFRESH_AVAILABLE = False
-    # Skip warning - streamlit-autorefresh is optional
+    st.warning("⚠️ ติดตั้ง streamlit-autorefresh: pip install streamlit-autorefresh")
 
 # ==========================================
 # CONFIG
@@ -40,39 +40,40 @@ LIMITS = {
     '6W': {'max_w': 6000, 'max_c': 20.0}   # ไม่จำกัดจุด, Cube ต้องเต็ม, Weight ≤ 6000
 }
 
+# 🔒 ขีดจำกัด 4W ตาม BU (Punthai ล้วน vs ผสม)
+# - Punthai ล้วน: 4W max_c = 5.0
+# - ผสม (Punthai + อื่น): 4W max_c = 4.0 (ถ้า cube 3-4 ใช้ 4W, ถ้าเกิน → JB)
+LIMITS_4W_PUNTHAI_ONLY = 5.0   # Punthai ล้วน
+LIMITS_4W_MIXED = 4.0          # ผสม BU
+
 # 🔒 ขีดจำกัดสำหรับ Punthai ล้วน
-# - JB (Jumbo): ไม่เกิน 7 drop, Cube ≤ 7
+# - JB (Jumbo): ไม่เกิน 7 drop, Cube ≤ 8
 # - 4W: ถ้า Cube > 5 → ตัดเป็น JB
+# - ถ้าผสม (Punthai + อื่น): ถ้า Cube 3-4 → ใช้ 4W ได้, ถ้าเกิน → JB
 PUNTHAI_LIMITS = {
     '4W': {'max_w': 2500, 'max_c': 5.0, 'max_drops': 12},  # Punthai ล้วน: ถ้าเกิน 5 cube → ใช้ JB
-    'JB': {'max_w': 3500, 'max_c': 7.0, 'max_drops': 7},   # Punthai ล้วน: ไม่เกิน 7 drop, Cube ≤ 7
+    'JB': {'max_w': 3500, 'max_c': 7.0, 'max_drops': 7},   # Punthai ล้วน: ไม่เกิน 7 drop
     '6W': {'max_w': 6000, 'max_c': 20.0, 'max_drops': 999}
 }
 
 # 🚨 ห้ามเกิน 100% - ไม่มี Buffer
 BUFFER = 1.0
 
-# 🚨 จำกัดระยะห่างสาขาในทริปเดียวกัน (consecutive distance)
-MAX_DISTANCE_IN_TRIP = 50  # km - สาขาในทริปเดียวกันห้ามห่างกันเกิน 50km (สำหรับกรุงเทพ/ปริมณฑล)
-MAX_DISTANCE_IN_TRIP_FAR = 100  # km - สำหรับต่างจังหวัดไกล (6W) ยอมให้เกินได้
-
-# 🎯 Minimum utilization ต่อประเภทรถ (สำหรับ balancing)
-MIN_UTIL = {
-    '4W': 70,   # 4W ต้องใช้อย่างน้อย 70%
-    'JB': 80,   # JB ต้องใช้อย่างน้อย 80%
-    '6W': 90    # 6W ต้องใช้อย่างน้อย 90%
-}
+# 🚨 จำกัดระยะห่างสาขาในทริปเดียวกัน
+MAX_DISTANCE_IN_TRIP = 100  # km - สาขาในทริปเดียวกันห้ามห่างกันเกิน 100km
 
 # จำนวนสาขาต่อทริป - ใช้กับ 4W/JB เท่านั้น (6W ไม่จำกัด)
 MAX_BRANCHES_PER_TRIP = 12  # สูงสุด 12 สาขาต่อทริปสำหรับ 4W/JB (6W ไม่จำกัด)
+TARGET_BRANCHES_PER_TRIP = 12  # เป้าหมาย 12 สาขาต่อทริป
 
 # Performance Config - Optimized for < 1 minute
-MAX_DETOUR_KM = 10  # ลดจาก 12km เป็น 10km
-MAX_MERGE_ITERATIONS = 5  # ลดจาก 10 เป็น 5 เพื่อเร็วขึ้น
-MAX_REBALANCE_ITERATIONS = 3  # จำกัดการ rebalance
-MAX_PROCESSING_TIME = 55  # วินาที - เป้าหมาย < 1 minute
-EARLY_STOP_UTIL = 95  # หยุดถ้าได้ utilization >= 95%
-EARLY_STOP_THRESHOLD = 0.95  # หยุดถ้าได้ utilization >= 95%
+MAX_DETOUR_KM = 12  # ลดจาก 15km เป็น 12km
+MAX_MERGE_ITERATIONS = 10  # ลดจาก 25 เป็น 10 เพื่อเร็วขึ้น
+MAX_REBALANCE_ITERATIONS = 5  # จำกัดการ rebalance (ใหม่!)
+MAX_PROCESSING_TIME = 50  # วินาที - เหลือเวลา 10 วิสำหรับ Phase อื่น (ใหม่!)
+EARLY_STOP_UTIL = 95  # หยุดถ้าได้ utilization >= 95% (ใหม่!)
+MAX_REBALANCE_ITERATIONS = 5  # จำกัดการ rebalance (ใหม่!)
+EARLY_STOP_THRESHOLD = 0.95  # หยุดถ้าได้ utilization >= 95% (ใหม่!)
 
 # รายการสาขาที่ไม่ต้องการจัดส่ง (ตัดออก)
 EXCLUDE_BRANCHES = ['DC011', 'PTDC', 'PTG DISTRIBUTION CENTER']
@@ -115,38 +116,6 @@ def load_master_data():
 
 # โหลด Master Data
 MASTER_DATA = load_master_data()
-
-# ==========================================
-# 🆕 โหลดไฟล์ สถานที่ส่ง.xlsx สำหรับจับกลุ่มสาขาที่อยู่ที่เดียวกัน (Reference)
-# ==========================================
-@st.cache_data(ttl=7200)
-def load_location_reference():
-    """โหลดไฟล์ สถานที่ส่ง.xlsx และสร้าง Reference mapping"""
-    try:
-        df = pd.read_excel('Dc/สถานที่ส่ง.xlsx')
-        if 'Reference' in df.columns and 'Plan Code' in df.columns:
-            # สร้าง mapping: branch_code -> reference
-            code_to_ref = {}
-            # สร้าง reverse mapping: reference -> [branch_codes]
-            ref_to_codes = {}
-            
-            for _, row in df.iterrows():
-                code = str(row['Plan Code']).strip().upper()
-                ref = str(row['Reference']).strip()
-                
-                if code and ref and code != 'NAN' and ref != 'NAN':
-                    code_to_ref[code] = ref
-                    if ref not in ref_to_codes:
-                        ref_to_codes[ref] = []
-                    ref_to_codes[ref].append(code)
-            
-            return code_to_ref, ref_to_codes
-        return {}, {}
-    except Exception as e:
-        return {}, {}
-
-# โหลด Reference mapping
-LOCATION_CODE_TO_REF, LOCATION_REF_TO_CODES = load_location_reference()
 
 @st.cache_data(ttl=3600)  # Cache 1 ชั่วโมง
 def load_booking_history_restrictions():
@@ -369,15 +338,6 @@ def normalize(val):
 
 def calculate_distance(lat1, lon1, lat2, lon2):
     """คำนวณระยะทางระหว่างสองจุด (กม.) - Haversine formula"""
-    # ตรวจสอบค่า None, NaN หรือ 0
-    try:
-        lat1 = float(lat1) if lat1 is not None else 0
-        lon1 = float(lon1) if lon1 is not None else 0
-        lat2 = float(lat2) if lat2 is not None else 0
-        lon2 = float(lon2) if lon2 is not None else 0
-    except (ValueError, TypeError):
-        return 0
-    
     if lat1 == 0 or lon1 == 0 or lat2 == 0 or lon2 == 0:
         return 0
     import math
@@ -486,21 +446,29 @@ def get_punthai_vehicle_limits(trip_data, total_cube, branch_count):
         return {'max_vehicle': '6W', 'max_drops': 999, 'should_split': False}
 
 def get_max_vehicle_for_branch(branch_code):
-    """ดึงรถใหญ่สุดที่สาขานี้รองรับ - ใช้จาก Auto Plan เท่านั้น!"""
+    """ดึงรถใหญ่สุดที่สาขานี้รองรับ (Auto Plan > Booking History > Punthai)"""
     branch_code_str = str(branch_code).strip()
     
-    # 🔒 ใช้จาก Auto Plan (ชีต info - MaxTruckType) เท่านั้น!
+    # 🔒 1. ลองหาจาก Auto Plan (ชีต info - MaxTruckType) ก่อน (สำคัญที่สุด!)
     if branch_code_str in AUTO_PLAN_TRUCK_LIMITS:
         return AUTO_PLAN_TRUCK_LIMITS[branch_code_str]
     
-    # ถ้าไม่มีในไฟล์ = ใช้รถใหญ่ได้ (6W)
+    # 2. ลองหาจาก Booking History (ข้อมูลจริง - ความเชื่อมั่นสูง)
+    booking_restrictions = BOOKING_RESTRICTIONS.get('branch_restrictions', {})
+    if branch_code_str in booking_restrictions:
+        return booking_restrictions[branch_code_str].get('max_vehicle', '6W')
+    
+    # 3. ถ้าไม่มี ลองหาจาก Punthai (แผน - สำรอง)
+    punthai_restrictions = PUNTHAI_PATTERNS.get('punthai_restrictions', {})
+    if branch_code_str in punthai_restrictions:
+        return punthai_restrictions[branch_code_str].get('max_vehicle', '6W')
+    
+    # 4. ถ้าไม่มีทั้งหมด = ใช้รถใหญ่ได้
     return '6W'
 
 def get_max_vehicle_for_trip(trip_codes):
     """
     หารถใหญ่สุดที่ทริปนี้ใช้ได้ (เช็คข้อจำกัดของทุกสาขาในทริป)
-    
-    🆕 เพิ่มเงื่อนไข: ถ้าทริปมีสาขาจาก nearby (กทม/ปริมณฑล/ภาคกลาง) รวมด้วย → ห้าม 6W
     
     Args:
         trip_codes: set ของ branch codes ในทริป
@@ -512,8 +480,6 @@ def get_max_vehicle_for_trip(trip_codes):
     max_allowed = '6W'  # เริ่มจากใหญ่สุด แล้วจำกัดตามข้อจำกัดสาขา
     min_priority = 3  # ค่าใหญ่สุดคือไม่มีข้อจำกัด
     
-    has_nearby_province = False  # 🆕 เช็คว่ามีสาขาในกทม/ปริมณฑล/ภาคกลางหรือไม่
-    
     for code in trip_codes:
         branch_max = get_max_vehicle_for_branch(code)
         priority = vehicle_priority.get(branch_max, 3)
@@ -522,19 +488,6 @@ def get_max_vehicle_for_trip(trip_codes):
         if priority < min_priority:
             min_priority = priority
             max_allowed = branch_max
-        
-        # 🆕 เช็คจังหวัดของสาขา
-        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
-            master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
-            if len(master_row) > 0:
-                prov = master_row.iloc[0].get('จังหวัด', '')
-                if pd.notna(prov) and get_region_type(str(prov)) == 'nearby':
-                    has_nearby_province = True
-    
-    # 🆕 ถ้ามีสาขาในกทม/ปริมณฑล/ภาคกลางรวมด้วย → ห้าม 6W (ใช้ได้แค่ JB หรือ 4W)
-    if has_nearby_province and min_priority == 3:
-        min_priority = 2  # ลดลงเป็น JB
-        max_allowed = 'JB'
     
     return max_allowed
 
@@ -561,26 +514,22 @@ def can_fit_truck(total_weight, total_cube, truck_type):
     max_c = limits['max_c'] * BUFFER
     return total_weight <= max_w and total_cube <= max_c
 
-def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None, prefer_jb_for_nearby=False):
+def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None):
     """
     แนะนำรถที่เหมาะสม โดยเลือกรถที่:
     1. ใส่ของได้พอดี (ไม่เกินขีดจำกัด 105%)
     2. ใช้งานได้ใกล้ 100% มากที่สุด (เป้าหมาย: 90-100%)
     3. เคารพข้อจำกัดของสาขา (ถ้าสาขาใช้แค่ 4W = ต้องใช้ 4W เท่านั้น)
-    4. 🆕 พื้นที่ใกล้ DC → ใช้รถเล็กก่อน (4W → JB → 6W)
     """
     vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
     max_size = vehicle_sizes.get(max_allowed, 3)
     
     # ตรวจสอบข้อจำกัดของสาขาทั้งหมดในกลุ่ม
-    branch_max_vehicle = '6W'  # เริ่มจากใหญ่สุด
-    is_nearby_area = False  # เช็คว่าเป็นพื้นที่ใกล้ DC หรือไม่
-    avg_distance_from_dc = 0  # 🆕 ระยะเฉลี่ยจาก DC
-    
+    branch_max_vehicle = '4W'  # 🔒 เริ่มต้นที่ 4W (เล็กสุด) แล้วขยายเมื่อจำเป็น
     if trip_codes is not None and len(trip_codes) > 0:
         for code in trip_codes:
             branch_max = get_max_vehicle_for_branch(code)
-            # หารถที่เล็กที่สุดที่อนุญาต
+            # หารถที่เล็กที่สุดที่ต้องใช้
             if vehicle_sizes.get(branch_max, 3) < vehicle_sizes.get(branch_max_vehicle, 3):
                 branch_max_vehicle = branch_max
         
@@ -588,40 +537,12 @@ def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None, p
         if vehicle_sizes.get(branch_max_vehicle, 3) < max_size:
             max_allowed = branch_max_vehicle
             max_size = vehicle_sizes.get(max_allowed, 3)
-        
-        # 🆕 คำนวณระยะเฉลี่ยจาก DC และเช็คพื้นที่
-        total_dist = 0
-        dist_count = 0
-        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
-            for code in trip_codes:
-                master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
-                if len(master_row) > 0:
-                    prov = master_row.iloc[0].get('จังหวัด', '')
-                    if pd.notna(prov) and get_region_type(prov) == 'nearby':
-                        is_nearby_area = True
-                    
-                    # คำนวณระยะจาก DC
-                    lat = master_row.iloc[0].get('ละติจูด', None)
-                    lon = master_row.iloc[0].get('ลองติจูด', None)
-                    if lat and lon and pd.notna(lat) and pd.notna(lon):
-                        dist = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, float(lat), float(lon))
-                        total_dist += dist
-                        dist_count += 1
-        
-        if dist_count > 0:
-            avg_distance_from_dc = total_dist / dist_count
-    
-    # 🆕 พื้นที่ใกล้ DC (nearby หรือ ระยะ < 100km) → ใช้รถเล็กก่อน (4W → JB)
-    if is_nearby_area or avg_distance_from_dc < 100:
-        truck_order = ['4W', 'JB', '6W']  # รถเล็กก่อน
-    else:
-        truck_order = ['4W', 'JB', '6W']  # ปกติก็ใช้รถเล็กก่อน
     
     best_truck = None
     best_utilization = 0
     best_distance_from_100 = 999  # ระยะห่างจาก 100%
     
-    for truck in truck_order:
+    for truck in ['4W', 'JB', '6W']:
         truck_size = vehicle_sizes.get(truck, 0)
         # ถ้ารถใหญ่กว่าที่อนุญาต ข้ามไป
         if truck_size > max_size:
@@ -716,29 +637,37 @@ def calculate_optimal_vehicle_split(total_weight, total_cube, max_allowed='6W', 
     need_split = total_cube > 7.0 or not branch_ok_for_small
     
     if need_split:
-        # 🔄 ลองแบบต่างๆ ตามลำดับ
+        # 🔄 ลองแบบต่างๆ ตามลำดับ - เป้าหมาย 75%-95% ต่อคัน
         
-        # 🔒 กฎใหม่: cube 7-14 → บังคับแยกเป็น JB+JB หรือ JB+4W
-        if total_cube > 7.0 and total_cube <= 14.0:
-            if total_cube <= 12.0:
-                # JB + 4W (JB 7 + 4W 5 = 12 max)
-                return ('JB', True, {'split': ['JB', '4W'], 'reason': f'Cube {total_cube:.1f} แยกเป็น JB+4W'})
-            else:
-                # JB + JB (7 + 7 = 14 max)
-                return ('JB', True, {'split': ['JB', 'JB'], 'reason': f'Cube {total_cube:.1f} แยกเป็น JB+JB'})
+        # JB + 4W (JB 7 cube + 4W 5 cube = 12 cube max)
+        if max_priority >= 2 and total_cube <= 12.0:
+            # แบ่ง: JB รับ cube มากกว่า, 4W รับส่วนที่เหลือ
+            jb_cube = min(total_cube * 0.6, 7.0)  # JB รับ 60% แต่ไม่เกิน 7
+            four_w_cube = total_cube - jb_cube
+            
+            jb_util = (jb_cube / LIMITS['JB']['max_c']) * 100
+            four_w_util = (four_w_cube / LIMITS['4W']['max_c']) * 100
+            
+            if SPLIT_MIN <= jb_util <= SPLIT_MAX and SPLIT_MIN <= four_w_util <= SPLIT_MAX:
+                return ('JB', True, {'split': ['JB', '4W'], 'ratio': [jb_cube/total_cube, four_w_cube/total_cube]})
         
-        # 🔒 กฎใหม่: cube 14-18 → บังคับแยกเป็น JB+JB+4W หรือ 6W ถ้าจำเป็น
-        if total_cube > 14.0 and total_cube < 18.0:
-            # ยังไม่ถึง 6W (ต้อง ≥18) แต่เกิน JB+JB → แยกเป็น JB+JB+4W หรือยอมใช้ 6W
-            if max_priority >= 3:
-                # ยอมใช้ 6W แม้ว่าจะไม่ถึง 18 cube (ดีกว่าแยก 3 คัน)
-                return ('6W', False, {'reason': f'Cube {total_cube:.1f} ใช้ 6W (รอรวมเพิ่ม)'})
-            else:
-                return ('JB', True, {'split': ['JB', 'JB'], 'reason': f'Cube {total_cube:.1f} แยกเป็น JB+JB'})
+        # JB + JB (JB 7 + JB 7 = 14 cube max)
+        if max_priority >= 2 and total_cube <= 14.0:
+            jb_util_half = (total_cube / 2 / LIMITS['JB']['max_c']) * 100
+            if SPLIT_MIN <= jb_util_half <= SPLIT_MAX:
+                return ('JB', True, {'split': ['JB', 'JB'], 'ratio': [0.5, 0.5]})
         
-        # 6W + JB (สำหรับ cube > 20)
-        if max_priority >= 3 and total_cube > 20.0 and total_cube <= 27.0:
-            return ('6W', True, {'split': ['6W', 'JB'], 'reason': f'Cube {total_cube:.1f} แยกเป็น 6W+JB'})
+        # 6W + JB (6W 20 + JB 7 = 27 cube max)
+        if max_priority >= 3 and total_cube <= 27.0:
+            # แบ่ง: 6W รับส่วนใหญ่
+            six_w_cube = min(total_cube * 0.7, 20.0)
+            jb_cube = total_cube - six_w_cube
+            
+            six_w_util = (six_w_cube / LIMITS['6W']['max_c']) * 100
+            jb_util = (jb_cube / LIMITS['JB']['max_c']) * 100
+            
+            if six_w_util >= 75 and SPLIT_MIN <= jb_util <= SPLIT_MAX:
+                return ('6W', True, {'split': ['6W', 'JB'], 'ratio': [six_w_cube/total_cube, jb_cube/total_cube]})
         
         # 4W + 4W (4W 5 + 4W 5 = 10 cube max) - สำหรับสาขาที่จำกัด 4W
         if max_priority == 1 and total_cube <= 10.0:
@@ -843,7 +772,7 @@ def is_similar_name(name1, name2, similarity_threshold=85):
     def extract_keywords(name):
         """ดึงคำสำคัญจากชื่อสาขา"""
         if pd.isna(name) or name is None:
-            return set(), "", "", ""
+            return set(), "", ""
         s = str(name).strip().upper()
         
         # คำสำคัญที่ต้องการจับคู่ (ไทย + อังกฤษ) - เพิ่มเติมคำเฉพาะของสาขา
@@ -1003,83 +932,12 @@ def is_similar_name(name1, name2, similarity_threshold=85):
     
     return False
 
-def get_branch_base_code(code):
-    """
-    ดึง base code ของสาขา เพื่อจับกลุ่มสาขาที่เป็น location เดียวกัน
-    
-    ตัวอย่าง:
-    - M862, P862, S862, ZS862 → 862 (ตลิ่งชัน2)
-    - MF40, PF40, SF40, ZSF40 → F40 (ถ.พระเทพ1)
-    - M036, P036, P723 → 036, 723 (มุกดาหาร)
-    - MD65, PD65 → D65 (อำนาจเจริญ3)
-    
-    Prefix patterns:
-    - M = MAX MART
-    - P = PUNTHAI
-    - N = PUNTHAI (old)
-    - S = SUPPLY USE
-    - ZS, ZF, Z = LUBE
-    - O = MAX MART (outlet)
-    """
-    import re
-    
-    if not code or pd.isna(code):
-        return None
-    
-    code = str(code).strip().upper()
-    
-    # Skip FC codes (11005xxx, 9100002xxx)
-    if re.match(r'^\d{7,}$', code):
-        return None
-    
-    # Remove prefix patterns
-    # ZS, ZF, ZC first (2 chars)
-    if code.startswith(('ZS', 'ZF', 'ZC')):
-        base = code[2:]
-    # Single letter prefix: M, P, N, S, O, F, C, E
-    elif len(code) > 1 and code[0] in 'MPNSOFC' and not code[0:2].isalpha():
-        base = code[1:]
-    # Two letter prefix: MF, PF, SF, MD, PD, MI, PI, MH, PH, etc.
-    elif len(code) > 2 and code[0] in 'MPS' and code[1].isalpha():
-        base = code[1:]  # Keep the second letter as part of base
-    else:
-        base = code
-    
-    # Clean up: remove trailing spaces/special chars
-    base = re.sub(r'[^A-Z0-9]', '', base)
-    
-    return base if len(base) >= 2 else None
-
-def is_same_location(code1, code2):
-    """
-    เช็คว่า 2 codes เป็น location เดียวกันหรือไม่
-    เช่น M862 และ P862 = ตลิ่งชัน2 (เป็น location เดียวกัน)
-    """
-    base1 = get_branch_base_code(code1)
-    base2 = get_branch_base_code(code2)
-    
-    if base1 and base2:
-        return base1 == base2
-    return False
-
 def haversine_distance(lat1, lon1, lat2, lon2):
     """
     คำนวณระยะทางระหว่างจุดสองจุดบนพื้นโลก (km)
     ใช้สูตร Haversine
     """
     from math import radians, sin, cos, sqrt, atan2
-    
-    # ตรวจสอบค่า None, NaN หรือ 0
-    try:
-        lat1 = float(lat1) if lat1 is not None else 0
-        lon1 = float(lon1) if lon1 is not None else 0
-        lat2 = float(lat2) if lat2 is not None else 0
-        lon2 = float(lon2) if lon2 is not None else 0
-    except (ValueError, TypeError):
-        return 0
-    
-    if lat1 == 0 or lon1 == 0 or lat2 == 0 or lon2 == 0:
-        return 0
     
     # แปลงองศาเป็น radians
     lat1_rad = radians(lat1)
@@ -1100,181 +958,6 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     distance = R * c
     
     return distance
-
-def calculate_max_consecutive_distance(codes, coord_cache, dc_lat=14.179394, dc_lon=100.648149):
-    """
-    คำนวณ max consecutive distance ของสาขาในทริป
-    โดยเรียงลำดับสาขาตามเส้นทาง (Nearest Neighbor จาก DC)
-    ไม่นับระยะจาก DC ไปสาขาแรก
-    
-    Returns:
-        float: max consecutive distance (km), -1 ถ้าไม่มีข้อมูล
-    """
-    if len(codes) < 2:
-        return 0.0
-    
-    # สร้างลิสต์พิกัด
-    points = []
-    for code in codes:
-        lat, lon = coord_cache.get(code, (None, None))
-        if lat and lon:
-            points.append((code, lat, lon))
-    
-    if len(points) < 2:
-        return 0.0
-    
-    # เรียงลำดับด้วย Nearest Neighbor จาก DC
-    sorted_points = []
-    remaining = points.copy()
-    current_lat, current_lon = dc_lat, dc_lon
-    
-    while remaining:
-        best_idx = 0
-        best_dist = haversine_distance(current_lat, current_lon, remaining[0][1], remaining[0][2])
-        
-        for i, (_, lat, lon) in enumerate(remaining[1:], 1):
-            dist = haversine_distance(current_lat, current_lon, lat, lon)
-            if dist < best_dist:
-                best_dist = dist
-                best_idx = i
-        
-        best_point = remaining.pop(best_idx)
-        sorted_points.append(best_point)
-        current_lat, current_lon = best_point[1], best_point[2]
-    
-    # คำนวณ max consecutive distance (ไม่นับ DC ไปสาขาแรก)
-    max_dist = 0.0
-    for i in range(len(sorted_points) - 1):
-        lat1, lon1 = sorted_points[i][1], sorted_points[i][2]
-        lat2, lon2 = sorted_points[i + 1][1], sorted_points[i + 1][2]
-        dist = haversine_distance(lat1, lon1, lat2, lon2)
-        if dist > max_dist:
-            max_dist = dist
-    
-    return max_dist
-
-# 🔥 จังหวัดที่อยู่ติดกัน (เชื่อมต่อระหว่างภาค)
-# ใช้สำหรับอนุญาตให้รวมทริปข้ามภาคเมื่อจังหวัดติดกัน
-ADJACENT_PROVINCES = {
-    # จังหวัดที่เชื่อมต่อภาคกลาง กับ อีสาน
-    'นครราชสีมา': ['สระบุรี', 'ลพบุรี', 'ชัยภูมิ', 'บุรีรัมย์', 'ปราจีนบุรี', 'นครนายก'],
-    'สระบุรี': ['นครราชสีมา', 'ลพบุรี', 'นครนายก', 'ปทุมธานี', 'พระนครศรีอยุธยา'],
-    'ลพบุรี': ['นครราชสีมา', 'สระบุรี', 'ชัยภูมิ', 'เพชรบูรณ์', 'พิจิตร', 'นครสวรรค์'],
-    
-    # จังหวัดที่เชื่อมต่อภาคกลาง กับ ตะวันออก
-    'ปราจีนบุรี': ['นครราชสีมา', 'สระแก้ว', 'นครนายก', 'ฉะเชิงเทรา', 'ชลบุรี'],
-    'ฉะเชิงเทรา': ['ปราจีนบุรี', 'สระแก้ว', 'ชลบุรี', 'กรุงเทพมหานคร', 'สมุทรปราการ'],
-    'ชลบุรี': ['ปราจีนบุรี', 'ฉะเชิงเทรา', 'ระยอง', 'สมุทรปราการ'],
-    
-    # จังหวัดที่เชื่อมต่อภาคกลาง กับ เหนือ
-    'ชัยภูมิ': ['นครราชสีมา', 'ลพบุรี', 'เพชรบูรณ์', 'ขอนแก่น', 'นครสวรรค์'],
-    'เพชรบูรณ์': ['ลพบุรี', 'ชัยภูมิ', 'พิจิตร', 'พิษณุโลก', 'ขอนแก่น', 'เลย'],
-    'นครสวรรค์': ['ลพบุรี', 'ชัยภูมิ', 'พิจิตร', 'อุทัยธานี', 'กำแพงเพชร', 'สุพรรณบุรี'],
-    
-    # จังหวัดที่เชื่อมต่อภาคกลาง กับ ตะวันตก/ใต้
-    'ประจวบคีรีขันธ์': ['เพชรบุรี', 'ชุมพร'],
-    'ชุมพร': ['ประจวบคีรีขันธ์', 'ระนอง', 'สุราษฎร์ธานี'],
-}
-
-# 🔥 โหลดอำเภอที่ติดกันข้ามจังหวัด จากไฟล์ JSON
-def load_adjacent_districts():
-    """โหลดข้อมูลอำเภอที่ติดกันจากไฟล์ adjacent_districts.json"""
-    import json
-    import os
-    
-    json_path = os.path.join(os.path.dirname(__file__), 'adjacent_districts.json')
-    
-    result = {}
-    try:
-        with open(json_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        # แปลง JSON เป็น dict ที่ใช้งานได้
-        for section in data.get('adjacent_districts', []):
-            for pair in section.get('pairs', []):
-                d1 = pair['district1']
-                p1 = pair['province1']
-                d2 = pair['district2']
-                p2 = pair['province2']
-                
-                # เพิ่มทั้ง 2 ทิศทาง
-                key1 = (d1, p1)
-                if key1 not in result:
-                    result[key1] = []
-                result[key1].append((d2, p2))
-                
-                key2 = (d2, p2)
-                if key2 not in result:
-                    result[key2] = []
-                result[key2].append((d1, p1))
-        
-        print(f"✅ โหลดข้อมูลอำเภอติดกัน: {len(result)} อำเภอ")
-        
-    except FileNotFoundError:
-        print(f"⚠️ ไม่พบไฟล์ {json_path} - ใช้ข้อมูลเริ่มต้น")
-        # ข้อมูลสำรองถ้าไม่มีไฟล์
-        result = {
-            ('สีคิ้ว', 'นครราชสีมา'): [('มวกเหล็ก', 'สระบุรี'), ('แก่งคอย', 'สระบุรี')],
-            ('ปากช่อง', 'นครราชสีมา'): [('มวกเหล็ก', 'สระบุรี')],
-        }
-    except Exception as e:
-        print(f"⚠️ โหลดไฟล์ adjacent_districts.json ผิดพลาด: {e}")
-        result = {}
-    
-    return result
-
-# โหลดข้อมูลตอนเริ่มต้น
-ADJACENT_DISTRICTS = load_adjacent_districts()
-
-def are_adjacent_districts(district1, province1, district2, province2):
-    """เช็คว่าอำเภอติดกันข้ามจังหวัดหรือไม่"""
-    if not district1 or not district2 or not province1 or not province2:
-        return False
-    
-    d1, p1 = str(district1).strip(), str(province1).strip()
-    d2, p2 = str(district2).strip(), str(province2).strip()
-    
-    # จังหวัดเดียวกัน → ถือว่าติดกัน
-    if p1 == p2:
-        return True
-    
-    # เช็คจาก ADJACENT_DISTRICTS
-    for (dist, prov), adjacents in ADJACENT_DISTRICTS.items():
-        # เช็คทั้ง 2 ทิศทาง
-        if dist in d1 and prov in p1:
-            for adj_dist, adj_prov in adjacents:
-                if adj_dist in d2 and adj_prov in p2:
-                    return True
-        if dist in d2 and prov in p2:
-            for adj_dist, adj_prov in adjacents:
-                if adj_dist in d1 and adj_prov in p1:
-                    return True
-    
-    return False
-
-def are_adjacent_provinces(prov1, prov2):
-    """เช็คว่าจังหวัดอยู่ติดกันหรือไม่"""
-    if pd.isna(prov1) or pd.isna(prov2):
-        return False
-    
-    p1 = str(prov1).strip()
-    p2 = str(prov2).strip()
-    
-    if p1 == p2:
-        return True
-    
-    # เช็คจาก ADJACENT_PROVINCES
-    for key, adjacents in ADJACENT_PROVINCES.items():
-        if key in p1:
-            for adj in adjacents:
-                if adj in p2:
-                    return True
-        if key in p2:
-            for adj in adjacents:
-                if adj in p1:
-                    return True
-    
-    return False
 
 def get_region_type(province):
     """
@@ -1635,11 +1318,6 @@ def process_dataframe(df):
     if 'Code' in df.columns:
         df['Code'] = df['Code'].apply(normalize)
         
-        # 🔒 กรองข้อมูลที่ไม่ถูกต้องออก (NaN, nan, NAN, ว่าง)
-        df = df[df['Code'].notna()]  # กรอง NaN
-        df = df[df['Code'].astype(str).str.upper() != 'NAN']  # กรอง "NAN", "nan"
-        df = df[df['Code'].astype(str).str.strip() != '']  # กรองค่าว่าง
-        
         # ตัดสาขาที่ไม่ต้องการออก (รหัส)
         df = df[~df['Code'].isin(EXCLUDE_BRANCHES)]
         
@@ -1647,9 +1325,6 @@ def process_dataframe(df):
         if 'Name' in df.columns:
             exclude_pattern = '|'.join(EXCLUDE_NAMES)
             df = df[~df['Name'].str.contains(exclude_pattern, case=False, na=False)]
-            # 🔒 กรองชื่อสาขาที่เป็น nan ออกด้วย
-            df = df[df['Name'].notna()]
-            df = df[df['Name'].astype(str).str.lower() != 'nan']
     
     for col in ['Weight', 'Cube']:
         if col not in df.columns:
@@ -1793,222 +1468,10 @@ def predict_trips(test_df, model_data):
                 'longitude': 0.0
             }
     
-    # 🔒 Final enforcement of vehicle constraints (ต้องนิยามก่อนเรียกใช้)
-    def enforce_vehicle_constraints(test_df_input):
-        """บังคับข้อจำกัดรถขั้นสุดท้าย - ไม่อนุญาต 6W หากสาขาจำกัด 4W/JB หรืออยู่ในกรุงเทพ/ปริมณฑล"""
-        vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
-        
-        for trip_num in test_df_input['Trip'].unique():
-            if pd.isna(trip_num):
-                continue
-            trip_data = test_df_input[test_df_input['Trip'] == trip_num]
-            trip_codes = trip_data['Code'].unique()
-            
-            # 🔒 เช็คจังหวัด - ห้าม 6W ถ้ามีแม้แค่สาขาเดียวอยู่ในกรุงเทพ/ปริมณฑล!
-            has_any_nearby = False  # เปลี่ยนจาก all_nearby เป็น has_any_nearby
-            for code in trip_codes:
-                prov = None
-                # หาจังหวัดจาก test_df_input
-                code_data = test_df_input[test_df_input['Code'] == code]
-                if 'Province' in code_data.columns and len(code_data) > 0:
-                    prov = code_data['Province'].iloc[0]
-                # หาจาก MASTER_DATA ถ้าไม่มี
-                if not prov and not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
-                    master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
-                    if len(master_row) > 0:
-                        prov = master_row.iloc[0].get('จังหวัด', '')
-                if prov and prov != 'UNKNOWN' and get_region_type(str(prov)) == 'nearby':
-                    has_any_nearby = True
-                    break  # พบแม้แค่สาขาเดียวก็พอ
-            
-            # ตรวจสอบข้อจำกัดที่เข้มงวดที่สุดในทริป
-            max_vehicles = []
-            for code in trip_codes:
-                max_vehicle = get_max_vehicle_for_branch(code)
-                max_vehicles.append(max_vehicle)
-            
-            min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles) if max_vehicles else 3
-            
-            # 🔒 กรุงเทพ/ปริมณฑล = บังคับ JB หรือเล็กกว่า (ห้าม 6W เด็ดขาด!)
-            if has_any_nearby and min_max_size == 3:
-                min_max_size = 2  # บังคับลงมาเป็น JB
-            
-            # หากมีสาขาใดจำกัด 4W/JB หรืออยู่ในกรุงเทพ/ปริมณฑล → ห้าม 6W
-            if min_max_size < 3:
-                # บังคับเปลี่ยนเป็น JB หรือ 4W
-                allowed_vehicle = 'JB' if min_max_size >= 2 else '4W'
-                current_truck = test_df_input.loc[test_df_input['Trip'] == trip_num, 'Truck'].iloc[0] if len(test_df_input[test_df_input['Trip'] == trip_num]) > 0 else ''
-                if '6W' in str(current_truck):
-                    reason = 'กทม/ปริมณฑล' if has_any_nearby else 'บังคับสาขา'
-                    test_df_input.loc[test_df_input['Trip'] == trip_num, 'Truck'] = f'{allowed_vehicle} 🔒 {reason}'
-        
-        return test_df_input
-    
-    # 🔒 ฟังก์ชันแยกสาขาที่มีข้อจำกัดรถออกจากทริปที่ใช้รถใหญ่เกินไป
-    def split_restricted_branches(df):
-        """แยกสาขาที่จำกัด 4W/JB ออกจากทริปที่มี Cube/Weight เกินความจุรถที่อนุญาต"""
-        vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
-        
-        for trip_num in df['Trip'].dropna().unique():
-            trip_data = df[df['Trip'] == trip_num]
-            total_w = trip_data['Weight'].sum()
-            total_c = trip_data['Cube'].sum()
-            trip_codes = list(trip_data['Code'].unique())
-            
-            # หาสาขาที่มีข้อจำกัดและไม่มีข้อจำกัด
-            codes_4w_only = []  # จำกัด 4W
-            codes_jb_only = []  # จำกัด JB
-            codes_no_limit = []  # ไม่จำกัด
-            
-            for code in trip_codes:
-                max_v = get_max_vehicle_for_branch(code)
-                if max_v == '4W':
-                    codes_4w_only.append(code)
-                elif max_v == 'JB':
-                    codes_jb_only.append(code)
-                else:
-                    codes_no_limit.append(code)
-            
-            # 🔴 ถ้ามีสาขาจำกัด 4W แต่ Cube รวมเกิน 4W capacity (5.0) → แยก
-            if codes_4w_only and total_c > LIMITS['4W']['max_c']:
-                # สาขาที่จำกัด 4W ต้องแยกออกไปทริปใหม่
-                new_trip_num = df['Trip'].max() + 1
-                for code in codes_4w_only:
-                    df.loc[df['Code'] == code, 'Trip'] = new_trip_num
-            
-            # 🔴 ถ้ามีสาขาจำกัด JB แต่ Cube รวมเกิน JB capacity (7.0) → แยก
-            elif codes_jb_only and total_c > LIMITS['JB']['max_c']:
-                # ถ้ามีทั้งสาขาจำกัด JB และไม่จำกัด → แยกสาขาที่จำกัด JB ออก
-                if codes_no_limit:
-                    new_trip_num = df['Trip'].max() + 1
-                    for code in codes_jb_only:
-                        df.loc[df['Code'] == code, 'Trip'] = new_trip_num
-        
-        return df
-    
-    # 🔒 ฟังก์ชันแยกสาขาที่ห่างกันเกินไป (ป้องกันทริปกระโดด)
-    def split_distant_branches(df, max_distance_km=30):
-        """แยกสาขาที่ห่างกันเกิน max_distance_km ออกจากทริปเดียวกัน"""
-        for trip_num in df['Trip'].dropna().unique():
-            trip_data = df[df['Trip'] == trip_num]
-            trip_codes = list(trip_data['Code'].unique())
-            
-            if len(trip_codes) < 2:
-                continue
-            
-            # หาพิกัดของแต่ละสาขา
-            code_coords = {}
-            for code in trip_codes:
-                if code in coord_cache:
-                    code_coords[code] = coord_cache[code]
-                elif not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
-                    master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
-                    if len(master_row) > 0:
-                        lat = master_row.iloc[0].get('Latitude') or master_row.iloc[0].get('lat')
-                        lon = master_row.iloc[0].get('Longitude') or master_row.iloc[0].get('lng')
-                        if pd.notna(lat) and pd.notna(lon):
-                            code_coords[code] = (float(lat), float(lon))
-            
-            if len(code_coords) < 2:
-                continue
-            
-            # หาคู่สาขาที่ห่างกันมากที่สุด
-            max_dist = 0
-            farthest_pair = None
-            codes_with_coords = list(code_coords.keys())
-            
-            for i, code1 in enumerate(codes_with_coords):
-                for code2 in codes_with_coords[i+1:]:
-                    lat1, lon1 = code_coords[code1]
-                    lat2, lon2 = code_coords[code2]
-                    dist = haversine_distance(lat1, lon1, lat2, lon2)
-                    if dist > max_dist:
-                        max_dist = dist
-                        farthest_pair = (code1, code2)
-            
-            # ถ้าห่างเกิน max_distance_km → ต้องแยก!
-            if max_dist > max_distance_km and farthest_pair:
-                # แบ่งสาขาเป็น 2 กลุ่มตามระยะทาง (cluster)
-                code1, code2 = farthest_pair
-                lat1, lon1 = code_coords[code1]
-                lat2, lon2 = code_coords[code2]
-                
-                # แบ่งกลุ่มตามว่าใกล้ code1 หรือ code2 มากกว่า
-                group1 = []  # ใกล้ code1
-                group2 = []  # ใกล้ code2
-                
-                for code in trip_codes:
-                    if code in code_coords:
-                        lat, lon = code_coords[code]
-                        dist1 = haversine_distance(lat, lon, lat1, lon1)
-                        dist2 = haversine_distance(lat, lon, lat2, lon2)
-                        if dist1 <= dist2:
-                            group1.append(code)
-                        else:
-                            group2.append(code)
-                    else:
-                        group1.append(code)  # ไม่มีพิกัด → ใส่กลุ่มแรก
-                
-                # ย้ายกลุ่มที่มีสาขาน้อยกว่าไปทริปใหม่
-                if len(group1) > 0 and len(group2) > 0:
-                    if len(group1) >= len(group2):
-                        new_trip_num = df['Trip'].max() + 1
-                        for code in group2:
-                            df.loc[df['Code'] == code, 'Trip'] = new_trip_num
-                    else:
-                        new_trip_num = df['Trip'].max() + 1
-                        for code in group1:
-                            df.loc[df['Code'] == code, 'Trip'] = new_trip_num
-        
-        return df
-    
-    # 🔒 ฟังก์ชันแยกสาขาที่อยู่คนละภูมิภาค (nearby vs far)
-    def split_mixed_regions(df):
-        """แยกสาขา nearby (กทม/ปริมณฑล) ออกจากสาขา far (ต่างจังหวัด) ในทริปเดียวกัน"""
-        for trip_num in df['Trip'].dropna().unique():
-            trip_data = df[df['Trip'] == trip_num]
-            trip_codes = list(trip_data['Code'].unique())
-            
-            if len(trip_codes) < 2:
-                continue
-            
-            # แยกสาขาตามภูมิภาค
-            codes_nearby = []  # กทม/ปริมณฑล
-            codes_far = []  # ต่างจังหวัด
-            
-            for code in trip_codes:
-                prov = get_province(code)
-                if prov and get_region_type(str(prov)) == 'nearby':
-                    codes_nearby.append(code)
-                else:
-                    codes_far.append(code)
-            
-            # 🚨 ถ้ามีทั้ง nearby และ far → ต้องแยก!
-            if len(codes_nearby) > 0 and len(codes_far) > 0:
-                if len(codes_nearby) >= len(codes_far):
-                    new_trip_num = df['Trip'].max() + 1
-                    for code in codes_far:
-                        df.loc[df['Code'] == code, 'Trip'] = new_trip_num
-                else:
-                    new_trip_num = df['Trip'].max() + 1
-                    for code in codes_nearby:
-                        df.loc[df['Code'] == code, 'Trip'] = new_trip_num
-        
-        return df
-    
     # ★★★ ถ้ามีคอลัมน์ Trip ในไฟล์ ใช้โดยตรงเลย ★★★
     if use_file_trips:
         # ใช้ Trip จากไฟล์โดยตรง
         test_df_result = test_df.copy()
-        
-        # 🔒 แยกสาขาที่มีข้อจำกัดรถออกก่อน
-        test_df_result = split_restricted_branches(test_df_result)
-        
-        # 🔒 แยกสาขาที่อยู่คนละภูมิภาค (nearby vs far)
-        test_df_result = split_mixed_regions(test_df_result)
-        
-        # 🔒 Phase 1.78: แยกสาขาที่ห่างกันเกิน 30km (ป้องกันทริปกระโดด)
-        test_df_result = split_distant_branches(test_df_result, max_distance_km=30)
         
         # ดึงประเภทรถจาก TripNo
         trip_truck_map_file = {}
@@ -2036,23 +1499,11 @@ def predict_trips(test_df, model_data):
             # ตรวจสอบข้อจำกัดของสาขาในทริป
             trip_codes = trip_data['Code'].unique()
             max_vehicles = []
-            has_any_nearby_branch = False  # เช็คกรุงเทพ/ปริมณฑล
             for c in trip_codes:
                 max_vehicles.append(get_max_vehicle_for_branch(c))
-                # เช็คว่าสาขาอยู่ในกรุงเทพ/ปริมณฑลไหม
-                code_data = trip_data[trip_data['Code'] == c]
-                if 'Province' in code_data.columns and len(code_data) > 0:
-                    prov = code_data['Province'].iloc[0]
-                    if prov and pd.notna(prov) and get_region_type(str(prov)) == 'nearby':
-                        has_any_nearby_branch = True
             
             vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
-            min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles) if max_vehicles else 3
-            
-            # 🔒 กรุงเทพ/ปริมณฑล → บังคับ JB หรือ 4W (ห้าม 6W เด็ดขาด!)
-            if has_any_nearby_branch and min_max_size == 3:
-                min_max_size = 2  # บังคับลงมาเป็น JB
-            
+            min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles)
             max_allowed_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(min_max_size, '6W')
             
 
@@ -2069,8 +1520,7 @@ def predict_trips(test_df, model_data):
                 # If suggested vehicle is not allowed, override to strictest allowed
                 if suggested not in allowed:
                     suggested = allowed[0]
-                    reason = 'กทม/ปริมณฑล' if has_any_nearby_branch else 'จำกัดสาขา'
-                    source = f"📋 ไฟล์ → {suggested} (🔒 {reason})"
+                    source = f"📋 ไฟล์ → {suggested} (🔒 จำกัดสาขา)"
                 else:
                     source = "📋 ไฟล์"
             else:
@@ -2078,8 +1528,7 @@ def predict_trips(test_df, model_data):
                 ai_suggested = suggest_truck(total_w, total_c, max_allowed_vehicle, trip_codes)
                 if ai_suggested not in allowed:
                     suggested = allowed[0]
-                    reason = 'กทม/ปริมณฑล' if has_any_nearby_branch else 'จำกัดสาขา'
-                    source = f"🤖 AI → {suggested} (🔒 {reason})"
+                    source = f"🤖 AI → {suggested} (🔒 จำกัดสาขา)"
                 else:
                     suggested = ai_suggested
                     source = "🤖 AI"
@@ -2091,8 +1540,7 @@ def predict_trips(test_df, model_data):
                     # fallback to JB if possible, else 4W
                     if 'JB' in allowed:
                         suggested = 'JB'
-                        reason = 'กทม/ปริมณฑล' if has_any_nearby_branch else 'จำกัดสาขา'
-                        source = source + f" (🔒 {reason})"
+                        source = source + " (🔒 จำกัดสาขา)"
                     else:
                         suggested = '4W'
                         source = source + " (🔒 จำกัดสาขา)"
@@ -2115,17 +1563,9 @@ def predict_trips(test_df, model_data):
                                 suggested = 'JB'
                                 source = source + " → JB"
                                 w_util, c_util = jb_w_util, jb_c_util
-                            else:
-                                # JB ก็ยังเกิน → ให้เตือน
-                                suggested = 'JB'
-                                source = source + " → JB (🚫 เกินแต่ห้าม 6W)"
-                                w_util, c_util = jb_w_util, jb_c_util
                         # ถ้า JB ก็ยังเกิน ให้เตือนว่าเกิน ไม่ขยายเป็น 6W
                         elif suggested == 'JB':
-                            source = source + " (🚫 เกินขนาดแต่ห้ามใช้ 6W - ต้องแยกทริป)"
-                        elif suggested == '4W' and '4W' in allowed and 'JB' not in allowed:
-                            # สาขาจำกัด 4W เท่านั้น แต่เกิน → ต้องแยกทริป
-                            source = source + " (🚫 4W เกินขนาด - ต้องแยกทริป)"
+                            source = source + " (🚫 เกินขนาดแต่ห้ามใช้ 6W)"
                     else:
                         # ไม่มีข้อจำกัดสาขา สามารถขยายเป็น 6W ได้
                         if suggested == '4W' and 'JB' in LIMITS:
@@ -2152,29 +1592,6 @@ def predict_trips(test_df, model_data):
             trip_codes = trip_data['Code'].unique()
             total_distance = 0  # Skip all distance calculations
             
-            # 🔴 ตรวจสอบว่าทริปผ่านเกณฑ์หรือไม่
-            max_util_check = max(w_util, c_util)
-            trip_issues = []
-            
-            # ปัญหา 1: เกิน 100%
-            if max_util_check > 100:
-                trip_issues.append(f'⛔ เกิน {max_util_check:.0f}%')
-                # ถ้าเกินแล้วห้ามใช้รถใหญ่กว่า → ต้องแยกทริป
-                if min_max_size < 3:
-                    trip_issues.append('🔧 ต้องแยกทริป')
-            
-            # ปัญหา 2: ใช้รถผิดประเภท (6W ในเขตต้องห้าม)
-            if suggested == '6W' and has_any_nearby_branch:
-                trip_issues.append('⛔ 6W ในกทม/ปริมณฑล')
-            
-            # ปัญหา 3: ใช้รถใหญ่กว่าที่สาขาอนุญาต
-            if suggested == '6W' and min_max_size < 3:
-                trip_issues.append('⛔ 6W ในสาขาจำกัด')
-            elif suggested == 'JB' and min_max_size < 2:
-                trip_issues.append('⛔ JB ในสาขาจำกัด 4W')
-            
-            trip_status = '❌ ไม่ผ่าน: ' + ', '.join(trip_issues) if trip_issues else '✅ ผ่าน'
-            
             summary_data.append({
                 'Trip': int(trip_num),
                 'Branches': len(trip_data['Code'].unique()),
@@ -2183,8 +1600,7 @@ def predict_trips(test_df, model_data):
                 'Truck': f"{suggested} {source}",
                 'Weight_Use%': w_util,
                 'Cube_Use%': c_util,
-                'Total_Distance': total_distance,
-                'TripStatus': trip_status
+                'Total_Distance': total_distance
             })
         
 
@@ -2210,147 +1626,9 @@ def predict_trips(test_df, model_data):
         # 🔒 Final enforcement: Never allow 6W if any branch restricts to 4W/JB
         test_df_result = enforce_vehicle_constraints(test_df_result)
         
-        # 🔍 Validate trip grouping - เพิ่มคอลัมน์ TripValidation
-        def validate_trip_grouping(row):
-            """ตรวจสอบว่าสาขาในทริปนี้ควรอยู่ด้วยกันหรือไม่"""
-            trip_num = row['Trip']
-            code = row['Code']
-            if pd.isna(trip_num):
-                return '❓ ไม่มีทริป'
-            
-            trip_data = test_df_result[test_df_result['Trip'] == trip_num]
-            trip_codes = [c for c in trip_data['Code'].unique() if c != code]
-            
-            if len(trip_codes) == 0:
-                return '✅ สาขาเดี่ยว'
-            
-            issues = []
-            valid_reasons = []
-            
-            # เช็ค 1: เคยไปด้วยกันในประวัติ?
-            paired_with_history = False
-            for other_code in trip_codes:
-                pair = tuple(sorted([code, other_code]))
-                if pair in trip_pairs:
-                    paired_with_history = True
-                    break
-            
-            if paired_with_history:
-                valid_reasons.append('📜 ประวัติ')
-            
-            # เช็ค 2: Reference เดียวกัน?
-            same_reference = False
-            code_ref = LOCATION_CODE_TO_REF.get(code)
-            if code_ref:
-                for other_code in trip_codes:
-                    other_ref = LOCATION_CODE_TO_REF.get(other_code)
-                    if other_ref and code_ref == other_ref:
-                        same_reference = True
-                        break
-            
-            if same_reference:
-                valid_reasons.append('🏠 Reference')
-            
-            # เช็ค 3: ตำบลเดียวกัน?
-            same_subdistrict = False
-            code_data = test_df_result[test_df_result['Code'] == code]
-            my_subdistrict = code_data['Subdistrict'].iloc[0] if 'Subdistrict' in code_data.columns and len(code_data) > 0 else None
-            if my_subdistrict and pd.notna(my_subdistrict):
-                for other_code in trip_codes:
-                    other_data = test_df_result[test_df_result['Code'] == other_code]
-                    other_subdist = other_data['Subdistrict'].iloc[0] if 'Subdistrict' in other_data.columns and len(other_data) > 0 else None
-                    if other_subdist and my_subdistrict == other_subdist:
-                        same_subdistrict = True
-                        break
-            
-            if same_subdistrict:
-                valid_reasons.append('📍 ตำบล')
-            
-            # เช็ค 4: ระยะทางใกล้กันพอ?
-            close_distance = False
-            # ดึงพิกัดจาก MASTER_DATA
-            code_lat, code_lon = None, None
-            if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
-                master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
-                if len(master_row) > 0:
-                    code_lat = master_row.iloc[0].get('ละติจูด', None)
-                    code_lon = master_row.iloc[0].get('ลองติจูด', None)
-            
-            if code_lat and code_lon and pd.notna(code_lat) and pd.notna(code_lon):
-                for other_code in trip_codes:
-                    other_lat, other_lon = None, None
-                    if not MASTER_DATA.empty:
-                        other_row = MASTER_DATA[MASTER_DATA['Plan Code'] == other_code]
-                        if len(other_row) > 0:
-                            other_lat = other_row.iloc[0].get('ละติจูด', None)
-                            other_lon = other_row.iloc[0].get('ลองติจูด', None)
-                    if other_lat and other_lon and pd.notna(other_lat) and pd.notna(other_lon):
-                        try:
-                            dist = haversine_distance(float(code_lat), float(code_lon), float(other_lat), float(other_lon))
-                            if dist <= MAX_DISTANCE_IN_TRIP:
-                                close_distance = True
-                                break
-                        except:
-                            pass
-            
-            if close_distance:
-                valid_reasons.append('📏 ใกล้')
-            
-            # 🔴 เช็ค 5: จังหวัดต่างกันมาก? (ภาคเหนือ + ภาคใต้ = ไม่ควรรวม)
-            different_regions = False
-            my_province = code_data['Province'].iloc[0] if 'Province' in code_data.columns and len(code_data) > 0 else None
-            my_region = get_region_type(str(my_province)) if my_province and pd.notna(my_province) else None
-            
-            for other_code in trip_codes:
-                other_data = test_df_result[test_df_result['Code'] == other_code]
-                other_province = other_data['Province'].iloc[0] if 'Province' in other_data.columns and len(other_data) > 0 else None
-                other_region = get_region_type(str(other_province)) if other_province and pd.notna(other_province) else None
-                
-                # เช็คว่าภาคต่างกันมากไหม (north + south = ไม่ควรรวม)
-                if my_region and other_region:
-                    if (my_region == 'north' and other_region == 'south') or (my_region == 'south' and other_region == 'north'):
-                        different_regions = True
-                        issues.append(f'🚫 {my_province} + {other_province}')
-                        break
-            
-            # สรุปผล
-            if issues:
-                return '❌ ' + ', '.join(issues)
-            elif valid_reasons:
-                return '✅ ' + ', '.join(valid_reasons)
-            else:
-                return '⚠️ ไม่พบเหตุผลจับคู่'
-        
-        test_df_result['TripValidation'] = test_df_result.apply(validate_trip_grouping, axis=1)
-        
-        # 🆕 เพิ่มคอลัมน์แสดงสาขาที่อยู่ในทริปเดียวกัน
-        def get_trip_partners(row):
-            """แสดงสาขาอื่นที่อยู่ในทริปเดียวกัน"""
-            trip_num = row['Trip']
-            code = row['Code']
-            if pd.isna(trip_num):
-                return ''
-            
-            trip_data = test_df_result[test_df_result['Trip'] == trip_num]
-            trip_codes = [c for c in trip_data['Code'].unique() if c != code]
-            
-            if len(trip_codes) == 0:
-                return '(สาขาเดี่ยว)'
-            
-            # แสดงรหัสสาขาที่อยู่ด้วยกัน
-            return ', '.join(trip_codes[:5]) + ('...' if len(trip_codes) > 5 else '')
-        
-        test_df_result['TripPartners'] = test_df_result.apply(get_trip_partners, axis=1)
-        
-        # 🔴 เพิ่มคอลัมน์ TripStatus จาก summary_df
-        trip_status_map = {}
-        for _, row in summary_df.iterrows():
-            trip_status_map[row['Trip']] = row['TripStatus']
-        test_df_result['TripStatus'] = test_df_result['Trip'].map(trip_status_map)
-        
         # Mark VehicleCheck if strict constraint enforced
         def vehicle_check_str(row):
-            truck = str(row.get('Truck', '')) if pd.notna(row.get('Truck')) else ''
+            truck = row['Truck']
             if '🔒' in truck or 'บังคับสาขา' in truck:
                 return '🔒 จำกัดสาขา'
             return '✅ ใช้ตามไฟล์'
@@ -2358,36 +1636,64 @@ def predict_trips(test_df, model_data):
 
         return test_df_result, summary_df
     
+    # 🔒 Final enforcement of vehicle constraints
+    def enforce_vehicle_constraints(test_df):
+        """บังคับข้อจำกัดรถขั้นสุดท้าย - ไม่อนุญาต 6W หากสาขาจำกัด 4W/JB หรืออยู่ในปริมณฑล"""
+        vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
+        
+        for trip_num in test_df['Trip'].unique():
+            trip_data = test_df[test_df['Trip'] == trip_num]
+            trip_codes = trip_data['Code'].unique()
+            
+            # 🔒 เช็คจังหวัด - ห้าม 6W ในปริมณฑล!
+            provinces = set()
+            for code in trip_codes:
+                prov = get_province(code) if 'get_province' in dir() else None
+                if not prov and not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                    master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                    if len(master_row) > 0:
+                        prov = master_row.iloc[0].get('จังหวัด', '')
+                if prov and prov != 'UNKNOWN':
+                    provinces.add(prov)
+            
+            all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
+            
+            # ตรวจสอบข้อจำกัดที่เข้มงวดที่สุดในทริป
+            max_vehicles = []
+            for code in trip_codes:
+                max_vehicle = get_max_vehicle_for_branch(code)
+                max_vehicles.append(max_vehicle)
+            
+            min_max_size = min(vehicle_sizes.get(v, 3) for v in max_vehicles)
+            
+            # 🔒 ปริมณฑล = บังคับ JB หรือเล็กกว่า (ห้าม 6W)
+            if all_nearby and min_max_size == 3:
+                min_max_size = 2  # บังคับลงมาเป็น JB
+            
+            # หากมีสาขาใดจำกัด 4W/JB หรืออยู่ในปริมณฑล → ห้าม 6W
+            if min_max_size < 3:
+                # บังคับเปลี่ยนเป็น JB หรือ 4W
+                allowed_vehicle = 'JB' if min_max_size >= 2 else '4W'
+                current_truck = test_df.loc[test_df['Trip'] == trip_num, 'Truck'].iloc[0] if len(test_df[test_df['Trip'] == trip_num]) > 0 else ''
+                if '6W' in str(current_truck):
+                    test_df.loc[test_df['Trip'] == trip_num, 'Truck'] = f'{allowed_vehicle} 🔒 {"ปริมณฑล" if all_nearby else "บังคับสาขา"}'
+        
+        return test_df
+    
     # ถ้าไม่มีคอลัมน์ Trip ให้จัดทริปใหม่
     
     # 🗺️ จัดกลุ่มสาขาตามพิกัดก่อน (Spatial Clustering) + จับคู่สาขาชื่อคล้ายกัน
     def create_distance_based_clusters(codes, max_distance_km=25):
-        """จัดกลุ่มสาขาที่อยู่ใกล้กัน (ไม่เกิน max_distance_km) + บังคับรวมสาขาชื่อคล้ายกัน + บังคับรวม location เดียวกัน"""
+        """จัดกลุ่มสาขาที่อยู่ใกล้กัน (ไม่เกิน max_distance_km) + บังคับรวมสาขาชื่อคล้ายกัน"""
         # ⚡ Speed: Skip clustering if too few codes
         if len(codes) < 10:
             return [codes]  # Return all as one cluster
         
-        # 🔥 Phase 0: จับคู่สาขาที่มี base code เดียวกัน (M862, P862, S862, ZS862 → ต้องอยู่ด้วยกัน)
-        location_groups = {}  # base_code -> [codes]
-        for code in codes:
-            base = get_branch_base_code(code)
-            if base:
-                if base not in location_groups:
-                    location_groups[base] = []
-                location_groups[base].append(code)
-        
-        # สร้างกลุ่มสาขาที่เป็น location เดียวกัน (มี 2+ codes)
-        same_location_groups = [group for group in location_groups.values() if len(group) > 1]
-        grouped_by_location = set()
-        for group in same_location_groups:
-            for code in group:
-                grouped_by_location.add(code)
-        
-        # 🔥 Phase 1: จับคู่สาขาที่มีชื่อคล้ายกัน (เช่น คลองหลวง 3,4,8,10) ให้อยู่กลุ่มเดียวกันเสมอ
+        # 🔥 Phase 0: จับคู่สาขาที่มีชื่อคล้ายกัน (เช่น คลองหลวง 3,4,8,10) ให้อยู่กลุ่มเดียวกันเสมอ
         similar_groups = []  # เก็บกลุ่มสาขาที่ชื่อคล้ายกัน
-        grouped_codes = set(grouped_by_location)  # เริ่มจากสาขาที่ถูกจัดกลุ่มด้วย location แล้ว
+        grouped_codes = set()  # เก็บสาขาที่ถูกจัดกลุ่มแล้ว
         
-        # ตรวจสอบทุกคู่สาขาที่ยังไม่ถูกจัดกลุ่ม
+        # ตรวจสอบทุกคู่สาขา
         for i, code1 in enumerate(codes):
             if code1 in grouped_codes:
                 continue
@@ -2424,7 +1730,7 @@ def predict_trips(test_df, model_data):
                 similar_groups.append(similar_group)
                 grouped_codes.add(code1)
         
-        # สาขาที่เหลือ (ไม่มีชื่อคล้ายกัน และไม่ถูกจัดกลุ่มด้วย location)
+        # สาขาที่เหลือ (ไม่มีชื่อคล้ายกัน)
         remaining_codes = [c for c in codes if c not in grouped_codes]
         
         clusters = []
@@ -2458,8 +1764,8 @@ def predict_trips(test_df, model_data):
             
             clusters.append(cluster)
         
-        # 🔥 เพิ่มกลุ่มสาขา location เดียวกัน + ชื่อคล้ายกันเข้าไป (จะอยู่ข้างหน้าสุด - ส่งก่อน)
-        all_clusters = same_location_groups + similar_groups + clusters
+        # 🔥 เพิ่มกลุ่มสาขาชื่อคล้ายกันเข้าไป (จะอยู่ข้างหน้าสุด - ส่งก่อน)
+        all_clusters = similar_groups + clusters
         
         return all_clusters
     
@@ -2605,7 +1911,7 @@ def predict_trips(test_df, model_data):
             province_cache[code] = 'UNKNOWN'
     
     # 🎯 จัดกลุ่มตามพิกัดก่อน (เพิ่มรัศมีสูง - ขอบเขตใหญ่ขึ้น)
-    spatial_clusters = create_distance_based_clusters(all_codes, max_distance_km=25)
+    spatial_clusters = create_distance_based_clusters(all_codes, max_distance_km=60)
     
     # 🔒 ฟังก์ชันเช็คระยะทางจากสาขาใหม่ไปยังทุกสาขาในทริป (FAST VERSION)
     def check_distance_to_all_trip_branches(new_code, trip_codes, max_dist=40):
@@ -2780,12 +2086,10 @@ def predict_trips(test_df, model_data):
     def group_by_name_and_subdistrict(codes):
         """
         จัดกลุ่มสาขาตามลำดับ แล้วเรียงตามระยะทาง nearest neighbor:
-        🔥 ลำดับใหม่: ตำบล > ชื่อ > อำเภอ > จังหวัด
-        0. 🆕 ตำบลเดียวกัน + จังหวัดเดียวกัน (สำคัญที่สุด - บังคับรวม)
-        1. ชื่อเหมือนกัน + ตำบลเดียวกัน + จังหวัดเดียวกัน
-        2. ชื่อเหมือนกัน + อำเภอเดียวกัน + จังหวัดเดียวกัน
-        3. ตำบลเดียวกัน (แม้ชื่อต่าง) → รวมก่อน
-        4. อำเภอเดียวกัน + จังหวัดเดียวกัน
+        1. ชื่อเหมือนกัน + ตำบลเดียวกัน + จังหวัดเดียวกัน (สำคัญที่สุด)
+        2. ชื่อเหมือนกัน + จังหวัดเดียวกัน
+        3. ชื่อเหมือนกัน (ต่างจังหวัด)
+        4. จังหวัด + อำเภอเดียวกัน
         5. จังหวัดเดียวกัน
         6. ที่เหลือ
         
@@ -2801,32 +2105,25 @@ def predict_trips(test_df, model_data):
             district = district_cache.get(code, '')
             province = province_cache.get(code, '')
             
-            # 🔥 สร้าง group key - ใช้ลำดับความสำคัญ (เลขน้อย = สำคัญกว่า)
-            # ให้ความสำคัญกับตำบลเดียวกันก่อน!
-            if subdistrict and province:
-                # ลำดับ 0: ตำบลเดียวกัน + จังหวัดเดียวกัน (🔥 สำคัญที่สุด - บังคับรวม)
-                key = (0, province, district, '', subdistrict)
-            elif base_name and subdistrict and province:
-                # ลำดับ 1: ชื่อ + ตำบล + จังหวัด
+            # สร้าง group key - ใช้ลำดับความสำคัญ (เลขน้อย = สำคัญกว่า)
+            if base_name and subdistrict and province:
+                # ลำดับ 1: ชื่อ + ตำบล + จังหวัด (เหมาะสมที่สุด)
                 key = (1, province, district, base_name, subdistrict)
-            elif base_name and district and province:
-                # ลำดับ 2: ชื่อ + อำเภอ + จังหวัด
-                key = (2, province, district, base_name, '')
             elif base_name and province:
-                # ลำดับ 3: ชื่อ + จังหวัด
-                key = (3, province, district, base_name, '')
+                # ลำดับ 2: ชื่อ + จังหวัด (🔥 สำคัญมาก - รวมสาขาชื่อเดียวกัน)
+                key = (2, province, district, base_name, '')
             elif base_name:
-                # ลำดับ 4: ชื่อเดียวกัน (แม้ต่างจังหวัด - เช่น โลตัส กทม กับ โลตัส ชลบุรี)
-                key = (4, province, '', base_name, '')
+                # ลำดับ 3: ชื่อเดียวกัน (แม้ต่างจังหวัด - เช่น โลตัส กทม กับ โลตัส ชลบุรี)
+                key = (3, province, '', base_name, '')
             elif province and district:
-                # ลำดับ 5: จังหวัด + อำเภอ (รวมสาขาในอำเภอเดียวกัน)
-                key = (5, province, district, '', '')
+                # ลำดับ 4: จังหวัด + อำเภอ (รวมสาขาในอำเภอเดียวกัน)
+                key = (4, province, district, '', '')
             elif province:
-                # ลำดับ 6: จังหวัดเดียวกัน
-                key = (6, province, '', '', '')
+                # ลำดับ 5: จังหวัดเดียวกัน
+                key = (5, province, '', '', '')
             else:
-                # ลำดับ 7: ที่เหลือ
-                key = (7, province if province else code, '', '', '', '')
+                # ลำดับ 6: ที่เหลือ
+                key = (6, province if province else code, '', '', '', '')
             
             if key not in groups:
                 groups[key] = []
@@ -2929,360 +2226,525 @@ def predict_trips(test_df, model_data):
         
         return result
     
-    # 🔒 Define helper functions ก่อน loop
+    # แปลงกลุ่มเป็น list ของ codes ที่เรียงตามชื่อ+ตำบล แล้ว nearest neighbor
+    all_codes = []
+    for cluster in spatial_clusters:
+        # 🆕 จัดกลุ่มตามชื่อ+ตำบลก่อน แล้วเรียง nearest neighbor
+        ordered_cluster = group_by_name_and_subdistrict(cluster)
+        all_codes.extend(ordered_cluster)
+    
+    # 🔒 Define helper functions ก่อน loop เพื่อใช้ทั้ง loop และหลัง loop
     def get_province(branch_code):
         return province_cache.get(branch_code, 'UNKNOWN')
-    
-    def get_distance_from_dc(code):
-        """คำนวณระยะทางจาก DC"""
-        lat, lon = coord_cache.get(code, (None, None))
-        if lat and lon:
-            return haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
-        return 0  # ไม่มีพิกัด ถือว่าใกล้ DC
-    
-    # 🚀 **NEW ALGORITHM: เรียงสาขาตามพิกัดก่อน + เช็คข้อห้ามรถ**
-    # 🔥 Phase 1.77: เรียงสาขาตาม Nearest Neighbor จาก DC ก่อนจัดกลุ่ม
-    # เพื่อป้องกันไม่ให้ทริปกระโดดไปมา (วังน้อย → กทม → วังน้อย)
-    # 1. เรียงสาขาตามพิกัด (ใกล้กันอยู่ติดกัน)
-    # 2. วนทีละสาขาตามลำดับที่เรียงแล้ว
-    # 3. เช็คว่าเพิ่มเข้าทริปปัจจุบันได้ไหม (capacity + ระยะทาง + ข้อห้ามรถ)
-    # 4. ถ้าได้ → เพิ่มเข้าทริป
-    # 5. ถ้าไม่ได้ → ตัดทริปใหม่
-    
-    # 🔥 เรียงสาขาตามพิกัด: ใช้ group_by_name_and_subdistrict + Nearest Neighbor
-    all_codes_original = test_df['Code'].unique().tolist()
-    
-    # ใช้ฟังก์ชัน group_by_name_and_subdistrict ที่มี nearest neighbor อยู่แล้ว
-    all_codes_ordered = group_by_name_and_subdistrict(all_codes_original)
-    all_codes = all_codes_ordered.copy()
     
     def get_lat_lon(branch_code):
         return coord_cache.get(branch_code, (None, None))
     
-    # **Main Loop: Farthest First + Nearest Neighbor**
     while all_codes:
-        # ⏱️ Early stopping - ถ้าใช้เวลามากกว่า MAX_PROCESSING_TIME
+        # ⏱️ Early stopping - ถ้าใช้เวลามากกว่า 50 วินาที
         if time.time() - start_time > MAX_PROCESSING_TIME:
-            # จัดสาขาที่เหลือเข้าทริปใหม่คนละคัน
-            for remaining_code in all_codes:
-                assigned_trips[remaining_code] = trip_counter
-                trip_counter += 1
+            # จัดส่งสาขาที่เหลือเข้าทริปที่ใกล้ที่สุด (แบบเร็ว)
+            if 'Trip' in test_df.columns:
+                for remaining_code in all_codes:
+                    closest_trip, _ = find_closest_trip_for_branch(
+                        remaining_code, 
+                        {t: test_df[test_df['Trip'] == t]['Code'].tolist() for t in test_df['Trip'].unique() if pd.notna(t)}
+                    )
+                    if closest_trip:
+                        test_df.loc[test_df['Code'] == remaining_code, 'Trip'] = closest_trip
+                    else:
+                        test_df.loc[test_df['Code'] == remaining_code, 'Trip'] = trip_counter
+                        trip_counter += 1
             break
         
-        # 🎯 Pop สาขาแรก (ไกลสุดจาก DC)
         seed_code = all_codes.pop(0)
         current_trip = [seed_code]
         assigned_trips[seed_code] = trip_counter
         
+        processed += 1
+        
+        # ฟังก์ชันดึงจังหวัดจาก cache
+        def get_province(branch_code):
+            return province_cache.get(branch_code, 'UNKNOWN')
+        
+        # ฟังก์ชันดึงพิกัดจาก cache
+        def get_lat_lon(branch_code):
+            return coord_cache.get(branch_code, (None, None))
+        
+        # 🎯 STRICT GROUPING: หาสาขาที่มี name+subdistrict+district+province เหมือนกับ seed_code
+        # และเพิ่มเข้าทริปก่อนที่จะพิจารณาสาขาอื่น
+        seed_base_name = get_base_name(test_df[test_df['Code'] == seed_code]['Name'].iloc[0] if 'Name' in test_df.columns else '')
         seed_province = get_province(seed_code)
+        
+        # ดึงข้อมูล subdistrict และ district ของ seed
+        seed_subdistrict = ''
+        seed_district = ''
+        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+            seed_master = MASTER_DATA[MASTER_DATA['Plan Code'] == seed_code]
+            if len(seed_master) > 0:
+                seed_m = seed_master.iloc[0]
+                seed_subdistrict = str(seed_m['ตำบล']).strip() if 'ตำบล' in seed_m.index and pd.notna(seed_m['ตำบล']) else ''
+                seed_district = str(seed_m['อำเภอ']).strip() if 'อำเภอ' in seed_m.index and pd.notna(seed_m['อำเภอ']) else ''
+        
+        # หาสาขาที่ตรงกันทั้งหมดและเพิ่มเข้าทริปทันที
+        matching_codes = []
+        
+        # 🔍 Debug: แสดงข้อมูล seed
+        if seed_base_name == "ฟิวเจอร์รังสิต":
+            print(f"\n🔍 Seed: {seed_code} ({seed_base_name}) - ตำบล:{seed_subdistrict} อำเภอ:{seed_district} จังหวัด:{seed_province}")
+        
+        for code in all_codes[:]:  # iterate over copy
+            code_base_name = get_base_name(test_df[test_df['Code'] == code]['Name'].iloc[0] if 'Name' in test_df.columns else '')
+            code_province = get_province(code)
+            
+            # ดึงข้อมูล subdistrict และ district ของ code
+            code_subdistrict = ''
+            code_district = ''
+            if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                code_master = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                if len(code_master) > 0:
+                    code_m = code_master.iloc[0]
+                    code_subdistrict = str(code_m['ตำบล']).strip() if 'ตำบล' in code_m.index and pd.notna(code_m['ตำบล']) else ''
+                    code_district = str(code_m['อำเภอ']).strip() if 'อำเภอ' in code_m.index and pd.notna(code_m['อำเภอ']) else ''
+            
+            # 🔍 Debug: แสดงสาขาที่เช็ค
+            if seed_base_name == "ฟิวเจอร์รังสิต" and code_base_name == "ฟิวเจอร์รังสิต":
+                match = (code_base_name == seed_base_name and 
+                        code_subdistrict == seed_subdistrict and 
+                        code_district == seed_district and 
+                        code_province == seed_province and
+                        code_subdistrict != '' and code_district != '')
+                print(f"  → {code} ({code_base_name}) - ตำบล:{code_subdistrict} อำเภอ:{code_district} จังหวัด:{code_province} - Match: {match}")
+            
+            # เช็คว่าตรงกันทั้งหมดหรือไม่ (name + subdistrict + district + province)
+            if (code_base_name == seed_base_name and 
+                code_subdistrict == seed_subdistrict and 
+                code_district == seed_district and 
+                code_province == seed_province and
+                code_subdistrict != '' and  # ต้องมีข้อมูลตำบล
+                code_district != ''):  # ต้องมีข้อมูลอำเภอ
+                matching_codes.append(code)
+        
+        # 🔍 Debug: แสดงผลลัพธ์
+        if seed_base_name == "ฟิวเจอร์รังสิต":
+            print(f"  ✅ Matching codes: {matching_codes}")
+            print(f"  📦 Trip {trip_counter}: {[seed_code] + matching_codes}")
+        
+        # เพิ่มสาขาที่ตรงกันทั้งหมดเข้าทริปก่อน
+        for code in matching_codes:
+            current_trip.append(code)
+            assigned_trips[code] = trip_counter
+            all_codes.remove(code)
+        
+        remaining = all_codes[:]
+        recommended_vehicle = None  # รถที่แนะนำสำหรับทริปนี้
+        
+        # ข้อมูลจังหวัดของ seed
+        seed_name = test_df[test_df['Code'] == seed_code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
+        
+        # จัดเรียง remaining ตามลำดับ: ชื่อคล้ายกัน → พิกัดใกล้กัน → ประวัติร่วม
+        code_to_index = {row['Code']: idx for idx, row in test_df.iterrows()} if 'Code' in test_df.columns else {}
+        
+        # 🔒 คำนวณระยะทางจาก seed ไว้ล่วงหน้า
         seed_lat, seed_lon = coord_cache.get(seed_code, (None, None))
         
-        # คำนวณ Weight/Cube ปัจจุบัน
-        current_weight = test_df[test_df['Code'] == seed_code]['Weight'].sum()
-        current_cube = test_df[test_df['Code'] == seed_code]['Cube'].sum()
-        
-        # กำหนดขีดจำกัด (เริ่มจาก 6W)
-        max_cube = LIMITS['6W']['max_c'] * BUFFER  # 20 cube
-        max_weight = LIMITS['6W']['max_w'] * BUFFER  # 6000 kg
-        
-        seed_subdistrict = subdistrict_cache.get(seed_code, '')
-        seed_district = district_cache.get(seed_code, '')
-        
-        # 🔥🔥🔥 ขั้นตอนที่ 0: หาสาขาที่ต้องไปด้วยกัน (Reference เดียวกัน / เคยไปด้วยกัน / ตำบลเดียวกัน)
-        # 🔒 เช็คข้อห้ามรถของ seed ก่อน
-        seed_max_vehicle = get_max_vehicle_for_branch(seed_code)
-        
-        # 🔥 เช็คว่าเป็นภาคที่ต้องใช้ 6W หรือไม่ (เหนือ/ใต้/อีสาน)
-        seed_region = get_region_type(seed_province) if seed_province else 'unknown'
-        is_far_region = seed_region in ['north', 'south', 'far']  # ภาคที่ใช้ 6W ได้
-        
-        if seed_max_vehicle == '4W':
-            max_cube = LIMITS['4W']['max_c'] * BUFFER
-            max_weight = LIMITS['4W']['max_w'] * BUFFER
-        elif seed_max_vehicle == 'JB':
-            max_cube = LIMITS['JB']['max_c'] * BUFFER
-            max_weight = LIMITS['JB']['max_w'] * BUFFER
-        elif is_far_region:
-            # 🔥 ภาคไกล (เหนือ/ใต้/อีสาน) → ใช้ 6W ให้เต็ม 20 cube
-            max_cube = LIMITS['6W']['max_c'] * BUFFER  # 20 cube
-            max_weight = LIMITS['6W']['max_w'] * BUFFER  # 6000 kg
-        
-        # 🆕 ลำดับที่ 0.1: หาสาขาที่มี Reference เดียวกัน (อยู่ที่เดียวกัน)
-        seed_ref = LOCATION_CODE_TO_REF.get(seed_code, '')
-        if seed_ref:
-            same_ref_codes = [c for c in all_codes if LOCATION_CODE_TO_REF.get(c, '') == seed_ref]
-            for same_code in same_ref_codes:
-                next_weight = test_df[test_df['Code'] == same_code]['Weight'].sum()
-                next_cube = test_df[test_df['Code'] == same_code]['Cube'].sum()
-                
-                # เช็คข้อห้ามรถ
-                branch_max = get_max_vehicle_for_branch(same_code)
-                temp_max_cube = max_cube
-                temp_max_weight = max_weight
-                if branch_max == '4W':
-                    temp_max_cube = min(max_cube, LIMITS['4W']['max_c'] * BUFFER)
-                    temp_max_weight = min(max_weight, LIMITS['4W']['max_w'] * BUFFER)
-                elif branch_max == 'JB' and seed_max_vehicle == '6W':
-                    temp_max_cube = min(max_cube, LIMITS['JB']['max_c'] * BUFFER)
-                    temp_max_weight = min(max_weight, LIMITS['JB']['max_w'] * BUFFER)
-                
-                if current_cube + next_cube <= temp_max_cube and current_weight + next_weight <= temp_max_weight:
-                    all_codes.remove(same_code)
-                    current_trip.append(same_code)
-                    assigned_trips[same_code] = trip_counter
-                    current_weight += next_weight
-                    current_cube += next_cube
-                    max_cube = temp_max_cube
-                    max_weight = temp_max_weight
-        
-        # 🆕 ลำดับที่ 0.2: หาสาขาที่เคยไปด้วยกันในประวัติ (trip_pairs)
-        for pair_code in list(all_codes):
-            pair_key = tuple(sorted([seed_code, pair_code]))
-            if pair_key in trip_pairs:
-                next_weight = test_df[test_df['Code'] == pair_code]['Weight'].sum()
-                next_cube = test_df[test_df['Code'] == pair_code]['Cube'].sum()
-                
-                # เช็คข้อห้ามรถ
-                branch_max = get_max_vehicle_for_branch(pair_code)
-                temp_max_cube = max_cube
-                temp_max_weight = max_weight
-                if branch_max == '4W':
-                    temp_max_cube = min(max_cube, LIMITS['4W']['max_c'] * BUFFER)
-                    temp_max_weight = min(max_weight, LIMITS['4W']['max_w'] * BUFFER)
-                elif branch_max == 'JB' and seed_max_vehicle == '6W':
-                    temp_max_cube = min(max_cube, LIMITS['JB']['max_c'] * BUFFER)
-                    temp_max_weight = min(max_weight, LIMITS['JB']['max_w'] * BUFFER)
-                
-                if current_cube + next_cube <= temp_max_cube and current_weight + next_weight <= temp_max_weight:
-                    all_codes.remove(pair_code)
-                    current_trip.append(pair_code)
-                    assigned_trips[pair_code] = trip_counter
-                    current_weight += next_weight
-                    current_cube += next_cube
-                    max_cube = temp_max_cube
-                    max_weight = temp_max_weight
-        
-        # 🆕 ลำดับที่ 0.3: หาสาขาตำบลเดียวกัน
-        if seed_subdistrict:
-            # หาสาขาทั้งหมดที่อยู่ตำบลเดียวกัน
-            same_sd_codes = [c for c in all_codes if subdistrict_cache.get(c, '') == seed_subdistrict]
-            # เรียงตามระยะจาก seed
-            if same_sd_codes and seed_lat and seed_lon:
-                same_sd_codes.sort(key=lambda c: haversine_distance(
-                    seed_lat, seed_lon, 
-                    *coord_cache.get(c, (seed_lat, seed_lon))
-                ))
+        def get_priority(code):
+            """คำนวณความสำคัญของสาขา - เน้นตำบล+อำเภอ+ชื่อ+ระยะทาง"""
+            code_name = test_df[test_df['Code'] == code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
+            code_index = code_to_index.get(code, 999999)
+            seed_index = code_to_index.get(seed_code, 0)
             
-            # เพิ่มสาขาตำบลเดียวกันเข้าทริป (ถ้า capacity พอ และ ข้อห้ามรถตรงกัน)
-            for same_code in same_sd_codes:
-                next_weight = test_df[test_df['Code'] == same_code]['Weight'].sum()
-                next_cube = test_df[test_df['Code'] == same_code]['Cube'].sum()
-                
-                # 🔒 เช็คข้อห้ามรถของสาขาใหม่
-                branch_max = get_max_vehicle_for_branch(same_code)
-                if branch_max == '4W':
-                    # ถ้าสาขาใหม่ใช้ได้แค่ 4W → ต้องปรับ limit ลง
-                    if current_cube + next_cube > LIMITS['4W']['max_c'] * BUFFER:
-                        continue
-                    if current_weight + next_weight > LIMITS['4W']['max_w'] * BUFFER:
-                        continue
-                    max_cube = LIMITS['4W']['max_c'] * BUFFER
-                    max_weight = LIMITS['4W']['max_w'] * BUFFER
-                elif branch_max == 'JB' and seed_max_vehicle == '6W':
-                    # ถ้าสาขาใหม่ใช้ได้ถึง JB แต่ seed ใช้ 6W ได้ → ปรับ limit เป็น JB
-                    if current_cube + next_cube > LIMITS['JB']['max_c'] * BUFFER:
-                        continue
-                    max_cube = LIMITS['JB']['max_c'] * BUFFER
-                    max_weight = LIMITS['JB']['max_w'] * BUFFER
-                
-                if current_cube + next_cube <= max_cube and current_weight + next_weight <= max_weight:
-                    all_codes.remove(same_code)
-                    current_trip.append(same_code)
-                    assigned_trips[same_code] = trip_counter
-                    current_weight += next_weight
-                    current_cube += next_cube
-        
-        # 🔄 หาสาขาถัดไปที่ใกล้สุด (ระยะจากสาขาสุดท้าย ≤ MAX_DISTANCE_IN_TRIP)
-        # 🆕 ให้ความสำคัญกับตำบลเดียวกันก่อน
-        
-        while all_codes:
-            best_code = None
-            best_dist = 9999
-            best_same_subdistrict = False
-            best_same_district = False
+            # คำนวณระยะทางจาก seed
+            code_lat, code_lon = coord_cache.get(code, (None, None))
+            dist_from_seed = 9999
+            if seed_lat and code_lat:
+                dist_from_seed = haversine_distance(seed_lat, seed_lon, code_lat, code_lon)
             
-            # หาสาขาที่ใกล้ที่สุดจากสาขาสุดท้ายในทริป
-            last_code = current_trip[-1]
-            last_lat, last_lon = coord_cache.get(last_code, (None, None))
-            last_subdistrict = subdistrict_cache.get(last_code, '')
-            last_district = district_cache.get(last_code, '')
-            last_province = get_province(last_code)
+            # เช็คชื่อคล้ายกัน
+            names_similar = is_similar_name(seed_name, code_name, similarity_threshold=85)
             
-            for code in all_codes:
-                code_province = get_province(code)
+            # 🆕 เช็คตำบล+อำเภอจาก Master
+            same_subdistrict = False
+            same_district = False
+            if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                seed_master = MASTER_DATA[MASTER_DATA['Plan Code'] == seed_code]
+                code_master = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                
+                if len(seed_master) > 0 and len(code_master) > 0:
+                    seed_m = seed_master.iloc[0]
+                    code_m = code_master.iloc[0]
+                    
+                    code_subdistrict = str(code_m['ตำบล']).strip() if 'ตำบล' in code_m.index and pd.notna(code_m['ตำบล']) else ''
+                    code_district = str(code_m['อำเภอ']).strip() if 'อำเภอ' in code_m.index and pd.notna(code_m['อำเภอ']) else ''
+                    
+                    # เปรียบเทียบกับ seed ที่ดึงไว้แล้ว
+                    if seed_subdistrict and code_subdistrict and seed_subdistrict == code_subdistrict:
+                        same_subdistrict = True
+                    if seed_district and code_district and seed_district == code_district:
+                        same_district = True
+            
+            # 🎯 ลำดับความสำคัญ: ตำบล → ชื่อ+ระยะทาง → ระยะทาง
+            
+            # ✅ ลำดับ 0: ตำบลเดียวกัน + ชื่อเดียวกัน - ต้องอยู่ด้วยกันแน่นอน
+            if same_subdistrict and names_similar:
+                return (0, dist_from_seed, code_index)
+            
+            # ✅ ลำดับ 1: ตำบลเดียวกัน (แม้ชื่อต่างกัน)
+            if same_subdistrict:
+                return (1, dist_from_seed, code_index)
+            
+            # ✅ ลำดับ 2: ชื่อเดียวกัน + อำเภอเดียวกัน
+            if names_similar and same_district:
+                return (2, dist_from_seed, code_index)
+            
+            # ✅ ลำดับ 3: ชื่อเดียวกัน + ใกล้มาก (< 10km)
+            if names_similar and dist_from_seed < 10:
+                return (3, dist_from_seed, code_index)
+            
+            # ✅ ลำดับ 4: อำเภอเดียวกัน + ใกล้มาก (< 10km)
+            if same_district and dist_from_seed < 10:
+                return (4, dist_from_seed, code_index)
+            
+            # ✅ ลำดับ 5: ใกล้มากๆ (< 5km) - ห้ามข้าม!
+            if dist_from_seed < 5:
+                return (5, dist_from_seed, code_index)
+            
+            # ✅ ลำดับ 6: ใกล้พอสมควร (5-15km) - เส้นทางต่อเนื่อง
+            if dist_from_seed < 15:
+                return (6, dist_from_seed, code_index)
+            
+            # ✅ ลำดับ 7: ชื่อคล้ายกัน + ไม่ไกลมาก (15-25km)
+            if names_similar and dist_from_seed < 25:
+                return (7, dist_from_seed, code_index)
+            
+            # ✅ ลำดับ 8: มีประวัติร่วมกัน + ระยะปานกลาง (< 30km)
+            pair = tuple(sorted([str(seed_code), str(code)]))
+            if pair in trip_pairs and dist_from_seed < 30:
+                return (8, dist_from_seed, code_index)
+            
+            # ✅ ลำดับ 9: ระยะปานกลาง (15-30km)
+            if dist_from_seed < 30:
+                return (9, dist_from_seed, code_index)
+            
+            # ⚠️ ลำดับ 10: ชื่อคล้ายกันแต่ไกลมาก (>25km)
+            if names_similar and dist_from_seed >= 25:
+                return (10, dist_from_seed, code_index)
+            
+            # ❌ ลำดับ 11: ไกลมาก (>30km)
+            return (11, dist_from_seed, code_index)
+        
+        remaining_sorted = sorted(remaining, key=get_priority)
+        
+        for code in remaining_sorted:
+            pair = tuple(sorted([str(seed_code), str(code)]))  # Convert to str for comparison
+            code_province = get_province(code)
+            
+            # 🔒 เช็คว่าสาขานี้ใกล้กับทริปปัจจุบันจริงๆ หรือมีทริปอื่นที่ใกล้กว่า
+            if len(current_trip) >= 3:  # เช็คเฉพาะเมื่อทริปมีสาขา >= 3
+                # หาระยะเฉลี่ยจากสาขานี้ไปยังสาขาในทริปปัจจุบัน
                 code_lat, code_lon = coord_cache.get(code, (None, None))
-                code_subdistrict = subdistrict_cache.get(code, '')
-                code_district = district_cache.get(code, '')
+                if code_lat:
+                    current_trip_distances = []
+                    for trip_code in current_trip:
+                        trip_lat, trip_lon = coord_cache.get(trip_code, (None, None))
+                        if trip_lat:
+                            dist = haversine_distance(code_lat, code_lon, trip_lat, trip_lon)
+                            current_trip_distances.append(dist)
+                    
+                    if current_trip_distances:
+                        avg_dist_current = sum(current_trip_distances) / len(current_trip_distances)
+                        max_dist_current = max(current_trip_distances)
+                        
+                        # 🚨 เข้มงวดขึ้น: ระยะเฉลี่ย > 15km หรือ ระยะไกลสุด > 25km → ข้าม
+                        if avg_dist_current > 15 or max_dist_current > 25:
+                            continue
+            
+            # ⚡ Skip: ไม่เช็ค MAX_BRANCHES_PER_TRIP ที่นี่ (จะเช็คตอน Phase 2)
+            
+            # ดึงชื่อสาขาก่อนเพื่อใช้เช็คชื่อคล้ายกัน
+            seed_name = test_df[test_df['Code'] == seed_code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
+            code_name = test_df[test_df['Code'] == code]['Name'].iloc[0] if 'Name' in test_df.columns else ''
+            names_are_similar = is_similar_name(seed_name, code_name)
+            
+            # กฎการเช็คจังหวัด/พื้นที่ - เช็คจังหวัดก่อนเสมอ:
+            # 1. เช็คจังหวัดก่อน - ต้องเป็นจังหวัดเดียวกัน (ไม่มีข้อยกเว้น)
+            # 2. ถ้าชื่อคล้ายกัน → อนุญาต (ไม่เช็คระยะทาง)
+            # 3. ถ้ามีประวัติร่วมกัน → อนุญาต (ไม่เช็คระยะทาง)
+            # 4. อื่นๆ → เช็คระยะทาง (ต้องอยู่ใกล้กันภายใน 20 กม.)
+            
+            has_history = pair in trip_pairs
+            
+            # เช็คจังหวัด (ยกเว้นกรณีตำบลใกล้กัน)
+            different_province = False
+            if seed_province == 'UNKNOWN' or code_province == 'UNKNOWN':
+                # ไม่มีข้อมูลจังหวัด - อนุญาตเฉพาะชื่อคล้ายกัน
+                if not names_are_similar:
+                    continue
+            elif seed_province != code_province:
+                # ต่างจังหวัด - ยกเว้นถ้าตำบลใกล้กัน (จะเช็คทีหลัง)
+                different_province = True
+            
+            # ตรวจสอบความเหมาะสมในการรวมกลุ่ม
+            # ลำดับความสำคัญ: 1. ประวัติบุ๊ค  2. ตำบลเดียวกัน  3. ชื่อคล้ายกัน  4. อำเภอเดียวกัน
+            
+            can_pair = False
+            allow_cross_province = False  # อนุญาตข้ามจังหวัดได้หรือไม่
+            
+            # 1. มีประวัติร่วมกัน (Booking History) → รวมได้ทันที (ลำดับแรก)
+            if has_history:
+                can_pair = True
+            # 2. เช็คตำบลจาก Master (ลำดับที่สอง - สำคัญมาก)
+            elif not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                seed_master = MASTER_DATA[MASTER_DATA['Plan Code'] == seed_code]
+                code_master = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
                 
-                if not last_lat or not code_lat:
+                if len(seed_master) > 0 and len(code_master) > 0:
+                    seed_m = seed_master.iloc[0]
+                    code_m = code_master.iloc[0]
+                    
+                    # ใช้ bracket notation แทน .get() เพื่อหลีกเลี่ยง Series.get() error
+                    seed_subdistrict = str(seed_m['ตำบล']).strip() if 'ตำบล' in seed_m.index and pd.notna(seed_m['ตำบล']) else ''
+                    code_subdistrict = str(code_m['ตำบล']).strip() if 'ตำบล' in code_m.index and pd.notna(code_m['ตำบล']) else ''
+                    seed_district = str(seed_m['อำเภอ']).strip() if 'อำเภอ' in seed_m.index and pd.notna(seed_m['อำเภอ']) else ''
+                    code_district = str(code_m['อำเภอ']).strip() if 'อำเภอ' in code_m.index and pd.notna(code_m['อำเภอ']) else ''
+                    
+                    # เช็คตำบลเดียวกัน - อนุญาตข้ามจังหวัดได้
+                    if seed_subdistrict and code_subdistrict and seed_subdistrict == code_subdistrict:
+                        can_pair = True
+                        allow_cross_province = True  # ตำบลเดียวกัน = ข้ามจังหวัดได้
+                    
+                    # ถ้าไม่ใช่ตำบลเดียวกัน → เช็คชื่อคล้ายกัน (ลำดับที่สาม)
+                    elif names_are_similar:
+                        can_pair = True
+                    
+                    # เช็คอำเภอเดียวกัน (ต้องจังหวัดเดียวกันด้วย และต้องไม่ต่างตำบลมาก)
+                    elif seed_district and code_district and seed_district == code_district:
+                        if seed_m.get('จังหวัด', '') == code_m.get('จังหวัด', ''):
+                            # อำเภอเดียวกันแต่ต่างตำบล - รวมได้แต่ระมัดระวัง
+                            can_pair = True
+            
+            # 3. ถ้ายังไม่ผ่าน และชื่อคล้ายกัน → รวมได้
+            elif names_are_similar:
+                can_pair = True
+            
+            # ถ้าต่างจังหวัดและไม่ได้รับอนุญาตข้าม → ข้าม
+            if different_province and not allow_cross_province:
+                continue
+            
+            # 4. ถ้ายังไม่ผ่าน → เช็คระยะทาง (ภายใน 15 กม. เท่านั้น - เข้มงวดขึ้น)
+            if not can_pair:
+                # ดึงพิกัดจาก Master
+                seed_lat, seed_lon = 0, 0
+                code_lat, code_lon = 0, 0
+                
+                if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                    seed_master = MASTER_DATA[MASTER_DATA['Plan Code'] == seed_code]
+                    code_master = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                    
+                    if len(seed_master) > 0:
+                        seed_lat = seed_master.iloc[0].get('ละติจูด', 0)
+                        seed_lon = seed_master.iloc[0].get('ลองติจูด', 0)
+                    
+                    if len(code_master) > 0:
+                        code_lat = code_master.iloc[0].get('ละติจูด', 0)
+                        code_lon = code_master.iloc[0].get('ลองติจูด', 0)
+                
+                # ถ้าไม่มีใน Master ลองดึงจากไฟล์อัปโหลด
+                if seed_lat == 0 and seed_lon == 0 and 'Latitude' in test_df.columns:
+                    seed_lat = test_df[test_df['Code'] == seed_code]['Latitude'].iloc[0] if len(test_df[test_df['Code'] == seed_code]) > 0 else 0
+                    seed_lon = test_df[test_df['Code'] == seed_code]['Longitude'].iloc[0] if len(test_df[test_df['Code'] == seed_code]) > 0 else 0
+                
+                if code_lat == 0 and code_lon == 0 and 'Latitude' in test_df.columns:
+                    code_lat = test_df[test_df['Code'] == code]['Latitude'].iloc[0] if len(test_df[test_df['Code'] == code]) > 0 else 0
+                    code_lon = test_df[test_df['Code'] == code]['Longitude'].iloc[0] if len(test_df[test_df['Code'] == code]) > 0 else 0
+                    
+                    # คำนวณระยะทาง (haversine formula)
+                    if seed_lat != 0 and seed_lon != 0 and code_lat != 0 and code_lon != 0:
+                        import math
+                        lat1, lon1 = math.radians(seed_lat), math.radians(seed_lon)
+                        lat2, lon2 = math.radians(code_lat), math.radians(code_lon)
+                        dlat = lat2 - lat1
+                        dlon = lon2 - lon1
+                        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+                        c = 2 * math.asin(math.sqrt(a))
+                        distance_km = 6371 * c  # รัศมีโลก
+                        
+                        # ลดระยะทางจาก 20km → 15km (เข้มงวดขึ้น)
+                        # ถ้าห่างไม่เกิน 15 กม. = ใกล้กันมาก → รวมได้ (แม้ต่างจังหวัด)
+                        if distance_km <= 15:
+                            can_pair = True
+                            allow_cross_province = True  # ใกล้กันมาก = ข้ามจังหวัดได้
+            
+            # ถ้าไม่ผ่านเงื่อนไขใดๆ → ข้ามสาขานี้
+            if not can_pair:
+                continue
+            
+            # กฎ 1: ถ้าเคยไปด้วยกันในประวัติ = จัดเข้าทริปเดียวกัน + ใช้รถแบบเดิม
+            if pair in trip_pairs:
+                should_pair = True
+                # ดึงข้อมูลรถจากประวัติ
+                if pair in trip_vehicles and recommended_vehicle is None:
+                    vehicle_info = trip_vehicles[pair]
+                    hist_vehicle = vehicle_info.get('most_used') or vehicle_info.get('vehicle', '6W')
+                    
+                    # ตรวจสอบว่าสาขาทั้งสองสามารถใช้รถประเภทนี้ได้หรือไม่
+                    seed_can_use = can_branch_use_vehicle(seed_code, hist_vehicle, branch_vehicles)
+                    code_can_use = can_branch_use_vehicle(code, hist_vehicle, branch_vehicles)
+                    
+                    if seed_can_use and code_can_use:
+                        recommended_vehicle = hist_vehicle
+                    else:
+                        # ถ้าสาขาใดไม่เคยใช้รถประเภทนี้ ให้หารถที่ทั้งคู่เคยใช้ร่วมกัน
+                        seed_most_used = get_most_used_vehicle_for_branch(seed_code, branch_vehicles)
+                        code_most_used = get_most_used_vehicle_for_branch(code, branch_vehicles)
+                        
+                        # เลือกรถที่ใหญ่กว่าที่ทั้งสองเคยใช้
+                        vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
+                        if seed_most_used and code_most_used:
+                            if vehicle_sizes.get(seed_most_used, 0) >= vehicle_sizes.get(code_most_used, 0):
+                                recommended_vehicle = seed_most_used
+                            else:
+                                recommended_vehicle = code_most_used
+            else:
+                # กฎ 2: เช็คชื่อสาขาคล้ายกัน (เช่น นครราชสีมา1, นครราชสีมา2)
+                # (ใช้ names_are_similar ที่คำนวณไว้ข้างบนแล้ว)
+                if names_are_similar:
+                    should_pair = True
+                else:
+                    # กฎ 3: ใช้โมเดล AI ทำนาย (เฉพาะกรณีที่มีข้อมูลจังหวัด และมี model)
+                    if model and seed_province != 'UNKNOWN' and code_province != 'UNKNOWN':
+                        features = create_pair_features(seed_code, code, branch_info)
+                        X = pd.DataFrame([features])
+                        should_pair = model.predict(X)[0] == 1
+                    else:
+                        should_pair = False  # ไม่ใช้ AI ถ้าไม่มี model หรือข้อมูลจังหวัด
+            
+            if should_pair:
+                # คำนวณน้ำหนัก/คิวหลังเพิ่มสาขานี้
+                trip_weight = test_df[test_df['Code'].isin(current_trip + [code])]['Weight'].sum()
+                trip_cube = test_df[test_df['Code'].isin(current_trip + [code])]['Cube'].sum()
+                
+                # ถ้ามีรถแนะนำจากประวัติ ใช้ขีดจำกัดของรถนั้น
+                if recommended_vehicle and recommended_vehicle in LIMITS:
+                    max_w = LIMITS[recommended_vehicle]['max_w'] * BUFFER
+                    max_c = LIMITS[recommended_vehicle]['max_c'] * BUFFER
+                    vehicle_type = recommended_vehicle
+                else:
+                    # ถ้าไม่มี ใช้รถ 6W เป็นค่าเริ่มต้น
+                    max_w = LIMITS['6W']['max_w'] * BUFFER
+                    max_c = LIMITS['6W']['max_c'] * BUFFER
+                    vehicle_type = '6W'
+                
+                # ฟังก์ชันเช็คว่าสาขาอยู่ใกล้กันหรือไม่ (ตำบล/อำเภอเดียวกัน)
+                def branches_are_close(code1, code2):
+                    """เช็คว่าสาขาอยู่ใกล้กันหรือไม่ (ตำบล/อำเภอเดียวกัน)"""
+                    # ถ้าไม่มี Master Data ให้ถือว่าใกล้กัน (ใช้จังหวัดเดียวกันแทน)
+                    if MASTER_DATA.empty or 'Plan Code' not in MASTER_DATA.columns:
+                        return True
+                    
+                    # ดึงข้อมูลจาก Master
+                    master1 = MASTER_DATA[MASTER_DATA['Plan Code'] == code1]
+                    master2 = MASTER_DATA[MASTER_DATA['Plan Code'] == code2]
+                    
+                    if len(master1) > 0 and len(master2) > 0:
+                        m1 = master1.iloc[0]
+                        m2 = master2.iloc[0]
+                        
+                        # เช็คตำบลก่อน
+                        if m1.get('ตำบล', '') and m2.get('ตำบล', '') and m1.get('ตำบล', '') == m2.get('ตำบล', ''):
+                            return True
+                        
+                        # เช็คอำเภอ
+                        if (m1.get('อำเภอ', '') and m2.get('อำเภอ', '') and 
+                            m1.get('อำเภอ', '') == m2.get('อำเภอ', '') and
+                            m1.get('จังหวัด', '') == m2.get('จังหวัด', '')):
+                            return True
+                    
+                    return False
+                
+                # ฟังก์ชันคำนวณระยะทางจากจุดสุดท้ายในทริปไปยังสาขาใหม่
+                def get_distance_from_last_branch(current_trip_codes, new_code):
+                    """คำนวณระยะทางจากสาขาสุดท้ายในทริปไปยังสาขาใหม่"""
+                    if not current_trip_codes or MASTER_DATA.empty:
+                        return 0
+                    
+                    # เอาสาขาสุดท้าย
+                    last_code = current_trip_codes[-1]
+                    
+                    # ดึง lat/lon
+                    last_branch = MASTER_DATA[MASTER_DATA['Plan Code'] == last_code]
+                    new_branch = MASTER_DATA[MASTER_DATA['Plan Code'] == new_code]
+                    
+                    if len(last_branch) > 0 and len(new_branch) > 0:
+                        last_lat = last_branch.iloc[0].get('ละติจูด')
+                        last_lon = last_branch.iloc[0].get('ลองติจูด')
+                        new_lat = new_branch.iloc[0].get('ละติจูด')
+                        new_lon = new_branch.iloc[0].get('ลองติจูด')
+                        
+                        if all(pd.notna([last_lat, last_lon, new_lat, new_lon])):
+                            return haversine_distance(last_lat, last_lon, new_lat, new_lon)
+                    
+                    return 0
+                
+                # 🚨 เช็คข้อจำกัดรถของสาขาใหม่ก่อน
+                code_max_vehicle = get_max_vehicle_for_branch(code)
+                current_trip_with_new = current_trip + [code]
+                trip_max_vehicle = get_max_vehicle_for_trip(set(current_trip_with_new))
+                
+                # ถ้าสาขาใหม่จำกัดรถเล็กกว่ารถปัจจุบัน → ห้ามเพิ่ม
+                vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
+                current_priority = vehicle_priority.get(vehicle_type, 3)
+                new_priority = vehicle_priority.get(trip_max_vehicle, 3)
+                
+                if new_priority < current_priority:
+                    # สาขาใหม่จำกัดรถเล็กกว่า → ข้ามสาขานี้
                     continue
                 
-                # 🔥 เช็คว่าอยู่ภูมิภาคเดียวกันหรือไม่ (ป้องกันการรวมภาคไกลกับภาคกลาง)
-                code_region = get_region_type(code_province) if code_province else 'unknown'
+                # 🔒 เช็คระยะทางจากสาขาใหม่ไปยังทุกสาขาในทริป (ไม่ใช่แค่ seed)
+                avg_dist_to_trip, max_dist_to_trip, all_within_limit = check_distance_to_all_trip_branches(code, current_trip, max_dist=40)
                 
-                # 🆕 เช็คระดับตำบล/อำเภอ/จังหวัด
-                same_province = (code_province and code_province == last_province)
-                same_subdistrict = (code_subdistrict and code_subdistrict == last_subdistrict)
-                same_district = (code_district and code_district == last_district)
+                # ถ้าสาขาใหม่ไกลจากสาขาใดๆ ในทริปเกิน 40km → ข้ามไป (ยกเว้นชื่อคล้ายกัน)
+                if not all_within_limit and not names_are_similar and not has_history:
+                    # เช็คว่าระยะทางเฉลี่ยพอรับได้หรือไม่ (< 18km) - เข้มงวดขึ้น
+                    if avg_dist_to_trip > 18:
+                        continue  # ไกลเกินไป - ควรไปทริปอื่น
                 
-                # 🔥 เช็คอำเภอติดกันข้ามจังหวัด (ทางผ่าน)
-                districts_adjacent = are_adjacent_districts(last_district, last_province, code_district, code_province)
+                # เช็คว่าเกินขีดจำกัดหรือไม่
+                can_fit = trip_weight <= max_w and trip_cube <= max_c
                 
-                # 🔥 "ติดกัน" = ตำบลเดียวกัน หรือ อำเภอเดียวกัน หรือ อำเภอติดกันข้ามจังหวัด
-                is_adjacent = same_subdistrict or same_district or districts_adjacent
+                # 🚨 กรณีพิเศษ: ถ้ารถไม่เต็ม ให้พิจารณารับสาขาใกล้เคียงเพิ่ม
+                # 🔒 แต่ห้ามเกิน 100% เด็ดขาด (BUFFER = 1.0)
+                if not can_fit:
+                    # คำนวณ % การใช้รถปัจจุบัน (ก่อนเพิ่มสาขาใหม่)
+                    current_weight = test_df[test_df['Code'].isin(current_trip)]['Weight'].sum()
+                    current_cube = test_df[test_df['Code'].isin(current_trip)]['Cube'].sum()
+                    
+                    # คำนวณ utilization ของรถที่จะใช้
+                    if recommended_vehicle and recommended_vehicle in LIMITS:
+                        vehicle_for_calc = recommended_vehicle
+                    else:
+                        vehicle_for_calc = vehicle_type
+                    
+                    w_util = (current_weight / LIMITS[vehicle_for_calc]['max_w']) * 100
+                    c_util = (current_cube / LIMITS[vehicle_for_calc]['max_c']) * 100
+                    current_util = max(w_util, c_util)
+                    
+                    # 🔒 ห้ามเกิน 100% - ไม่ยอมให้เกินอีกแล้ว
+                    # ถ้ารถยังใส่ได้พอดี 100% → รวมได้
+                    if trip_weight <= max_w and trip_cube <= max_c:
+                        can_fit = True
                 
-                # 🚨 กฎการรวมสาขาข้ามภาค:
-                # 1. ตำบล/อำเภอเดียวกัน → รวมได้เสมอ
-                # 2. อำเภอติดกันข้ามจังหวัด (ทางผ่าน) → รวมได้
-                # 3. จังหวัดเดียวกัน → รวมได้
-                # 4. ภาคไกล + ภาคกลาง ที่ไม่ติดกัน → ห้ามรวม
-                if not same_province and not is_adjacent:
-                    if is_far_region and code_region == 'nearby':
-                        continue  # ภาคไกลห้ามรวมกับภาคกลางที่ไม่ติดกัน
-                    elif seed_region == 'nearby' and code_region in ['north', 'south', 'far']:
-                        continue  # ภาคกลางห้ามรวมกับภาคไกลที่ไม่ติดกัน
+                # 🔒 ถ้าเกิน capacity → ห้ามรวม (ไม่มีข้อยกเว้น)
+                # ลบ logic ยอมให้เกิน 10-15% ออก เพื่อบังคับ 100%
                 
-                # ระยะจากสาขาสุดท้าย (สาขาติดกัน)
-                dist_from_last = haversine_distance(last_lat, last_lon, code_lat, code_lon)
-                
-                # 🔒 กฎใหม่ (ระดับตำบล): 
-                # - ตำบลเดียวกัน → ไม่จำกัดระยะ (บังคับรวม)
-                # - อำเภอเดียวกัน → ยืดหยุ่นระยะเป็น 50km
-                # - อำเภอติดกันข้ามจังหวัด (ทางผ่าน) → ยืดหยุ่นระยะเป็น 50km
-                # - จังหวัดเดียวกัน → ยืดหยุ่นระยะเป็น 40km
-                # - อื่นๆ → ระยะจากสาขาก่อนหน้าต้องไม่เกิน 30km
-                if same_subdistrict:
-                    # ตำบลเดียวกัน → ไม่จำกัดระยะ
-                    pass
-                elif same_district or districts_adjacent:
-                    # อำเภอเดียวกัน หรือ อำเภอติดกันข้ามจังหวัด → ยืดหยุ่นเป็น 50km
-                    if dist_from_last > 50:
-                        continue
-                elif same_province:
-                    # จังหวัดเดียวกัน → ยืดหยุ่นเป็น 40km
-                    if dist_from_last > 40:
-                        continue
-                else:
-                    # ต่างจังหวัด → ไม่เกิน 30km (ต้องใกล้กันจริงๆ)
-                    if dist_from_last > 30:
-                        continue
-                
-                # 🔥 เลือกสาขา: 1) ตำบลเดียวกัน > 2) อำเภอเดียวกัน/ติดกัน > 3) ใกล้ที่สุด
-                if best_code is None:
-                    best_code = code
-                    best_dist = dist_from_last
-                    best_same_subdistrict = same_subdistrict
-                    best_same_district = same_district or districts_adjacent
-                elif same_subdistrict and not best_same_subdistrict:
-                    # ตำบลเดียวกัน ดีกว่าที่เลือกไว้
-                    best_code = code
-                    best_dist = dist_from_last
-                    best_same_subdistrict = same_subdistrict
-                    best_same_district = same_district
-                elif same_subdistrict and best_same_subdistrict and dist_from_last < best_dist:
-                    # ทั้งคู่ตำบลเดียวกัน เลือกที่ใกล้กว่า
-                    best_code = code
-                    best_dist = dist_from_last
-                    best_same_subdistrict = same_subdistrict
-                    best_same_district = same_district
-                elif not best_same_subdistrict and same_district and not best_same_district:
-                    # อำเภอเดียวกัน ดีกว่าที่เลือกไว้ (ถ้าไม่มีตำบลเดียวกัน)
-                    best_code = code
-                    best_dist = dist_from_last
-                    best_same_subdistrict = same_subdistrict
-                    best_same_district = same_district
-                elif not best_same_subdistrict and same_district and best_same_district and dist_from_last < best_dist:
-                    # ทั้งคู่อำเภอเดียวกัน เลือกที่ใกล้กว่า
-                    best_code = code
-                    best_dist = dist_from_last
-                    best_same_subdistrict = same_subdistrict
-                    best_same_district = same_district
-                elif not best_same_subdistrict and not best_same_district and dist_from_last < best_dist:
-                    # ทั้งคู่ไม่ใช่ตำบล/อำเภอเดียวกัน เลือกที่ใกล้กว่า
-                    best_code = code
-                    best_dist = dist_from_last
-                    best_same_subdistrict = same_subdistrict
-                    best_same_district = same_district
-            
-            if not best_code:
-                break  # ไม่มีสาขาที่เหมาะสม ตัดทริปใหม่
-            
-            # เช็ค capacity
-            next_weight = test_df[test_df['Code'] == best_code]['Weight'].sum()
-            next_cube = test_df[test_df['Code'] == best_code]['Cube'].sum()
-            
-            new_weight = current_weight + next_weight
-            new_cube = current_cube + next_cube
-            
-            # ถ้าเกิน capacity → ตัดทริปใหม่
-            if new_cube > max_cube or new_weight > max_weight:
-                break
-            
-            # 🔒 เช็คข้อห้ามรถ: สาขาใหม่ต้องใช้รถร่วมกับสาขาเดิมได้
-            # หารถที่ใหญ่ที่สุดที่ทุกสาขาในทริปใช้ได้
-            trip_codes_with_new = current_trip + [best_code]
-            max_vehicle_allowed = '6W'
-            for trip_code in trip_codes_with_new:
-                branch_max = get_max_vehicle_for_branch(trip_code)
-                if branch_max == '4W':
-                    max_vehicle_allowed = '4W'
-                    break
-                elif branch_max == 'JB' and max_vehicle_allowed == '6W':
-                    max_vehicle_allowed = 'JB'
-            
-            # ถ้ารถที่อนุญาตไม่พอใส่ของ → ตัดทริปใหม่
-            if max_vehicle_allowed == '4W' and (new_cube > LIMITS['4W']['max_c'] * BUFFER or new_weight > LIMITS['4W']['max_w'] * BUFFER):
-                break
-            if max_vehicle_allowed == 'JB' and (new_cube > LIMITS['JB']['max_c'] * BUFFER or new_weight > LIMITS['JB']['max_w'] * BUFFER):
-                break
-            
-            # 🆕 เช็คระยะทางรวมทั้งทริป (DC → สาขาแรก → ... → สาขาสุดท้าย → DC)
-            # คำนวณระยะทางแบบ consecutive (DC → สาขา1 → สาขา2 → ... → สาขาสุดท้าย → DC)
-            trip_codes_for_dist = current_trip + [best_code]
-            total_trip_distance = 0
-            
-            # DC → สาขาแรก
-            first_code = trip_codes_for_dist[0]
-            first_lat, first_lon = coord_cache.get(first_code, (None, None))
-            if first_lat and first_lon:
-                total_trip_distance += haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, first_lat, first_lon)
-            
-            # สาขา → สาขาถัดไป
-            for i in range(len(trip_codes_for_dist) - 1):
-                c1 = trip_codes_for_dist[i]
-                c2 = trip_codes_for_dist[i + 1]
-                lat1, lon1 = coord_cache.get(c1, (None, None))
-                lat2, lon2 = coord_cache.get(c2, (None, None))
-                if lat1 and lon1 and lat2 and lon2:
-                    total_trip_distance += haversine_distance(lat1, lon1, lat2, lon2)
-            
-            # สาขาสุดท้าย → DC
-            last_code_dist = trip_codes_for_dist[-1]
-            last_lat_dist, last_lon_dist = coord_cache.get(last_code_dist, (None, None))
-            if last_lat_dist and last_lon_dist:
-                total_trip_distance += haversine_distance(last_lat_dist, last_lon_dist, DC_WANG_NOI_LAT, DC_WANG_NOI_LON)
-            
-            # 🔒 จำกัดระยะทางรวมทั้งทริป: 4W/JB = 400km, 6W = 1000km
-            max_trip_distance = 1000 if max_vehicle_allowed == '6W' else 400
-            if total_trip_distance > max_trip_distance:
-                break
-            
-            # ✅ ผ่านทุกเงื่อนไข → เพิ่มสาขานี้
-            all_codes.remove(best_code)
-            current_trip.append(best_code)
-            assigned_trips[best_code] = trip_counter
-            current_weight = new_weight
-            current_cube = new_cube
+                if can_fit:
+                    current_trip.append(code)
+                    assigned_trips[code] = trip_counter
+                    all_codes.remove(code)
+        
+        # บันทึกรถที่แนะนำสำหรับทริปนี้
+        if recommended_vehicle:
+            trip_recommended_vehicles[trip_counter] = recommended_vehicle
         
         trip_counter += 1
     
@@ -3333,12 +2795,6 @@ def predict_trips(test_df, model_data):
                 
                 # เช็คจำนวนสาขา
                 if len(trip_codes) >= MAX_BRANCHES_PER_TRIP:
-                    continue
-                
-                # 🚨 เช็ค consecutive distance หลังรวม
-                combined_codes = trip_codes + [code]
-                max_consec = calculate_max_consecutive_distance(combined_codes, coord_cache)
-                if max_consec > MAX_DISTANCE_IN_TRIP:
                     continue
                 
                 # คำนวณระยะทางเฉลี่ยไปสาขาในทริป
@@ -3415,12 +2871,6 @@ def predict_trips(test_df, model_data):
                 code_max_vehicle = get_max_vehicle_for_branch(code)
                 target_trip_codes = trip_codes_dict.get(best_trip, [])
                 target_max_vehicle = get_max_vehicle_for_trip(set(target_trip_codes + [code]))
-                
-                # 🚨 เช็ค consecutive distance หลังรวม
-                combined_codes = target_trip_codes + [code]
-                max_consec = calculate_max_consecutive_distance(combined_codes, coord_cache)
-                if max_consec > MAX_DISTANCE_IN_TRIP:
-                    continue
                 
                 vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
                 if vehicle_priority.get(code_max_vehicle, 3) >= vehicle_priority.get(target_max_vehicle, 3):
@@ -3514,203 +2964,8 @@ def predict_trips(test_df, model_data):
     for trip in all_trips:
         trip['primary_province'] = get_primary_province(trip)
     
-    # 🔄 เรียงตามจังหวัดหลัก → ระยะทางจาก DC (ไกลไปใกล้ เพื่อให้รถไกลออกก่อน)
-    all_trips.sort(key=lambda x: (x['primary_province'], -x['distance_from_dc'], x['count'], x['util']))
-    
-    # ===============================================
-    # 🎯 Phase 0.3: บังคับรวมสาขาตำบลเดียวกันที่ถูกแยกทริป
-    # ถ้ามีสาขาตำบลเดียวกันอยู่คนละทริป → ย้ายไปรวมกัน
-    # ===============================================
-    def get_subdistrict_for_trip(trip_num):
-        """หาตำบลหลักของทริป"""
-        trip_data = test_df[test_df['Trip'] == trip_num]
-        subdistricts = {}
-        for code in trip_data['Code'].values:
-            sd = subdistrict_cache.get(code, '')
-            if sd:
-                subdistricts[sd] = subdistricts.get(sd, 0) + 1
-        if subdistricts:
-            return max(subdistricts.items(), key=lambda x: x[1])[0]
-        return ''
-    
-    # สร้าง mapping: ตำบล → ทริปที่มีสาขาในตำบลนี้
-    subdistrict_to_trips = {}
-    for trip in all_trips:
-        if trip is None:
-            continue
-        for code in trip['codes']:
-            sd = subdistrict_cache.get(code, '')
-            prov = province_cache.get(code, '')
-            if sd and prov:
-                key = (sd, prov)  # ตำบล + จังหวัด
-                if key not in subdistrict_to_trips:
-                    subdistrict_to_trips[key] = []
-                subdistrict_to_trips[key].append(trip)
-    
-    # หาตำบลที่มีสาขาอยู่หลายทริป
-    merge_same_subdistrict_count = 0
-    for (sd, prov), trips in subdistrict_to_trips.items():
-        if len(trips) <= 1:
-            continue
-        
-        # หาทริปหลัก (มีสาขาในตำบลนี้มากที่สุด)
-        main_trip = None
-        max_count = 0
-        for trip in trips:
-            if trip is None:
-                continue
-            count = sum(1 for c in trip['codes'] if subdistrict_cache.get(c, '') == sd)
-            if count > max_count:
-                max_count = count
-                main_trip = trip
-        
-        if main_trip is None:
-            continue
-        
-        # ย้ายสาขาตำบลนี้จากทริปอื่นมาทริปหลัก
-        for trip in trips:
-            if trip is None or trip == main_trip:
-                continue
-            
-            # หาสาขาในตำบลนี้
-            codes_to_move = [c for c in trip['codes'] if subdistrict_cache.get(c, '') == sd]
-            
-            if not codes_to_move:
-                continue
-            
-            # เช็คว่ารวมแล้วไม่เกิน capacity
-            codes_weight = sum(test_df[test_df['Code'] == c]['Weight'].sum() for c in codes_to_move)
-            codes_cube = sum(test_df[test_df['Code'] == c]['Cube'].sum() for c in codes_to_move)
-            
-            new_weight = main_trip['weight'] + codes_weight
-            new_cube = main_trip['cube'] + codes_cube
-            
-            # ใช้ 6W capacity เป็น limit (เพราะจะเลือกรถทีหลัง)
-            if new_cube > LIMITS['6W']['max_c'] * BUFFER:
-                continue
-            if new_weight > LIMITS['6W']['max_w'] * BUFFER:
-                continue
-            
-            # ย้ายสาขา
-            for code in codes_to_move:
-                test_df.loc[test_df['Code'] == code, 'Trip'] = main_trip['trip']
-                trip['codes'].discard(code)  # ลบจากทริปเดิม
-                main_trip['codes'].add(code)  # เพิ่มเข้าทริปหลัก
-            
-            # อัปเดต weight/cube
-            main_trip['weight'] = new_weight
-            main_trip['cube'] = new_cube
-            main_trip['count'] = len(main_trip['codes'])
-            trip['weight'] -= codes_weight
-            trip['cube'] -= codes_cube
-            trip['count'] = len(trip['codes'])
-            
-            merge_same_subdistrict_count += 1
-    
-    # ลบทริปที่ไม่มีสาขาแล้ว
-    all_trips = [t for t in all_trips if t is not None and len(t['codes']) > 0]
-    
-    # ===============================================
-    # 🎯 Phase 0.5: รวมทริปภาคเหนือ/ใต้ ที่ยังไม่เต็ม 6W
-    # จังหวัดในภาคเดียวกัน (เช่น น่าน + พะเยา) ควรรวมกันเป็น 6W
-    # ===============================================
-    def get_region_group(province):
-        """คืนค่ากลุ่มภาค (เหนือตอนบน, เหนือตอนล่าง, ใต้ฝั่งอันดามัน, ใต้ฝั่งอ่าวไทย)"""
-        region_groups = {
-            'เหนือตอนบน': ['น่าน', 'พะเยา', 'ลำปาง', 'ลำพูน', 'เชียงราย', 'เชียงใหม่', 'แพร่', 'แม่ฮ่องสอน'],
-            'เหนือตอนล่าง': ['กำแพงเพชร', 'ตาก', 'นครสวรรค์', 'พิจิตร', 'พิษณุโลก', 'สุโขทัย', 'อุตรดิตถ์', 'อุทัยธานี', 'เพชรบูรณ์'],
-            'ใต้ฝั่งอันดามัน': ['กระบี่', 'ตรัง', 'พังงา', 'ภูเก็ต', 'ระนอง', 'สตูล'],
-            'ใต้ฝั่งอ่าวไทย': ['ชุมพร', 'นครศรีธรรมราช', 'พัทลุง', 'ยะลา', 'สงขลา', 'สุราษฎร์ธานี', 'ปัตตานี', 'นราธิวาส']
-        }
-        prov_str = str(province).strip()
-        for group, provinces in region_groups.items():
-            for p in provinces:
-                if p in prov_str:
-                    return group
-        return None
-    
-    # หาทริปภาคเหนือ/ใต้ที่ยังไม่เต็ม 6W
-    north_south_trips = []
-    for idx, trip in enumerate(all_trips):
-        if trip is None:
-            continue
-        primary_prov = trip['primary_province']
-        region = get_region_type(primary_prov)
-        
-        # เฉพาะภาคเหนือ/ใต้
-        if region in ['north', 'south']:
-            region_group = get_region_group(primary_prov)
-            cube_6w = (trip['cube'] / LIMITS['6W']['max_c']) * 100
-            
-            # ยังไม่เต็ม 6W (< 95%)
-            if cube_6w < 95:
-                north_south_trips.append({
-                    'idx': idx,
-                    'trip': trip,
-                    'region': region,
-                    'region_group': region_group,
-                    'cube': trip['cube'],
-                    'weight': trip['weight'],
-                    'count': trip['count'],
-                    'cube_6w': cube_6w
-                })
-    
-    # รวมทริปในภาคเดียวกัน
-    merge_north_south_count = 0
-    merged_indices = set()
-    
-    for i, t1 in enumerate(north_south_trips):
-        if t1['idx'] in merged_indices:
-            continue
-        
-        for j, t2 in enumerate(north_south_trips):
-            if i >= j or t2['idx'] in merged_indices:
-                continue
-            
-            # ต้องอยู่ในกลุ่มภาคเดียวกัน (เช่น เหนือตอนบน หรือ ใต้ฝั่งอ่าวไทย)
-            if t1['region_group'] != t2['region_group'] or t1['region_group'] is None:
-                continue
-            
-            # เช็ค capacity รวมกัน (ต้องไม่เกิน 6W)
-            combined_cube = t1['cube'] + t2['cube']
-            combined_weight = t1['weight'] + t2['weight']
-            combined_count = t1['count'] + t2['count']
-            
-            if combined_cube > LIMITS['6W']['max_c'] * BUFFER:
-                continue
-            if combined_weight > LIMITS['6W']['max_w'] * BUFFER:
-                continue
-            
-            # รวมได้! ย้ายสาขาจาก trip2 ไป trip1
-            trip1 = all_trips[t1['idx']]
-            trip2 = all_trips[t2['idx']]
-            
-            if trip1 is None or trip2 is None:
-                continue
-            
-            # ย้ายสาขา
-            for code in trip2['codes']:
-                test_df.loc[test_df['Code'] == code, 'Trip'] = trip1['trip']
-            
-            # อัปเดต trip1
-            trip1['codes'].update(trip2['codes'])  # codes เป็น set
-            trip1['cube'] = combined_cube
-            trip1['weight'] = combined_weight
-            trip1['count'] = combined_count
-            trip1['provinces'].update(trip2['provinces'])
-            
-            # ลบ trip2
-            all_trips[t2['idx']] = None
-            merged_indices.add(t2['idx'])
-            merge_north_south_count += 1
-            
-            # อัปเดต t1 สำหรับ iteration ถัดไป
-            t1['cube'] = combined_cube
-            t1['weight'] = combined_weight
-            t1['count'] = combined_count
-    
-    # ลบทริปที่ถูกรวมแล้ว
-    all_trips = [t for t in all_trips if t is not None]
+    # เรียงตามจังหวัดหลัก → ระยะทาง → จำนวนสาขา → utilization
+    all_trips.sort(key=lambda x: (x['primary_province'], x['distance_from_dc'], x['count'], x['util']))
     
     # 🎯 Phase 1: รวมทริปเล็ก (≤3 สาขา) กับทริปใกล้เคียง (FAST VERSION)
     merged = True
@@ -4243,114 +3498,6 @@ def predict_trips(test_df, model_data):
             
             restriction_split_count += 1
     
-    # 🚨 Phase 1.76: แยกสาขาที่อยู่คนละภูมิภาค (nearby vs far) ออกจากกัน
-    region_split_count = 0
-    
-    for trip_num in sorted(test_df['Trip'].unique()):
-        if trip_num == 0:
-            continue
-        
-        trip_data = test_df[test_df['Trip'] == trip_num]
-        trip_codes = list(trip_data['Code'].values)
-        
-        if len(trip_codes) < 2:
-            continue
-        
-        # แยกสาขาตามภูมิภาค
-        codes_nearby = []  # กทม/ปริมณฑล
-        codes_far = []  # ต่างจังหวัด (ใช้ 6W ได้)
-        
-        for code in trip_codes:
-            prov = get_province(code)
-            if prov and get_region_type(str(prov)) == 'nearby':
-                codes_nearby.append(code)
-            else:
-                codes_far.append(code)
-        
-        # 🚨 ถ้าทริปมีทั้ง nearby และ far → ต้องแยก!
-        if len(codes_nearby) > 0 and len(codes_far) > 0:
-            # เก็บทริปเดิมให้กับกลุ่มที่มีสาขามากกว่า
-            if len(codes_nearby) >= len(codes_far):
-                new_trip = test_df['Trip'].max() + 1
-                for code in codes_far:
-                    test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip
-            else:
-                new_trip = test_df['Trip'].max() + 1
-                for code in codes_nearby:
-                    test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip
-            
-            region_split_count += 1
-    
-    # 🚨 Phase 1.78: แยกสาขาที่ห่างกันเกิน 30km (ป้องกันทริปกระโดด เช่น วังน้อย+กทม)
-    distance_split_count = 0
-    MAX_TRIP_DISTANCE_KM = 30  # ระยะห่างสูงสุดระหว่างสาขาในทริปเดียวกัน
-    
-    for trip_num in sorted(test_df['Trip'].unique()):
-        if trip_num == 0:
-            continue
-        
-        trip_data = test_df[test_df['Trip'] == trip_num]
-        trip_codes = list(trip_data['Code'].unique())
-        
-        if len(trip_codes) < 2:
-            continue
-        
-        # หาพิกัดของแต่ละสาขา
-        code_coords = {}
-        for code in trip_codes:
-            if code in coord_cache:
-                code_coords[code] = coord_cache[code]
-        
-        if len(code_coords) < 2:
-            continue
-        
-        # หาคู่สาขาที่ห่างกันมากที่สุด
-        max_dist = 0
-        farthest_pair = None
-        codes_with_coords = list(code_coords.keys())
-        
-        for i, code1 in enumerate(codes_with_coords):
-            for code2 in codes_with_coords[i+1:]:
-                lat1, lon1 = code_coords[code1]
-                lat2, lon2 = code_coords[code2]
-                dist = haversine_distance(lat1, lon1, lat2, lon2)
-                if dist > max_dist:
-                    max_dist = dist
-                    farthest_pair = (code1, code2)
-        
-        # ถ้าห่างเกิน MAX_TRIP_DISTANCE_KM → ต้องแยก!
-        if max_dist > MAX_TRIP_DISTANCE_KM and farthest_pair:
-            # แบ่งสาขาเป็น 2 กลุ่มตามระยะทาง
-            code1, code2 = farthest_pair
-            lat1, lon1 = code_coords[code1]
-            lat2, lon2 = code_coords[code2]
-            
-            group1, group2 = [], []
-            for code in trip_codes:
-                if code in code_coords:
-                    lat, lon = code_coords[code]
-                    dist1 = haversine_distance(lat, lon, lat1, lon1)
-                    dist2 = haversine_distance(lat, lon, lat2, lon2)
-                    if dist1 <= dist2:
-                        group1.append(code)
-                    else:
-                        group2.append(code)
-                else:
-                    group1.append(code)
-            
-            # ย้ายกลุ่มที่มีสาขาน้อยกว่าไปทริปใหม่
-            if len(group1) > 0 and len(group2) > 0:
-                if len(group1) >= len(group2):
-                    new_trip = test_df['Trip'].max() + 1
-                    for code in group2:
-                        test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip
-                else:
-                    new_trip = test_df['Trip'].max() + 1
-                    for code in group1:
-                        test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip
-                
-                distance_split_count += 1
-    
     # 🎯 Phase 2: เลือกรถที่เหมาะสม (เริ่มจาก 4W → JB → 6W หรือ 2 คัน) - Optimized
     vehicle_assignment_count = 0
     downsize_count = 0
@@ -4538,7 +3685,7 @@ def predict_trips(test_df, model_data):
                 
                 MIN_6W_CUBE = 18.0  # 6W ต้องได้ขั้นต่ำ 18 cube
                 MAX_6W_CUBE = 20.0  # 6W ห้ามเกิน 20 cube
-                MIN_UTIL_THRESHOLD = 75   # ขั้นต่ำ - ห้ามรถเหลือต่ำกว่านี้
+                MIN_UTIL = 75   # ขั้นต่ำ - ห้ามรถเหลือต่ำกว่านี้
                 TARGET_MIN = 95 # เป้าหมายขั้นต่ำ
                 TARGET_MAX = 100 # เป้าหมายสูงสุด (ห้ามเกิน 100%)
                 
@@ -5110,7 +4257,7 @@ def predict_trips(test_df, model_data):
             # ไม่มีข้อจำกัดสาขา → ลองแยกเป็นรถเล็ก
             
             # วิเคราะห์ spatial clusters
-            clusters = create_distance_based_clusters(trip_codes, max_distance_km=25)
+            clusters = create_distance_based_clusters(trip_codes, max_distance_km=40)
             
             # ถ้ามี ≥2 กลุ่ม → ลองแยก
             if len(clusters) >= 2:
@@ -5489,19 +4636,15 @@ def predict_trips(test_df, model_data):
                         max_branches = 12 if other_vehicle in ['4W', 'JB'] else float('inf')
                         
                         if other_util <= 100 and len(other_codes) < max_branches:
-                            # 🚨 เช็ค consecutive distance หลังรวม
-                            combined_codes = other_codes + [farthest_code]
-                            max_consec = calculate_max_consecutive_distance(combined_codes, coord_cache)
-                            if max_consec <= MAX_DISTANCE_IN_TRIP:
-                                best_new_trip = other_trip
-                                best_new_dist = effective_dist
+                            best_new_trip = other_trip
+                            best_new_dist = effective_dist
                 
                 # ย้ายสาขาไปทริปใหม่
                 if best_new_trip is not None:
                     test_df.loc[test_df['Code'] == farthest_code, 'Trip'] = best_new_trip
                     distance_swaps += 1
     
-    # 🗺️ เรียงลำดับสาขา: ไกลสุดจาก DC ก่อน → ใกล้สุด (เพื่อให้รถวิ่งกลับมา DC)
+    # 🗺️ เรียงลำดับสาขาตาม Nearest Neighbor (เฉพาะทริปใหญ่ ≥ 8 สาขา - เพิ่มความเร็ว)
     # ⚡ Skip ถ้าใช้เวลาเกิน 28 วินาที
     if time.time() - start_time <= 28:
         for trip_num in test_df['Trip'].unique():
@@ -5509,1284 +4652,39 @@ def predict_trips(test_df, model_data):
                 continue
             
             trip_codes = list(test_df[test_df['Trip'] == trip_num]['Code'].values)
-            if len(trip_codes) < 2:  # ทำทุกทริปที่มี 2+ สาขา
+            if len(trip_codes) < 8:  # ⚡ Skip ถ้าน้อยกว่า 8 สาขา (เดิม 6)
                 continue
             
-            # 🆕 เรียงจากไกลสุดมาใกล้สุด: หาระยะทางจาก DC แล้ว sort
-            distances_from_dc = []
-            for code in trip_codes:
-                lat, lon = coord_cache.get(code, (None, None))
-                if lat and lon:
-                    dist = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
-                    distances_from_dc.append((code, dist))
-                else:
-                    distances_from_dc.append((code, 0))
+            # เรียงตาม Nearest Neighbor แบบเร็ว (ใช้ cache)
+            ordered = []
+            remaining = trip_codes.copy()
+            current_lat, current_lon = DC_WANG_NOI_LAT, DC_WANG_NOI_LON
             
-            # เรียงจากไกลสุด (dist มากสุด) มาใกล้สุด (dist น้อยสุด)
-            distances_from_dc.sort(key=lambda x: x[1], reverse=True)
-            ordered = [x[0] for x in distances_from_dc]
+            while remaining and len(ordered) < len(trip_codes):
+                nearest = None
+                min_dist = float('inf')
+                
+                for code in remaining:
+                    lat, lon = coord_cache.get(code, (None, None))
+                    if lat:
+                        dist = haversine_distance(current_lat, current_lon, lat, lon)
+                        if dist < min_dist:
+                            min_dist = dist
+                            nearest = code
+                
+                if nearest:
+                    ordered.append(nearest)
+                    remaining.remove(nearest)
+                    lat, lon = coord_cache.get(nearest, (None, None))
+                    if lat:
+                        current_lat, current_lon = lat, lon
+                else:
+                    ordered.extend(remaining)
+                    break
             
             # อัปเดต Sequence
             for seq, code in enumerate(ordered, start=1):
                 test_df.loc[(test_df['Code'] == code) & (test_df['Trip'] == trip_num), 'Sequence'] = seq
-    
-    # ===============================================
-    # 🎯 Phase 6: Capacity Balancing - กระจาย load ให้เท่ากัน
-    # MIN_UTIL: 4W ≥ 70%, JB ≥ 80%, 6W ≥ 90%
-    # ===============================================
-    balance_count = 0
-    MAX_BALANCE_ITERATIONS = 3
-    
-    for balance_iter in range(MAX_BALANCE_ITERATIONS):
-        if time.time() - start_time > 50:  # ถ้าใช้เวลาเกิน 50 วินาที → หยุด
-            break
-            
-        # หาทริปที่ util ต่ำกว่า MIN_UTIL
-        low_util_trips_balance = []
-        high_util_trips_balance = []
-        
-        for trip_num in test_df['Trip'].unique():
-            if trip_num == 0:
-                continue
-            
-            trip_data = test_df[test_df['Trip'] == trip_num]
-            trip_w = trip_data['Weight'].sum()
-            trip_c = trip_data['Cube'].sum()
-            trip_count = len(trip_data)
-            trip_vehicle = trip_recommended_vehicles.get(trip_num, '4W')
-            
-            # คำนวณ util ตามประเภทรถ
-            limits = LIMITS.get(trip_vehicle, LIMITS['4W'])
-            trip_util = max(
-                (trip_w / limits['max_w']) * 100,
-                (trip_c / limits['max_c']) * 100
-            )
-            
-            min_util = MIN_UTIL.get(trip_vehicle, 70)
-            
-            if trip_util < min_util and trip_count <= 3:
-                # ทริปที่ util ต่ำ → ต้องหาสาขาเพิ่ม หรือย้ายไปรวมกับทริปอื่น
-                low_util_trips_balance.append({
-                    'trip_num': trip_num,
-                    'util': trip_util,
-                    'count': trip_count,
-                    'weight': trip_w,
-                    'cube': trip_c,
-                    'vehicle': trip_vehicle,
-                    'codes': set(trip_data['Code'].values),
-                    'min_util': min_util
-                })
-            elif trip_util > 95 and trip_count >= 3:
-                # ทริปที่เกือบเต็ม → อาจกระจายให้ทริปอื่นได้
-                high_util_trips_balance.append({
-                    'trip_num': trip_num,
-                    'util': trip_util,
-                    'count': trip_count,
-                    'weight': trip_w,
-                    'cube': trip_c,
-                    'vehicle': trip_vehicle,
-                    'codes': list(trip_data['Code'].values)
-                })
-        
-        if not low_util_trips_balance:
-            break  # ไม่มีทริปที่ต้อง balance
-        
-        # พยายามย้ายทริป util ต่ำไปรวมกับทริปใกล้เคียง
-        for low_trip in low_util_trips_balance:
-            best_merge_trip = None
-            best_merge_util = float('inf')
-            best_merge_dist = float('inf')
-            
-            # หา centroid ของทริป util ต่ำ
-            low_lats, low_lons = [], []
-            for code in low_trip['codes']:
-                lat, lon = coord_cache.get(code, (None, None))
-                if lat and lon:
-                    low_lats.append(lat)
-                    low_lons.append(lon)
-            
-            if not low_lats:
-                continue
-            
-            low_centroid_lat = sum(low_lats) / len(low_lats)
-            low_centroid_lon = sum(low_lons) / len(low_lons)
-            
-            for trip_num in test_df['Trip'].unique():
-                if trip_num == 0 or trip_num == low_trip['trip_num']:
-                    continue
-                
-                target_data = test_df[test_df['Trip'] == trip_num]
-                target_w = target_data['Weight'].sum()
-                target_c = target_data['Cube'].sum()
-                target_count = len(target_data)
-                target_vehicle = trip_recommended_vehicles.get(trip_num, '4W')
-                
-                # 🚨 เช็คระยะทาง centroid ของ target
-                target_lats, target_lons = [], []
-                for code in target_data['Code'].values:
-                    lat, lon = coord_cache.get(code, (None, None))
-                    if lat and lon:
-                        target_lats.append(lat)
-                        target_lons.append(lon)
-                
-                if not target_lats:
-                    continue
-                
-                target_centroid_lat = sum(target_lats) / len(target_lats)
-                target_centroid_lon = sum(target_lons) / len(target_lons)
-                
-                # คำนวณระยะห่างระหว่าง centroids
-                centroid_dist = haversine_distance(low_centroid_lat, low_centroid_lon,
-                                                   target_centroid_lat, target_centroid_lon)
-                
-                # 🔒 ระยะห่างต้องไม่เกิน MAX_DISTANCE_IN_TRIP (50km)
-                if centroid_dist > MAX_DISTANCE_IN_TRIP:
-                    continue
-                
-                # เช็คว่ารวมได้ไหม
-                new_w = target_w + low_trip['weight']
-                new_c = target_c + low_trip['cube']
-                new_count = target_count + low_trip['count']
-                
-                # ไม่เกิน 12 สาขา (สำหรับ 4W/JB)
-                max_branches = 12 if target_vehicle in ['JB'] else 20
-                if new_count > max_branches:
-                    continue
-                
-                # 🚨 เช็ค consecutive distance หลังรวม
-                combined_codes = list(target_data['Code'].values) + list(low_trip['codes'])
-                max_consec = calculate_max_consecutive_distance(combined_codes, coord_cache)
-                if max_consec > MAX_DISTANCE_IN_TRIP:
-                    continue
-                
-                # คำนวณ util ใหม่
-                limits = LIMITS.get(target_vehicle, LIMITS['4W'])
-                new_util = max(
-                    (new_w / limits['max_w']) * 100,
-                    (new_c / limits['max_c']) * 100
-                )
-                
-                # ต้องไม่เกิน 100%
-                if new_util > 100:
-                    continue
-                
-                # เลือกทริปที่ใกล้ที่สุดและรวมแล้วได้ util ดี
-                min_util_target = MIN_UTIL.get(target_vehicle, 70)
-                if new_util >= min_util_target and centroid_dist < best_merge_dist:
-                    best_merge_util = new_util
-                    best_merge_trip = trip_num
-                    best_merge_dist = centroid_dist
-            
-            # ย้ายสาขาไปทริปใหม่
-            if best_merge_trip is not None:
-                for code in low_trip['codes']:
-                    test_df.loc[test_df['Code'] == code, 'Trip'] = best_merge_trip
-                balance_count += 1
-    
-    # ===============================================
-    # 🎯 Phase 6.5: บังคับรวม 4W ที่ไม่ผ่าน MIN_UTIL
-    # 1. หา 6W ที่ไม่เต็มและใกล้เคียง
-    # 2. หา JB ที่ไม่เต็มและใกล้เคียง
-    # 3. รวม 2 คัน 4W เข้าด้วยกันเป็น JB
-    # ===============================================
-    merge_4w_count = 0
-    MERGE_DISTANCE_LIMIT = 80  # ยอมให้รวมได้ไกลขึ้นสำหรับ merge
-    
-    # หาทริป 4W ทั้งหมด (เรียงตาม util จากน้อยไปมาก)
-    trips_4w_to_merge = []
-    for trip_num in list(test_df['Trip'].unique()):
-        if trip_num == 0:
-            continue
-        
-        trip_data = test_df[test_df['Trip'] == trip_num]
-        if len(trip_data) == 0:
-            continue
-            
-        trip_vehicle = trip_recommended_vehicles.get(trip_num, '4W')
-        
-        # เฉพาะ 4W เท่านั้น
-        if trip_vehicle != '4W':
-            continue
-        
-        trip_w = trip_data['Weight'].sum()
-        trip_c = trip_data['Cube'].sum()
-        trip_count = len(trip_data)
-        trip_codes_list = list(trip_data['Code'].values)
-        
-        # คำนวณ util ของ 4W
-        util_4w = max(
-            (trip_w / LIMITS['4W']['max_w']) * 100,
-            (trip_c / LIMITS['4W']['max_c']) * 100
-        )
-        
-        # เก็บทุกทริป 4W ที่ไม่ผ่าน MIN_UTIL (70%)
-        if util_4w < MIN_UTIL.get('4W', 70):
-            # หา centroid
-            trip_lats, trip_lons = [], []
-            for code in trip_codes_list:
-                lat, lon = coord_cache.get(code, (None, None))
-                if lat and lon:
-                    trip_lats.append(lat)
-                    trip_lons.append(lon)
-            
-            if trip_lats:
-                trips_4w_to_merge.append({
-                    'trip_num': trip_num,
-                    'util': util_4w,
-                    'weight': trip_w,
-                    'cube': trip_c,
-                    'count': trip_count,
-                    'codes': trip_codes_list,
-                    'lat': sum(trip_lats) / len(trip_lats),
-                    'lon': sum(trip_lons) / len(trip_lons)
-                })
-    
-    # เรียงจาก util น้อยที่สุดก่อน (รวมง่ายกว่า)
-    trips_4w_to_merge.sort(key=lambda x: x['util'])
-    
-    # พยายามรวมทีละทริป
-    for trip_info in trips_4w_to_merge:
-        trip_num = trip_info['trip_num']
-        
-        # เช็คว่าทริปนี้ยังมีอยู่ไหม (อาจถูกรวมไปแล้ว)
-        trip_data = test_df[test_df['Trip'] == trip_num]
-        if len(trip_data) == 0:
-            continue
-        
-        trip_w = trip_info['weight']
-        trip_c = trip_info['cube']
-        trip_count = trip_info['count']
-        trip_codes = trip_info['codes']
-        
-        # หา centroid ของทริป 4W นี้
-        trip_lats, trip_lons = [], []
-        for code in trip_codes:
-            lat, lon = coord_cache.get(code, (None, None))
-            if lat and lon:
-                trip_lats.append(lat)
-                trip_lons.append(lon)
-        
-        if not trip_lats:
-            continue
-        
-        trip_centroid_lat = sum(trip_lats) / len(trip_lats)
-        trip_centroid_lon = sum(trip_lons) / len(trip_lons)
-        
-        # หา 6W หรือ JB ที่ใกล้ที่สุดและรับได้
-        best_target = None
-        best_dist = float('inf')
-        
-        for target_num in test_df['Trip'].unique():
-            if target_num == 0 or target_num == trip_num:
-                continue
-            
-            target_data = test_df[test_df['Trip'] == target_num]
-            if len(target_data) == 0:
-                continue
-                
-            target_vehicle = trip_recommended_vehicles.get(target_num, '4W')
-            
-            # เฉพาะ 6W หรือ JB
-            if target_vehicle not in ['6W', 'JB']:
-                continue
-            
-            target_w = target_data['Weight'].sum()
-            target_c = target_data['Cube'].sum()
-            target_count = len(target_data)
-            
-            # เช็คว่ารวมแล้วไม่เกิน capacity
-            new_w = target_w + trip_w
-            new_c = target_c + trip_c
-            new_count = target_count + trip_count
-            
-            limits = LIMITS.get(target_vehicle, LIMITS['6W'])
-            new_util = max(
-                (new_w / limits['max_w']) * 100,
-                (new_c / limits['max_c']) * 100
-            )
-            
-            # ต้องไม่เกิน 100% และจำนวนสาขาไม่เกิน
-            max_branches = 20 if target_vehicle == '6W' else 12
-            if new_util > 100 or new_count > max_branches:
-                continue
-            
-            # หา centroid ของ target
-            target_lats, target_lons = [], []
-            for code in target_data['Code'].values:
-                lat, lon = coord_cache.get(code, (None, None))
-                if lat and lon:
-                    target_lats.append(lat)
-                    target_lons.append(lon)
-            
-            if not target_lats:
-                continue
-            
-            target_centroid_lat = sum(target_lats) / len(target_lats)
-            target_centroid_lon = sum(target_lons) / len(target_lons)
-            
-            # คำนวณระยะห่าง centroid
-            dist = haversine_distance(trip_centroid_lat, trip_centroid_lon,
-                                      target_centroid_lat, target_centroid_lon)
-            
-            # ระยะต้องไม่เกิน MERGE_DISTANCE_LIMIT (80km สำหรับ merge)
-            if dist > MERGE_DISTANCE_LIMIT:
-                continue
-            
-            # 🚨 เช็ค consecutive distance หลังรวม
-            combined_codes = list(target_data['Code'].values) + trip_codes
-            max_consec = calculate_max_consecutive_distance(combined_codes, coord_cache)
-            if max_consec > MAX_DISTANCE_IN_TRIP:
-                continue
-            
-            # เลือก target ที่ใกล้ที่สุด
-            if dist < best_dist:
-                best_dist = dist
-                best_target = target_num
-        
-        # ย้ายสาขาไป target
-        if best_target is not None:
-            for code in trip_codes:
-                test_df.loc[test_df['Code'] == code, 'Trip'] = best_target
-            merge_4w_count += 1
-    
-    # ===============================================
-    # 🎯 Phase 6.6: รวม 4W หลายคันเข้าด้วยกันให้กลายเป็น JB หรือ 6W
-    # ===============================================
-    merge_4w_to_larger_count = 0
-    
-    # เรียก trips_4w_to_merge ใหม่ (เพราะอาจมีบางส่วนถูกรวมไปแล้ว)
-    trips_4w_remaining = []
-    for trip_num in list(test_df['Trip'].unique()):
-        if trip_num == 0:
-            continue
-        
-        trip_data = test_df[test_df['Trip'] == trip_num]
-        if len(trip_data) == 0:
-            continue
-            
-        trip_vehicle = trip_recommended_vehicles.get(trip_num, '4W')
-        if trip_vehicle != '4W':
-            continue
-        
-        trip_w = trip_data['Weight'].sum()
-        trip_c = trip_data['Cube'].sum()
-        trip_count = len(trip_data)
-        trip_codes_list = list(trip_data['Code'].values)
-        
-        # หา centroid
-        trip_lats, trip_lons = [], []
-        for code in trip_codes_list:
-            lat, lon = coord_cache.get(code, (None, None))
-            if lat and lon:
-                trip_lats.append(lat)
-                trip_lons.append(lon)
-        
-        if trip_lats:
-            trips_4w_remaining.append({
-                'trip_num': trip_num,
-                'weight': trip_w,
-                'cube': trip_c,
-                'count': trip_count,
-                'codes': trip_codes_list,
-                'lat': sum(trip_lats) / len(trip_lats),
-                'lon': sum(trip_lons) / len(trip_lons)
-            })
-    
-    # เรียงตาม cube น้อยที่สุดก่อน
-    trips_4w_remaining.sort(key=lambda x: x['cube'])
-    
-    # พยายามรวม 4W กับ 4W อื่นที่ใกล้กัน
-    merged_trips = set()
-    for i, trip1 in enumerate(trips_4w_remaining):
-        if trip1['trip_num'] in merged_trips:
-            continue
-        
-        # หา 4W อื่นที่ใกล้ที่สุดและรวมได้
-        for j, trip2 in enumerate(trips_4w_remaining):
-            if i >= j or trip2['trip_num'] in merged_trips:
-                continue
-            
-            # คำนวณระยะห่าง centroid
-            dist = haversine_distance(trip1['lat'], trip1['lon'], trip2['lat'], trip2['lon'])
-            if dist > MERGE_DISTANCE_LIMIT:  # ใช้ 80km สำหรับ merge
-                continue
-            
-            # เช็คว่ารวมแล้วใส่ JB ได้ไหม
-            combined_w = trip1['weight'] + trip2['weight']
-            combined_c = trip1['cube'] + trip2['cube']
-            combined_count = trip1['count'] + trip2['count']
-            
-            # ลองใส่ JB (7 cube, 3500kg)
-            if combined_c <= LIMITS['JB']['max_c'] and combined_w <= LIMITS['JB']['max_w'] and combined_count <= 12:
-                # เช็คว่าทุกสาขารับ JB ได้ไหม
-                all_codes = trip1['codes'] + trip2['codes']
-                can_use_jb = True
-                for code in all_codes:
-                    branch_max = get_max_vehicle_for_branch(code)
-                    if branch_max == '4W':  # สาขานี้รับ JB ไม่ได้
-                        can_use_jb = False
-                        break
-                
-                if not can_use_jb:
-                    continue
-                
-                # 🚨 เช็ค consecutive distance หลังรวม
-                max_consec = calculate_max_consecutive_distance(all_codes, coord_cache)
-                if max_consec > MAX_DISTANCE_IN_TRIP:
-                    continue
-                
-                # รวมได้! ย้ายทุกสาขาจาก trip2 ไป trip1
-                for code in trip2['codes']:
-                    test_df.loc[test_df['Code'] == code, 'Trip'] = trip1['trip_num']
-                
-                # อัปเดต trip_recommended_vehicles เป็น JB
-                trip_recommended_vehicles[trip1['trip_num']] = 'JB'
-                merged_trips.add(trip2['trip_num'])
-                merge_4w_to_larger_count += 1
-                
-                # อัปเดต trip1 info
-                trip1['weight'] = combined_w
-                trip1['cube'] = combined_c
-                trip1['count'] = combined_count
-                trip1['codes'].extend(trip2['codes'])
-    
-    # ===============================================
-    # 🎯 Phase 6.7: รวม 4W ที่เหลือเข้ากับ JB ที่ไม่เต็ม
-    # ===============================================
-    # หา 4W ที่ยังเหลืออยู่
-    for trip_num in list(test_df['Trip'].unique()):
-        if trip_num == 0:
-            continue
-        
-        trip_data = test_df[test_df['Trip'] == trip_num]
-        if len(trip_data) == 0:
-            continue
-        
-        trip_vehicle = trip_recommended_vehicles.get(trip_num, '4W')
-        if trip_vehicle != '4W':
-            continue
-        
-        trip_w = trip_data['Weight'].sum()
-        trip_c = trip_data['Cube'].sum()
-        trip_count = len(trip_data)
-        trip_codes_list = list(trip_data['Code'].values)
-        
-        # คำนวณ util ของ 4W
-        util_4w = max(
-            (trip_w / LIMITS['4W']['max_w']) * 100,
-            (trip_c / LIMITS['4W']['max_c']) * 100
-        )
-        
-        # ถ้าผ่าน MIN_UTIL แล้ว → ข้าม
-        if util_4w >= MIN_UTIL.get('4W', 70):
-            continue
-        
-        # หา centroid
-        trip_lats, trip_lons = [], []
-        for code in trip_codes_list:
-            lat, lon = coord_cache.get(code, (None, None))
-            if lat and lon:
-                trip_lats.append(lat)
-                trip_lons.append(lon)
-        
-        if not trip_lats:
-            continue
-        
-        trip_lat = sum(trip_lats) / len(trip_lats)
-        trip_lon = sum(trip_lons) / len(trip_lons)
-        
-        # หา JB ที่ใกล้ที่สุดและรับได้
-        best_jb = None
-        best_dist = float('inf')
-        
-        for target_num in test_df['Trip'].unique():
-            if target_num == 0 or target_num == trip_num:
-                continue
-            
-            target_data = test_df[test_df['Trip'] == target_num]
-            if len(target_data) == 0:
-                continue
-            
-            target_vehicle = trip_recommended_vehicles.get(target_num, '4W')
-            if target_vehicle != 'JB':
-                continue
-            
-            target_w = target_data['Weight'].sum()
-            target_c = target_data['Cube'].sum()
-            target_count = len(target_data)
-            
-            # เช็ค capacity
-            new_w = target_w + trip_w
-            new_c = target_c + trip_c
-            new_count = target_count + trip_count
-            
-            if new_c > LIMITS['JB']['max_c'] or new_w > LIMITS['JB']['max_w'] or new_count > 12:
-                continue
-            
-            # หา centroid ของ JB
-            target_lats, target_lons = [], []
-            for code in target_data['Code'].values:
-                lat, lon = coord_cache.get(code, (None, None))
-                if lat and lon:
-                    target_lats.append(lat)
-                    target_lons.append(lon)
-            
-            if not target_lats:
-                continue
-            
-            target_lat = sum(target_lats) / len(target_lats)
-            target_lon = sum(target_lons) / len(target_lons)
-            
-            dist = haversine_distance(trip_lat, trip_lon, target_lat, target_lon)
-            if dist > MERGE_DISTANCE_LIMIT:
-                continue
-            
-            # 🚨 เช็ค consecutive distance หลังรวม
-            combined_codes = list(target_data['Code'].values) + trip_codes_list
-            max_consec = calculate_max_consecutive_distance(combined_codes, coord_cache)
-            if max_consec > MAX_DISTANCE_IN_TRIP:
-                continue
-            
-            if dist < best_dist:
-                best_dist = dist
-                best_jb = target_num
-        
-        # ย้ายสาขาไป JB
-        if best_jb is not None:
-            for code in trip_codes_list:
-                test_df.loc[test_df['Code'] == code, 'Trip'] = best_jb
-            merge_4w_count += 1
-    
-    # ===============================================
-    # 🎯 Phase 6.8: Force Upgrade Low Util 4W to 6W
-    # ถ้า 4W ไม่ผ่าน MIN_UTIL และรวมไม่ได้ → เปลี่ยนเป็น 6W แล้วดึงสาขาใกล้มาเพิ่ม
-    # ===============================================
-    force_upgrade_count = 0
-    
-    # หา 4W ที่ยังไม่ผ่าน MIN_UTIL
-    for trip_num in list(test_df['Trip'].unique()):
-        if trip_num == 0:
-            continue
-        
-        trip_data = test_df[test_df['Trip'] == trip_num]
-        if len(trip_data) == 0:
-            continue
-        
-        trip_vehicle = trip_recommended_vehicles.get(trip_num, '4W')
-        if trip_vehicle != '4W':
-            continue
-        
-        trip_w = trip_data['Weight'].sum()
-        trip_c = trip_data['Cube'].sum()
-        trip_codes_list = list(trip_data['Code'].values)
-        
-        # คำนวณ util ของ 4W
-        util_4w = max(
-            (trip_w / LIMITS['4W']['max_w']) * 100,
-            (trip_c / LIMITS['4W']['max_c']) * 100
-        )
-        
-        # ถ้าผ่าน MIN_UTIL แล้ว → ข้าม
-        if util_4w >= MIN_UTIL.get('4W', 70):
-            continue
-        
-        # เช็คว่าสาขาทั้งหมดรับ 6W ได้ไหม
-        can_use_6w = True
-        for code in trip_codes_list:
-            branch_max = get_max_vehicle_for_branch(code)
-            if branch_max in ['4W', 'JB']:  # ไม่รับ 6W
-                can_use_6w = False
-                break
-        
-        if not can_use_6w:
-            continue
-        
-        # หา centroid ของทริปนี้
-        trip_lats, trip_lons = [], []
-        for code in trip_codes_list:
-            lat, lon = coord_cache.get(code, (None, None))
-            if lat and lon:
-                trip_lats.append(lat)
-                trip_lons.append(lon)
-        
-        if not trip_lats:
-            continue
-        
-        trip_lat = sum(trip_lats) / len(trip_lats)
-        trip_lon = sum(trip_lons) / len(trip_lons)
-        
-        # เปลี่ยนเป็น 6W
-        trip_recommended_vehicles[trip_num] = '6W'
-        
-        # ดึงสาขาจากทริปอื่นที่ใกล้เคียงมาเพิ่ม จนกว่าจะผ่าน MIN_UTIL 6W (90%)
-        current_w = trip_w
-        current_c = trip_c
-        current_codes = trip_codes_list.copy()
-        
-        # หาสาขาจากทริปอื่นที่อยู่ใกล้
-        nearby_branches = []
-        for other_trip in test_df['Trip'].unique():
-            if other_trip == 0 or other_trip == trip_num:
-                continue
-            
-            other_data = test_df[test_df['Trip'] == other_trip]
-            for _, row in other_data.iterrows():
-                code = row['Code']
-                lat, lon = coord_cache.get(code, (None, None))
-                if lat and lon:
-                    # เช็คว่าสาขานี้รับ 6W ได้ไหม
-                    branch_max = get_max_vehicle_for_branch(code)
-                    if branch_max not in ['6W']:
-                        continue
-                    
-                    dist_to_centroid = haversine_distance(lat, lon, trip_lat, trip_lon)
-                    if dist_to_centroid <= MAX_DISTANCE_IN_TRIP:  # ใกล้พอที่จะรวมได้
-                        nearby_branches.append({
-                            'code': code,
-                            'weight': row['Weight'],
-                            'cube': row['Cube'],
-                            'dist': dist_to_centroid,
-                            'from_trip': other_trip,
-                            'lat': lat,
-                            'lon': lon
-                        })
-        
-        # เรียงตามระยะใกล้สุดก่อน
-        nearby_branches.sort(key=lambda x: x['dist'])
-        
-        # ดึงสาขามาเพิ่มจนผ่าน MIN_UTIL 6W (90%)
-        for branch in nearby_branches:
-            # คำนวณ util ปัจจุบัน
-            util_6w = max(
-                (current_w / LIMITS['6W']['max_w']) * 100,
-                (current_c / LIMITS['6W']['max_c']) * 100
-            )
-            
-            # ถ้าผ่านแล้ว → หยุด
-            if util_6w >= MIN_UTIL.get('6W', 90):
-                break
-            
-            # เช็ค capacity ว่าใส่ได้ไหม
-            new_w = current_w + branch['weight']
-            new_c = current_c + branch['cube']
-            
-            if new_w > LIMITS['6W']['max_w'] or new_c > LIMITS['6W']['max_c']:
-                continue
-            
-            # เช็ค consecutive distance หลังเพิ่ม
-            test_codes = current_codes + [branch['code']]
-            max_consec = calculate_max_consecutive_distance(test_codes, coord_cache)
-            if max_consec > MAX_DISTANCE_IN_TRIP:
-                continue
-            
-            # ย้ายสาขามา
-            test_df.loc[test_df['Code'] == branch['code'], 'Trip'] = trip_num
-            current_w = new_w
-            current_c = new_c
-            current_codes.append(branch['code'])
-        
-        force_upgrade_count += 1
-    
-    # ===============================================
-    # 🎯 Phase 6.9: FORCE Merge Low Util Trips
-    # ทริป 4W ที่ไม่ผ่าน MIN_UTIL จะถูกบังคับรวมเข้ากับทริปอื่น
-    # ถ้ารวมไม่ได้เลย → กระจายสาขาไปทริปอื่น
-    # ===============================================
-    force_merge_count = 0
-    max_iterations = 10  # ป้องกัน infinite loop
-    
-    for iteration in range(max_iterations):
-        # หา 4W ที่ไม่ผ่าน MIN_UTIL
-        low_util_4w = []
-        for trip_num in list(test_df['Trip'].unique()):
-            if trip_num == 0:
-                continue
-            
-            trip_data = test_df[test_df['Trip'] == trip_num]
-            if len(trip_data) == 0:
-                continue
-            
-            trip_vehicle = trip_recommended_vehicles.get(trip_num, '4W')
-            if trip_vehicle != '4W':
-                continue
-            
-            trip_w = trip_data['Weight'].sum()
-            trip_c = trip_data['Cube'].sum()
-            trip_codes_list = list(trip_data['Code'].values)
-            
-            util_4w = max(
-                (trip_w / LIMITS['4W']['max_w']) * 100,
-                (trip_c / LIMITS['4W']['max_c']) * 100
-            )
-            
-            if util_4w < MIN_UTIL.get('4W', 70):
-                # หา centroid
-                trip_lats, trip_lons = [], []
-                for code in trip_codes_list:
-                    lat, lon = coord_cache.get(code, (None, None))
-                    if lat and lon:
-                        trip_lats.append(lat)
-                        trip_lons.append(lon)
-                
-                if trip_lats:
-                    low_util_4w.append({
-                        'trip_num': trip_num,
-                        'util': util_4w,
-                        'weight': trip_w,
-                        'cube': trip_c,
-                        'codes': trip_codes_list,
-                        'lat': sum(trip_lats) / len(trip_lats),
-                        'lon': sum(trip_lons) / len(trip_lons)
-                    })
-        
-        if not low_util_4w:
-            break  # ไม่มี 4W ที่ไม่ผ่านแล้ว
-        
-        # เรียงจาก util น้อยสุด (รวมง่ายกว่า)
-        low_util_4w.sort(key=lambda x: x['util'])
-        
-        merged_any = False
-        for trip_info in low_util_4w:
-            trip_num = trip_info['trip_num']
-            
-            # เช็คว่าทริปยังมีอยู่ไหม
-            trip_data = test_df[test_df['Trip'] == trip_num]
-            if len(trip_data) == 0:
-                continue
-            
-            trip_codes = trip_info['codes']
-            trip_lat = trip_info['lat']
-            trip_lon = trip_info['lon']
-            
-            # หาทริปที่รวมได้ (ไม่จำกัดประเภทรถ)
-            best_target = None
-            best_score = float('inf')
-            
-            for target_num in test_df['Trip'].unique():
-                if target_num == 0 or target_num == trip_num:
-                    continue
-                
-                target_data = test_df[test_df['Trip'] == target_num]
-                if len(target_data) == 0:
-                    continue
-                
-                target_vehicle = trip_recommended_vehicles.get(target_num, '4W')
-                target_w = target_data['Weight'].sum()
-                target_c = target_data['Cube'].sum()
-                target_count = len(target_data)
-                target_codes = list(target_data['Code'].values)
-                
-                # คำนวณ combined values
-                new_w = target_w + trip_info['weight']
-                new_c = target_c + trip_info['cube']
-                new_count = target_count + len(trip_codes)
-                
-                # เลือกรถที่เหมาะสมสำหรับ combined
-                combined_codes = target_codes + trip_codes
-                
-                # หา max vehicle ที่ทุกสาขารับได้
-                min_max_vehicle = '6W'
-                for code in combined_codes:
-                    branch_max = get_max_vehicle_for_branch(code)
-                    if branch_max == '4W':
-                        min_max_vehicle = '4W'
-                        break
-                    elif branch_max == 'JB' and min_max_vehicle == '6W':
-                        min_max_vehicle = 'JB'
-                
-                # เลือกรถที่เหมาะสม
-                if new_c <= LIMITS['4W']['max_c'] and new_w <= LIMITS['4W']['max_w'] and min_max_vehicle == '4W':
-                    new_vehicle = '4W'
-                    new_util = max((new_w / LIMITS['4W']['max_w']) * 100, (new_c / LIMITS['4W']['max_c']) * 100)
-                    max_branches = 12
-                elif new_c <= LIMITS['JB']['max_c'] and new_w <= LIMITS['JB']['max_w'] and min_max_vehicle in ['JB', '6W']:
-                    new_vehicle = 'JB'
-                    new_util = max((new_w / LIMITS['JB']['max_w']) * 100, (new_c / LIMITS['JB']['max_c']) * 100)
-                    max_branches = 12
-                elif new_c <= LIMITS['6W']['max_c'] and new_w <= LIMITS['6W']['max_w'] and min_max_vehicle == '6W':
-                    new_vehicle = '6W'
-                    new_util = max((new_w / LIMITS['6W']['max_w']) * 100, (new_c / LIMITS['6W']['max_c']) * 100)
-                    max_branches = 25
-                else:
-                    continue  # เกิน capacity
-                
-                # เช็คจำนวนสาขา
-                if new_count > max_branches:
-                    continue
-                
-                # เช็ค consecutive distance
-                max_consec = calculate_max_consecutive_distance(combined_codes, coord_cache)
-                if max_consec > MAX_DISTANCE_IN_TRIP:
-                    continue
-                
-                # หา centroid ของ target
-                target_lats = [coord_cache.get(c, (None, None))[0] for c in target_codes if coord_cache.get(c, (None, None))[0]]
-                target_lons = [coord_cache.get(c, (None, None))[1] for c in target_codes if coord_cache.get(c, (None, None))[1]]
-                
-                if not target_lats:
-                    continue
-                
-                target_lat = sum(target_lats) / len(target_lats)
-                target_lon = sum(target_lons) / len(target_lons)
-                
-                centroid_dist = haversine_distance(trip_lat, trip_lon, target_lat, target_lon)
-                
-                # Score: ระยะใกล้ + util สูง = ดี
-                score = centroid_dist - (new_util * 0.5)  # ยิ่ง util สูง ยิ่งดี
-                
-                if score < best_score:
-                    best_score = score
-                    best_target = target_num
-            
-            # รวมเข้า target
-            if best_target is not None:
-                target_vehicle = trip_recommended_vehicles.get(best_target, '4W')
-                target_data = test_df[test_df['Trip'] == best_target]
-                target_codes = list(target_data['Code'].values)
-                combined_codes = target_codes + trip_codes
-                
-                # คำนวณรถใหม่
-                new_w = target_data['Weight'].sum() + trip_info['weight']
-                new_c = target_data['Cube'].sum() + trip_info['cube']
-                
-                # หา max vehicle ที่ทุกสาขารับได้
-                min_max_vehicle = '6W'
-                for code in combined_codes:
-                    branch_max = get_max_vehicle_for_branch(code)
-                    if branch_max == '4W':
-                        min_max_vehicle = '4W'
-                        break
-                    elif branch_max == 'JB' and min_max_vehicle == '6W':
-                        min_max_vehicle = 'JB'
-                
-                # เลือกรถที่เหมาะสม
-                if new_c <= LIMITS['4W']['max_c'] and new_w <= LIMITS['4W']['max_w'] and min_max_vehicle == '4W':
-                    new_vehicle = '4W'
-                elif new_c <= LIMITS['JB']['max_c'] and new_w <= LIMITS['JB']['max_w'] and min_max_vehicle in ['JB', '6W']:
-                    new_vehicle = 'JB'
-                else:
-                    new_vehicle = '6W'
-                
-                # ย้ายสาขา
-                for code in trip_codes:
-                    test_df.loc[test_df['Code'] == code, 'Trip'] = best_target
-                
-                trip_recommended_vehicles[best_target] = new_vehicle
-                force_merge_count += 1
-                merged_any = True
-        
-        if not merged_any:
-            break  # ไม่มี merge เพิ่มแล้ว
-    
-    # ===============================================
-    # 🎯 Phase 6.10: Force Merge Low Util JB
-    # JB ที่ไม่ผ่าน MIN_UTIL (80%) → รวมเข้ากับ 6W หรือ JB อื่น
-    # ===============================================
-    for iteration in range(5):
-        low_util_jb = []
-        for trip_num in list(test_df['Trip'].unique()):
-            if trip_num == 0:
-                continue
-            
-            trip_data = test_df[test_df['Trip'] == trip_num]
-            if len(trip_data) == 0:
-                continue
-            
-            trip_vehicle = trip_recommended_vehicles.get(trip_num, '4W')
-            if trip_vehicle != 'JB':
-                continue
-            
-            trip_w = trip_data['Weight'].sum()
-            trip_c = trip_data['Cube'].sum()
-            trip_codes_list = list(trip_data['Code'].values)
-            
-            util_jb = max(
-                (trip_w / LIMITS['JB']['max_w']) * 100,
-                (trip_c / LIMITS['JB']['max_c']) * 100
-            )
-            
-            if util_jb < MIN_UTIL.get('JB', 80):
-                trip_lats, trip_lons = [], []
-                for code in trip_codes_list:
-                    lat, lon = coord_cache.get(code, (None, None))
-                    if lat and lon:
-                        trip_lats.append(lat)
-                        trip_lons.append(lon)
-                
-                if trip_lats:
-                    low_util_jb.append({
-                        'trip_num': trip_num,
-                        'util': util_jb,
-                        'weight': trip_w,
-                        'cube': trip_c,
-                        'codes': trip_codes_list,
-                        'lat': sum(trip_lats) / len(trip_lats),
-                        'lon': sum(trip_lons) / len(trip_lons)
-                    })
-        
-        if not low_util_jb:
-            break
-        
-        low_util_jb.sort(key=lambda x: x['util'])
-        merged_any = False
-        
-        for trip_info in low_util_jb:
-            trip_num = trip_info['trip_num']
-            trip_data = test_df[test_df['Trip'] == trip_num]
-            if len(trip_data) == 0:
-                continue
-            
-            trip_codes = trip_info['codes']
-            
-            # หา 6W หรือ JB ที่รวมได้
-            best_target = None
-            best_dist = float('inf')
-            
-            for target_num in test_df['Trip'].unique():
-                if target_num == 0 or target_num == trip_num:
-                    continue
-                
-                target_data = test_df[test_df['Trip'] == target_num]
-                if len(target_data) == 0:
-                    continue
-                
-                target_vehicle = trip_recommended_vehicles.get(target_num, '4W')
-                if target_vehicle not in ['6W', 'JB']:
-                    continue
-                
-                target_codes = list(target_data['Code'].values)
-                combined_codes = target_codes + trip_codes
-                
-                # เช็ค capacity
-                new_w = target_data['Weight'].sum() + trip_info['weight']
-                new_c = target_data['Cube'].sum() + trip_info['cube']
-                new_count = len(combined_codes)
-                
-                # ลองใส่ 6W
-                if target_vehicle == '6W':
-                    if new_c > LIMITS['6W']['max_c'] or new_w > LIMITS['6W']['max_w'] or new_count > 25:
-                        continue
-                else:  # JB
-                    if new_c > LIMITS['JB']['max_c'] or new_w > LIMITS['JB']['max_w'] or new_count > 12:
-                        # ลองเปลี่ยนเป็น 6W
-                        if new_c <= LIMITS['6W']['max_c'] and new_w <= LIMITS['6W']['max_w'] and new_count <= 25:
-                            # เช็คว่าทุกสาขารับ 6W ได้
-                            can_6w = True
-                            for code in combined_codes:
-                                if get_max_vehicle_for_branch(code) != '6W':
-                                    can_6w = False
-                                    break
-                            if not can_6w:
-                                continue
-                        else:
-                            continue
-                
-                # เช็ค consecutive distance
-                max_consec = calculate_max_consecutive_distance(combined_codes, coord_cache)
-                if max_consec > MAX_DISTANCE_IN_TRIP:
-                    continue
-                
-                # คำนวณระยะ centroid
-                target_lats = [coord_cache.get(c, (None, None))[0] for c in target_codes if coord_cache.get(c, (None, None))[0]]
-                target_lons = [coord_cache.get(c, (None, None))[1] for c in target_codes if coord_cache.get(c, (None, None))[1]]
-                if not target_lats:
-                    continue
-                
-                dist = haversine_distance(trip_info['lat'], trip_info['lon'], 
-                                          sum(target_lats)/len(target_lats), sum(target_lons)/len(target_lons))
-                
-                if dist < best_dist:
-                    best_dist = dist
-                    best_target = target_num
-            
-            if best_target is not None:
-                target_vehicle = trip_recommended_vehicles.get(best_target, '4W')
-                target_data = test_df[test_df['Trip'] == best_target]
-                new_w = target_data['Weight'].sum() + trip_info['weight']
-                new_c = target_data['Cube'].sum() + trip_info['cube']
-                
-                # เลือกรถ
-                if target_vehicle == '6W' or new_c > LIMITS['JB']['max_c'] or new_w > LIMITS['JB']['max_w']:
-                    trip_recommended_vehicles[best_target] = '6W'
-                
-                for code in trip_codes:
-                    test_df.loc[test_df['Code'] == code, 'Trip'] = best_target
-                
-                force_merge_count += 1
-                merged_any = True
-        
-        if not merged_any:
-            break
-    
-    # ===============================================
-    # 🎯 Phase 7: Final Validation & Auto-Fix
-    # 1. แยกทริปที่เกิน 100% ออกเป็น 2 คัน
-    # 2. รวมทริปที่ต่ำกว่า MIN_UTIL เข้ากับทริปอื่น
-    # ===============================================
-    
-    # 7.1 แยกทริปที่เกิน 100%
-    for iteration in range(5):
-        over_capacity_trips = []
-        
-        for trip_num in list(test_df['Trip'].unique()):
-            if trip_num == 0:
-                continue
-            
-            trip_data = test_df[test_df['Trip'] == trip_num]
-            if len(trip_data) == 0:
-                continue
-            
-            trip_w = trip_data['Weight'].sum()
-            trip_c = trip_data['Cube'].sum()
-            
-            # หารถที่ใหญ่ที่สุดที่ใช้ได้ (ตามข้อจำกัดสาขา)
-            trip_codes = list(trip_data['Code'].values)
-            max_allowed = get_max_vehicle_for_trip(trip_codes)
-            vehicle = trip_recommended_vehicles.get(trip_num, max_allowed)
-            
-            # ถ้ารถที่แนะนำใหญ่กว่าที่อนุญาต ให้ใช้รถที่อนุญาต
-            vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
-            if vehicle_sizes.get(vehicle, 3) > vehicle_sizes.get(max_allowed, 3):
-                vehicle = max_allowed
-                trip_recommended_vehicles[trip_num] = max_allowed
-            
-            limits = LIMITS.get(vehicle, LIMITS['6W'])
-            
-            util = max((trip_w / limits['max_w']) * 100, (trip_c / limits['max_c']) * 100)
-            
-            # 🔒 ถ้าเกิน 100% และห้ามใช้รถใหญ่กว่า → ต้องแยกทริป
-            should_split = False
-            if util > 100:
-                should_split = True
-            
-            # 🔒 ถ้าใช้ JB เกิน แต่ห้าม 6W → ต้องแยกทริป
-            if vehicle == 'JB' and max_allowed in ['JB', '4W']:
-                jb_limits = LIMITS['JB']
-                jb_util = max((trip_w / jb_limits['max_w']) * 100, (trip_c / jb_limits['max_c']) * 100)
-                if jb_util > 100:
-                    should_split = True
-            
-            if should_split:
-                over_capacity_trips.append({
-                    'trip_num': trip_num,
-                    'util': util,
-                    'weight': trip_w,
-                    'cube': trip_c,
-                    'codes': list(trip_data['Code'].values),
-                    'vehicle': vehicle
-                })
-        
-        if not over_capacity_trips:
-            break
-        
-        for trip_info in over_capacity_trips:
-            trip_num = trip_info['trip_num']
-            trip_codes = trip_info['codes']
-            
-            if len(trip_codes) < 2:
-                continue  # ไม่สามารถแยกได้
-            
-            # แยกครึ่ง
-            mid = len(trip_codes) // 2
-            codes_stay = trip_codes[:mid]
-            codes_move = trip_codes[mid:]
-            
-            # สร้างทริปใหม่
-            new_trip_num = max(test_df['Trip'].max(), 0) + 1
-            
-            for code in codes_move:
-                test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip_num
-            
-            # กำหนดรถสำหรับทริปใหม่
-            trip_recommended_vehicles[new_trip_num] = trip_info['vehicle']
-    
-    # 7.2 รวมทริปที่ต่ำกว่า MIN_UTIL หรือเปลี่ยนรถให้เหมาะสม
-    for iteration in range(15):
-        low_util_trips = []
-        
-        for trip_num in list(test_df['Trip'].unique()):
-            if trip_num == 0:
-                continue
-            
-            trip_data = test_df[test_df['Trip'] == trip_num]
-            if len(trip_data) == 0:
-                continue
-            
-            trip_w = trip_data['Weight'].sum()
-            trip_c = trip_data['Cube'].sum()
-            trip_codes = list(trip_data['Code'].values)
-            
-            vehicle = trip_recommended_vehicles.get(trip_num, '4W')
-            limits = LIMITS.get(vehicle, LIMITS['4W'])
-            min_util_required = MIN_UTIL.get(vehicle, 70)
-            
-            util = max((trip_w / limits['max_w']) * 100, (trip_c / limits['max_c']) * 100)
-            
-            if util < min_util_required:
-                # หา centroid
-                trip_lats, trip_lons = [], []
-                for code in trip_codes:
-                    lat, lon = coord_cache.get(code, (None, None))
-                    if lat and lon:
-                        trip_lats.append(lat)
-                        trip_lons.append(lon)
-                
-                if trip_lats:
-                    low_util_trips.append({
-                        'trip_num': trip_num,
-                        'util': util,
-                        'weight': trip_w,
-                        'cube': trip_c,
-                        'codes': trip_codes,
-                        'vehicle': vehicle,
-                        'lat': sum(trip_lats) / len(trip_lats),
-                        'lon': sum(trip_lons) / len(trip_lons)
-                    })
-        
-        if not low_util_trips:
-            break
-        
-        # เรียงจาก util น้อยสุด
-        low_util_trips.sort(key=lambda x: x['util'])
-        
-        fixed_any = False
-        for trip_info in low_util_trips:
-            trip_num = trip_info['trip_num']
-            
-            trip_data = test_df[test_df['Trip'] == trip_num]
-            if len(trip_data) == 0:
-                continue
-            
-            trip_codes = trip_info['codes']
-            trip_w = trip_info['weight']
-            trip_c = trip_info['cube']
-            current_vehicle = trip_info['vehicle']
-            
-            # 🔧 วิธี 1: ลองเปลี่ยนเป็นรถเล็กลง (util จะสูงขึ้น)
-            vehicle_order = ['4W', 'JB', '6W']
-            current_idx = vehicle_order.index(current_vehicle) if current_vehicle in vehicle_order else 2
-            
-            changed_vehicle = False
-            for smaller_idx in range(current_idx - 1, -1, -1):
-                smaller_vehicle = vehicle_order[smaller_idx]
-                smaller_limits = LIMITS[smaller_vehicle]
-                
-                # เช็คว่าใส่รถเล็กได้หรือไม่ (ห้ามเกิน 100%)
-                w_util = (trip_w / smaller_limits['max_w']) * 100
-                c_util = (trip_c / smaller_limits['max_c']) * 100
-                new_util = max(w_util, c_util)
-                
-                # ต้องไม่เกิน 100% และผ่าน MIN_UTIL ของรถเล็ก
-                if new_util <= 100 and new_util >= MIN_UTIL.get(smaller_vehicle, 70):
-                    # เช็คจำนวนสาขา
-                    if smaller_vehicle in ['4W', 'JB'] and len(trip_codes) > 12:
-                        continue
-                    
-                    trip_recommended_vehicles[trip_num] = smaller_vehicle
-                    changed_vehicle = True
-                    fixed_any = True
-                    break
-            
-            if changed_vehicle:
-                continue
-            
-            # 🔧 วิธี 2: ลองเปลี่ยนเป็นรถใหญ่ขึ้น (ต้องผ่าน MIN_UTIL ของรถใหญ่)
-            for larger_idx in range(current_idx + 1, len(vehicle_order)):
-                larger_vehicle = vehicle_order[larger_idx]
-                larger_limits = LIMITS[larger_vehicle]
-                
-                w_util = (trip_w / larger_limits['max_w']) * 100
-                c_util = (trip_c / larger_limits['max_c']) * 100
-                new_util = max(w_util, c_util)
-                
-                # ต้องผ่าน MIN_UTIL ของรถใหญ่
-                if new_util >= MIN_UTIL.get(larger_vehicle, 70) and new_util <= 100:
-                    trip_recommended_vehicles[trip_num] = larger_vehicle
-                    changed_vehicle = True
-                    fixed_any = True
-                    break
-            
-            if changed_vehicle:
-                continue
-            
-            # 🔧 วิธี 3: รวมกับทริปอื่นที่ใกล้เคียง
-            best_target = None
-            best_new_util = 0
-            best_dist = float('inf')
-            
-            for target_num in test_df['Trip'].unique():
-                if target_num == 0 or target_num == trip_num:
-                    continue
-                
-                target_data = test_df[test_df['Trip'] == target_num]
-                if len(target_data) == 0:
-                    continue
-                
-                target_vehicle = trip_recommended_vehicles.get(target_num, '4W')
-                target_codes = list(target_data['Code'].values)
-                combined_codes = target_codes + trip_codes
-                
-                # คำนวณ capacity รวม
-                new_w = target_data['Weight'].sum() + trip_w
-                new_c = target_data['Cube'].sum() + trip_c
-                new_count = len(combined_codes)
-                
-                # เลือกรถที่เหมาะสม (เล็กสุดที่ใส่ได้)
-                new_vehicle = None
-                for v in ['4W', 'JB', '6W']:
-                    v_limits = LIMITS[v]
-                    if new_w <= v_limits['max_w'] and new_c <= v_limits['max_c']:
-                        if v in ['4W', 'JB'] and new_count > 12:
-                            continue
-                        new_vehicle = v
-                        break
-                
-                if not new_vehicle:
-                    continue  # เกิน capacity
-                
-                new_limits = LIMITS[new_vehicle]
-                new_util = max((new_w / new_limits['max_w']) * 100, (new_c / new_limits['max_c']) * 100)
-                
-                # ต้องไม่เกิน 100% และผ่าน MIN_UTIL
-                if new_util > 100:
-                    continue
-                
-                new_min_util = MIN_UTIL.get(new_vehicle, 70)
-                if new_util < new_min_util:
-                    continue
-                
-                # เช็ค consecutive distance
-                max_consec = calculate_max_consecutive_distance(combined_codes, coord_cache)
-                if max_consec > MAX_DISTANCE_IN_TRIP:
-                    continue
-                
-                # คำนวณระยะ centroid
-                target_lats = [coord_cache.get(c, (None, None))[0] for c in target_codes if coord_cache.get(c, (None, None))[0]]
-                target_lons = [coord_cache.get(c, (None, None))[1] for c in target_codes if coord_cache.get(c, (None, None))[1]]
-                if not target_lats:
-                    continue
-                
-                dist = haversine_distance(trip_info['lat'], trip_info['lon'],
-                                          sum(target_lats)/len(target_lats), sum(target_lons)/len(target_lons))
-                
-                # เลือกทริปที่รวมแล้วได้ util สูงสุดและใกล้ที่สุด
-                if new_util > best_new_util or (new_util == best_new_util and dist < best_dist):
-                    best_new_util = new_util
-                    best_target = target_num
-                    best_dist = dist
-                    best_new_vehicle = new_vehicle
-            
-            if best_target is not None:
-                # รวมเข้า target
-                trip_recommended_vehicles[best_target] = best_new_vehicle
-                
-                for code in trip_codes:
-                    test_df.loc[test_df['Code'] == code, 'Trip'] = best_target
-                
-                fixed_any = True
-        
-        if not fixed_any:
-            break
     
     # สรุปผลและแนะนำรถ
     summary_data = []
@@ -6915,18 +4813,6 @@ def predict_trips(test_df, model_data):
                 total_distance += calculate_distance(branch_coords[-1][0], branch_coords[-1][1],
                                                     DC_WANG_NOI_LAT, DC_WANG_NOI_LON)
         
-        # 🔒 ตรวจสอบ MIN_UTIL และ MAX_UTIL (100%)
-        max_util = max(w_util, c_util)
-        min_util_required = MIN_UTIL.get(suggested, 70)
-        
-        # สร้าง status
-        if max_util > 100:
-            status = '🚫 เกิน100%'
-        elif max_util < min_util_required:
-            status = f'⚠️ ต่ำ{min_util_required}%'
-        else:
-            status = '✅ ผ่าน'
-        
         summary_data.append({
             'Trip': trip_num,
             'Branches': len(trip_data),
@@ -6935,8 +4821,6 @@ def predict_trips(test_df, model_data):
             'Truck': f"{suggested} {source}",
             'Weight_Use%': w_util,
             'Cube_Use%': c_util,
-            'Max_Util%': max_util,
-            'Status': status,
             'Total_Distance': total_distance
         })
     
@@ -7021,96 +4905,45 @@ def predict_trips(test_df, model_data):
     test_df['Subdistrict'] = test_df['Code'].apply(get_subdistrict)
     test_df['District'] = test_df['Code'].apply(get_district)
     
-    # เพิ่มคอลัมน์ระยะทางระหว่างสาขาในทริป และเรียงลำดับด้วย Nearest Neighbor
+    # เพิ่มคอลัมน์ระยะทางระหว่างสาขาในทริป และเรียงลำดับ
     def add_distance_and_sort(df):
-        """
-        🔄 เรียงสาขาภายในแต่ละทริปด้วย Nearest Neighbor Algorithm
-        - เริ่มจาก DC → หาสาขาที่ใกล้ที่สุด → หาถัดไปที่ใกล้ที่สุด → ...
-        - ป้องกันการกระโดดไปมา
-        """
-        # สร้าง coord cache จาก MASTER_DATA
-        coord_cache_local = {}
-        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
-            for _, row in MASTER_DATA.iterrows():
-                code = row['Plan Code']
-                lat = row.get('ละติจูด', 0)
-                lon = row.get('ลองติจูด', 0)
-                if lat and lon and pd.notna(lat) and pd.notna(lon):
-                    coord_cache_local[code] = (float(lat), float(lon))
-        
-        # เก็บลำดับ Sequence ใหม่สำหรับแต่ละ code
-        new_sequences = {}
+        # คำนวณระยะทาง max ภายในแต่ละทริป
         trip_distances = {}
-        
         for trip_num in df['Trip'].unique():
-            if trip_num == 0:
-                continue
-                
-            trip_data = df[df['Trip'] == trip_num]
-            trip_codes = trip_data['Code'].tolist()
+            trip_codes = df[df['Trip'] == trip_num]['Code'].tolist()
+            max_dist = 0
             
-            if len(trip_codes) <= 1:
-                # สาขาเดี่ยว
-                if trip_codes:
-                    new_sequences[trip_codes[0]] = 1
-                trip_distances[trip_num] = 0
-                continue
+            # หาระยะทางสูงสุดระหว่างสาขาในทริป
+            for i in range(len(trip_codes)):
+                for j in range(i + 1, len(trip_codes)):
+                    code1, code2 = trip_codes[i], trip_codes[j]
+                    
+                    # ดึงพิกัด
+                    if not MASTER_DATA.empty:
+                        m1 = MASTER_DATA[MASTER_DATA['Plan Code'] == code1]
+                        m2 = MASTER_DATA[MASTER_DATA['Plan Code'] == code2]
+                        
+                        if len(m1) > 0 and len(m2) > 0:
+                            lat1 = m1.iloc[0].get('ละติจูด', 0)
+                            lon1 = m1.iloc[0].get('ลองติจูด', 0)
+                            lat2 = m2.iloc[0].get('ละติจูด', 0)
+                            lon2 = m2.iloc[0].get('ลองติจูด', 0)
+                            
+                            if lat1 and lon1 and lat2 and lon2:
+                                dist = haversine_distance(lat1, lon1, lat2, lon2)
+                                if dist > max_dist:
+                                    max_dist = dist
             
-            # 🔄 Nearest Neighbor Algorithm
-            # สร้างลิสต์พิกัด
-            points = []
-            for code in trip_codes:
-                lat, lon = coord_cache_local.get(code, (None, None))
-                if lat and lon:
-                    points.append((code, lat, lon))
-                else:
-                    # ไม่มีพิกัด ให้ไว้ท้าย
-                    points.append((code, DC_WANG_NOI_LAT, DC_WANG_NOI_LON))
-            
-            # เรียงลำดับด้วย Nearest Neighbor จาก DC
-            sorted_codes = []
-            remaining = points.copy()
-            current_lat, current_lon = DC_WANG_NOI_LAT, DC_WANG_NOI_LON
-            
-            while remaining:
-                best_idx = 0
-                best_dist = haversine_distance(current_lat, current_lon, remaining[0][1], remaining[0][2])
-                
-                for i, (_, lat, lon) in enumerate(remaining[1:], 1):
-                    dist = haversine_distance(current_lat, current_lon, lat, lon)
-                    if dist < best_dist:
-                        best_dist = dist
-                        best_idx = i
-                
-                best_point = remaining.pop(best_idx)
-                sorted_codes.append(best_point[0])
-                current_lat, current_lon = best_point[1], best_point[2]
-            
-            # กำหนด Sequence ใหม่
-            for seq, code in enumerate(sorted_codes, 1):
-                new_sequences[code] = seq
-            
-            # คำนวณ max consecutive distance
-            max_consecutive_dist = 0
-            for i in range(len(sorted_codes) - 1):
-                code1, code2 = sorted_codes[i], sorted_codes[i + 1]
-                lat1, lon1 = coord_cache_local.get(code1, (0, 0))
-                lat2, lon2 = coord_cache_local.get(code2, (0, 0))
-                if lat1 and lon1 and lat2 and lon2:
-                    dist = haversine_distance(lat1, lon1, lat2, lon2)
-                    if dist > max_consecutive_dist:
-                        max_consecutive_dist = dist
-            
-            trip_distances[trip_num] = round(max_consecutive_dist, 2)
+            trip_distances[trip_num] = round(max_dist, 2)
         
-        # เพิ่มคอลัมน์ Sequence ใหม่
-        df['Sequence'] = df['Code'].map(new_sequences).fillna(999)
-        
-        # เพิ่มคอลัมน์ระยะทาง max ระหว่างสาขาติดกันในทริป
+        # เพิ่มคอลัมน์ระยะทาง max ในทริป
         df['Max_Distance_in_Trip'] = df['Trip'].map(trip_distances)
         
-        # เรียงลำดับภายในแต่ละทริป: Trip → Sequence (Nearest Neighbor order)
-        df = df.sort_values(['Trip', 'Sequence'], ascending=[True, True])
+        # เรียงลำดับภายในแต่ละทริป: Trip → Sequence (ถ้ามี) หรือ Weight
+        if 'Sequence' in df.columns:
+            df = df.sort_values(['Trip', 'Sequence'], ascending=[True, True])
+        else:
+            df = df.sort_values(['Trip', 'Weight'], ascending=[True, False])
         return df
     
     test_df = add_distance_and_sort(test_df)
@@ -7188,29 +5021,38 @@ def predict_trips(test_df, model_data):
     
     test_df = calculate_detailed_distances(test_df)
     
-    # เพิ่มคอลัมน์เช็คว่าสาขาใช้รถประเภทนี้ได้หรือไม่ (อ้างอิงจาก Auto Plan เท่านั้น!)
+    # เพิ่มคอลัมน์เช็คว่าสาขาเคยใช้รถประเภทนี้หรือไม่
     def check_vehicle_history(row):
         code = row['Code']
         trip = row['Trip']
         truck_type = trip_truck_type_map.get(trip, '6W')
         
+        if code not in branch_vehicles:
+            return "✅ ใช้ได้ (สาขาใหม่)"
+        
+        vehicle_history = branch_vehicles.get(code, {})
+        if not vehicle_history:
+            return "✅ ใช้ได้ (ไม่มีประวัติ)"
+        
         vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
-        requested_size = vehicle_sizes.get(truck_type, 3)
+        requested_size = vehicle_sizes.get(truck_type, 0)
         
-        # 🔒 อ้างอิงจาก AUTO_PLAN_TRUCK_LIMITS เท่านั้น (ไม่ใช้ Booking History)
-        if code in AUTO_PLAN_TRUCK_LIMITS:
-            max_allowed = AUTO_PLAN_TRUCK_LIMITS[code]
-            max_allowed_size = vehicle_sizes.get(max_allowed, 3)
-            
-            if requested_size <= max_allowed_size:
-                # รถที่ขอใช้ เล็กกว่าหรือเท่ากับที่อนุญาต = ใช้ได้
-                return f"✅ ใช้ได้ (อนุญาต {max_allowed})"
-            else:
-                # รถที่ขอใช้ ใหญ่กว่าที่อนุญาต = ห้าม
-                return f"🚫 จำกัด {max_allowed} (Auto Plan)"
+        # หารถใหญ่สุดที่สาขาเคยใช้
+        max_used_size = max(vehicle_sizes.get(v, 0) for v in vehicle_history)
+        max_used_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(max_used_size, '6W')
         
-        # ถ้าไม่มีใน Auto Plan = ใช้ได้ทุกประเภท (ไม่มีข้อจำกัด)
-        return "✅ ใช้ได้ (ไม่มีข้อจำกัด)"
+        # ถ้าเคยใช้รถประเภทนี้
+        if truck_type in vehicle_history:
+            count = vehicle_history[truck_type]
+            return f"✅ เคยใช้ ({count} ครั้ง)"
+        
+        # ถ้าขอใช้รถเล็กกว่าที่เคยใช้ = ใช้ได้
+        if requested_size < max_used_size:
+            return f"✅ ใช้ได้ (เคยใช้ {max_used_vehicle})"
+        
+        # ถ้าขอใช้รถใหญ่กว่าที่เคยใช้ = อาจเข้าไม่ได้
+        history_str = ", ".join([f"{v}:{c}" for v, c in vehicle_history.items()])
+        return f"🚫 จำกัด {max_used_vehicle} ({history_str})"
     
     test_df['VehicleCheck'] = test_df.apply(check_vehicle_history, axis=1)
     
@@ -7234,17 +5076,6 @@ def predict_trips(test_df, model_data):
     
     test_df['BranchCount'] = test_df.apply(check_branch_count, axis=1)
     
-    # ===============================================
-    # 🎯 Renumber trips: เริ่มจาก 1, 2, 3, ... (ไม่มีช่องว่าง)
-    # ===============================================
-    unique_trips = sorted(test_df['Trip'].dropna().unique())
-    trip_renumber_map = {old: new for new, old in enumerate(unique_trips, start=1)}
-    test_df['Trip'] = test_df['Trip'].map(trip_renumber_map)
-    
-    # อัปเดต summary_df ด้วย
-    if 'Trip' in summary_df.columns:
-        summary_df['Trip'] = summary_df['Trip'].map(trip_renumber_map)
-    
     return test_df, summary_df
 
 # ==========================================
@@ -7257,16 +5088,6 @@ def main():
         layout="wide",
         initial_sidebar_state="collapsed"
     )
-    
-    # 🔧 Initialize session state สำหรับเก็บผลลัพธ์
-    if 'result_df' not in st.session_state:
-        st.session_state.result_df = None
-    if 'summary' not in st.session_state:
-        st.session_state.summary = None
-    if 'processed' not in st.session_state:
-        st.session_state.processed = False
-    if 'original_file_content' not in st.session_state:
-        st.session_state.original_file_content = None
     
     # 🔄 Auto-refresh ทุกเที่ยงคืน (ล้างแคช)
     if AUTOREFRESH_AVAILABLE:
@@ -7284,8 +5105,8 @@ def main():
         # คำนวณเวลาที่เหลือ (วินาที)
         seconds_until_midnight = int((next_midnight - now).total_seconds())
         
-        # Refresh ทุกเที่ยงคืน (เฉพาะเมื่อมี autorefresh component)
-        if AUTOREFRESH_AVAILABLE and seconds_until_midnight > 0:
+        # Refresh ทุกเที่ยงคืน
+        if seconds_until_midnight > 0:
             # เช็คในช่วง 5 นาทีก่อนเที่ยงคืน (หลัง 23:55)
             if seconds_until_midnight <= 300:  # 5 minutes
                 st.info(f"🔄 ระบบจะ Refresh อัตโนมัติใน {seconds_until_midnight // 60} นาที")
@@ -7299,7 +5120,7 @@ def main():
     with col1:
         st.title("🚚 ระบบจัดเที่ยว")
     with col2:
-        st.markdown("# 🚚")
+        st.image("https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/1f69a.svg", width=100)
     
     # Show Punthai learning stats
     if PUNTHAI_PATTERNS and 'stats' in PUNTHAI_PATTERNS and PUNTHAI_PATTERNS['stats']:
@@ -7333,15 +5154,12 @@ def main():
     )
     
     if uploaded_file:
-        # เก็บ file content ไว้ใช้ตอน export - เก็บใน session_state
-        file_content = uploaded_file.read()
+        # เก็บ file content ไว้ใช้ตอน export
+        original_file_content = uploaded_file.read()
         uploaded_file.seek(0)  # reset pointer
         
-        # เก็บไว้ใน session_state
-        st.session_state.original_file_content = file_content
-        
         with st.spinner("⏳ กำลังอ่านข้อมูล..."):
-            df = load_excel(file_content)
+            df = load_excel(original_file_content)
             df = process_dataframe(df)
             
             if df is not None and 'Code' in df.columns:
@@ -7377,261 +5195,223 @@ def main():
                         with st.spinner("⏳ กำลังประมวลผล..."):
                             result_df, summary = predict_trips(df.copy(), model_data)
                             
-                            # 🔧 เก็บผลลัพธ์ใน session_state เพื่อไม่ให้หายเมื่อกด download
-                            st.session_state.result_df = result_df
-                            st.session_state.summary = summary
-                            st.session_state.processed = True
-                            
                             st.balloons()
-                    
-                    # 🔧 แสดงผลลัพธ์จาก session_state (ถ้ามี)
-                    if st.session_state.processed and st.session_state.result_df is not None:
-                        result_df = st.session_state.result_df
-                        summary = st.session_state.summary
-                        
-                        st.success(f"✅ **จัดทริปเสร็จสมบูรณ์!** รวม **{len(summary)}** ทริป")
-                        
-                        st.markdown("---")
-                        
-                        # สถิติโดยรวม
-                        st.markdown("### 📊 สรุปผลการจัดทริป")
-                        
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.metric("🚚 จำนวนทริป", len(summary))
-                        with col2:
-                            st.metric("📍 จำนวนสาขา", len(result_df))
-                        with col3:
-                            avg_branches = len(result_df) / result_df['Trip'].nunique()
-                            st.metric("📊 เฉลี่ยสาขา/ทริป", f"{avg_branches:.1f}")
-                        with col4:
-                            avg_util = summary['Cube_Use%'].mean()
-                            st.metric("📈 การใช้รถเฉลี่ย", f"{avg_util:.0f}%")
-                        
-                        st.markdown("---")
-                        
-                        # ตารางสรุปแต่ละทริป
-                        st.markdown("### 🚛 รายละเอียดแต่ละทริป")
-                        
-                        # แสดงสรุปทริปที่ไม่ผ่าน (ถ้ามี)
-                        failed_trips = summary[summary['Status'] != '✅ ผ่าน']
-                        if len(failed_trips) > 0:
-                            st.warning(f"⚠️ พบ **{len(failed_trips)}** ทริปที่ไม่ผ่านเกณฑ์")
-                        
-                        st.dataframe(
-                            summary.style.format({
-                                'Weight': '{:.2f}',
-                                'Cube': '{:.2f}',
-                                'Weight_Use%': '{:.1f}%',
-                                'Cube_Use%': '{:.1f}%',
-                                'Max_Util%': '{:.1f}%',
-                                'Total_Distance': '{:.1f} km'
-                            }).background_gradient(
-                                subset=['Max_Util%'],
-                                cmap='RdYlGn',
-                                vmin=0,
-                                vmax=100
-                            ),
-                            use_container_width=True,
-                            height=400
-                        )
-                        
-                        # ตารางรายละเอียดทั้งหมด (มีคอลัมน์รถและระยะทาง)
-                        with st.expander("📋 ดูรายละเอียดรายสาขา (เรียงตามน้ำหนัก)"):
-                            # จัดเรียงคอลัมน์ที่สำคัญ
-                            display_cols = ['Trip', 'Code', 'Name']
-                            if 'Province' in result_df.columns:
-                                display_cols.append('Province')
-                            if 'District' in result_df.columns:
-                                display_cols.append('District')
-                            if 'Subdistrict' in result_df.columns:
-                                display_cols.append('Subdistrict')
-                            if 'Region' in result_df.columns:
-                                display_cols.append('Region')
-                            display_cols.extend(['Max_Distance_in_Trip', 'Weight', 'Cube', 'Truck', 'VehicleCheck'])
+                            st.success(f"✅ **จัดทริปเสร็จสมบูรณ์!** รวม **{len(summary)}** ทริป")
                             
-                            # กรองคอลัมน์ที่มีอยู่จริง
-                            display_cols = [col for col in display_cols if col in result_df.columns]
-                            display_df = result_df[display_cols].copy()
+                            st.markdown("---")
                             
-                            # ตั้งชื่อคอลัมน์ภาษาไทย
-                            col_names = {'Trip': 'ทริป', 'Code': 'รหัส', 'Name': 'ชื่อสาขา', 'Province': 'จังหวัด', 
-                                       'District': 'อำเภอ', 'Subdistrict': 'ตำบล',
-                                       'Region': 'ภาค', 'Max_Distance_in_Trip': 'ระยะทาง Max(km)', 
-                                       'Weight': 'น้ำหนัก(kg)', 'Cube': 'คิว(m³)', 'Truck': 'รถ', 'VehicleCheck': 'ตรวจสอบรถ'}
-                            display_df.columns = [col_names.get(c, c) for c in display_cols]
+                            # สถิติโดยรวม
+                            st.markdown("### 📊 สรุปผลการจัดทริป")
                             
-                            # จัดรูปแบบคอลัมน์ระยะทาง
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.metric("🚚 จำนวนทริป", len(summary))
+                            with col2:
+                                st.metric("📍 จำนวนสาขา", len(result_df))
+                            with col3:
+                                avg_branches = len(result_df) / result_df['Trip'].nunique()
+                                st.metric("📊 เฉลี่ยสาขา/ทริป", f"{avg_branches:.1f}")
+                            with col4:
+                                avg_util = summary['Cube_Use%'].mean()
+                                st.metric("📈 การใช้รถเฉลี่ย", f"{avg_util:.0f}%")
+                            
+                            st.markdown("---")
+                            
+                            # ตารางสรุปแต่ละทริป
+                            st.markdown("### 🚛 รายละเอียดแต่ละทริป")
                             st.dataframe(
-                                display_df.style.format({
-                                    'ระยะทาง(km)': '{:.1f}',
-                                    'น้ำหนัก(kg)': '{:.2f}',
-                                    'คิว(m³)': '{:.2f}'
-                                }),
-                                use_container_width=True, 
+                                summary.style.format({
+                                    'Weight': '{:.2f}',
+                                    'Cube': '{:.2f}',
+                                    'Weight_Use%': '{:.1f}%',
+                                    'Cube_Use%': '{:.1f}%',
+                                    'Total_Distance': '{:.1f} km'
+                                }).background_gradient(
+                                    subset=['Weight_Use%', 'Cube_Use%'],
+                                    cmap='RdYlGn',
+                                    vmin=0,
+                                    vmax=100
+                                ),
+                                use_container_width=True,
                                 height=400
                             )
-                        
-                        # แสดงสาขาที่มีคำเตือน
-                        warning_branches = result_df[result_df['VehicleCheck'].str.contains('⚠️', na=False)]
-                        if len(warning_branches) > 0:
-                            with st.expander(f"⚠️ สาขาที่ใช้รถต่างจากปกติ ({len(warning_branches)} สาขา)"):
-                                st.warning("สาขาเหล่านี้ปกติใช้รถประเภทอื่น แต่ถูกจัดให้ใช้รถประเภทที่ต่างออกไป")
-                                display_cols_warn = ['Trip', 'Code', 'Name', 'Truck', 'VehicleCheck']
-                                display_warn_df = warning_branches[display_cols_warn].copy()
-                                display_warn_df.columns = ['ทริป', 'รหัส', 'ชื่อสาขา', 'รถที่จัด', 'ประวัติการใช้รถ']
-                                st.dataframe(display_warn_df, use_container_width=True)
-                        
-                        st.markdown("---")
-                        
-                        # ดาวน์โหลด - เขียนทับชีต 2.Punthai ในไฟล์ต้นฉบับ พร้อมสลับสีเหลืองโทนส้ม-ขาว
-                        output = io.BytesIO()
-                        
-                        # สร้าง Trip_No map (JB ใช้ prefix 4WJ)
-                        trip_no_map = {}
-                        vehicle_counts = {'4W': 0, '4WJ': 0, '6W': 0}
-                        
-                        for trip_num in sorted(result_df['Trip'].unique()):
-                            if trip_num == 0:
-                                continue
-                            trip_summary = summary[summary['Trip'] == trip_num]
-                            if len(trip_summary) > 0:
-                                truck_info = trip_summary.iloc[0]['Truck']
-                                vehicle_type = truck_info.split()[0] if truck_info else '6W'
-                                # JB ใช้ prefix 4WJ แทน
-                                if vehicle_type == 'JB':
-                                    vehicle_type = '4WJ'
-                                vehicle_counts[vehicle_type] = vehicle_counts.get(vehicle_type, 0) + 1
-                                trip_no = f"{vehicle_type}{vehicle_counts[vehicle_type]:03d}"
-                                trip_no_map[trip_num] = trip_no
-                        
-                        # โหลดไฟล์ต้นฉบับเพื่อ copy ทุกชีต
-                        from openpyxl import load_workbook
-                        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
-                        from copy import copy
-                        
-                        try:
-                            # โหลด workbook ต้นฉบับ จาก session_state
-                            wb = load_workbook(io.BytesIO(st.session_state.original_file_content))
                             
-                            # หาชีตเป้าหมาย (2.Punthai)
-                            target_sheet = None
-                            for sheet_name in wb.sheetnames:
-                                if 'punthai' in sheet_name.lower() or '2.' in sheet_name.lower():
-                                    target_sheet = sheet_name
-                                    break
-                            
-                            if not target_sheet:
-                                target_sheet = '2.Punthai'
-                                if target_sheet not in wb.sheetnames:
-                                    wb.create_sheet(target_sheet)
-                            
-                            ws = wb[target_sheet]
-                            
-                            # ลบข้อมูลเก่า (เก็บแถวแรก header)
-                            # หา header row (แถวที่มี "รหัสสาขา" หรือ "Trip")
-                            header_row = 1
-                            for row_idx in range(1, min(5, ws.max_row + 1)):
-                                for col_idx in range(1, min(15, ws.max_column + 1)):
-                                    cell_val = str(ws.cell(row=row_idx, column=col_idx).value or '')
-                                    if 'รหัสสาขา' in cell_val or 'Trip' in cell_val.upper():
-                                        header_row = row_idx
-                                        break
-                            
-                            # ลบข้อมูลตั้งแต่แถวหลัง header
-                            if ws.max_row > header_row:
-                                ws.delete_rows(header_row + 1, ws.max_row - header_row)
-                            
-                            # สีเหลืองโทนส้ม-ขาว
-                            yellow_orange = PatternFill(start_color='FFE699', end_color='FFE699', fill_type='solid')
-                            white_fill = PatternFill(start_color='FFFFFF', end_color='FFFFFF', fill_type='solid')
-                            thin_border = Border(
-                                left=Side(style='thin'),
-                                right=Side(style='thin'),
-                                top=Side(style='thin'),
-                                bottom=Side(style='thin')
-                            )
-                            # 🔴 สีแดงสำหรับทริปที่ไม่ผ่านเกณฑ์
-                            red_font = Font(color='FF0000', bold=True)
-                            
-                            # 🔴 สร้าง map ของทริปที่ไม่ผ่านเกณฑ์ (รวมเกิน 100% หรือต่ำกว่า 50%)
-                            failed_trips = set()
-                            low_util_trips = set()  # ทริปที่ utilization ต่ำ (<50%)
-                            over_util_trips = set()  # ทริปที่ utilization เกิน (>100%)
-                            
-                            # ค่า limit สำหรับแต่ละรถ
-                            vehicle_limits = {
-                                '4W': {'max_w': 2500, 'max_c': 5.0},
-                                'JB': {'max_w': 3500, 'max_c': 7.0},
-                                '6W': {'max_w': 6000, 'max_c': 20.0}
-                            }
-                            
-                            for t in result_df['Trip'].unique():
-                                if t == 0:
-                                    continue
-                                trip_data = result_df[result_df['Trip'] == t]
-                                trip_cube = trip_data['Cube'].sum()
-                                trip_weight = trip_data['Weight'].sum()
+                            # ตารางรายละเอียดทั้งหมด (มีคอลัมน์รถและระยะทาง)
+                            with st.expander("📋 ดูรายละเอียดรายสาขา (เรียงตามน้ำหนัก)"):
+                                # จัดเรียงคอลัมน์ที่สำคัญ
+                                display_cols = ['Trip', 'Code', 'Name']
+                                if 'Province' in result_df.columns:
+                                    display_cols.append('Province')
+                                if 'District' in result_df.columns:
+                                    display_cols.append('District')
+                                if 'Subdistrict' in result_df.columns:
+                                    display_cols.append('Subdistrict')
+                                if 'Region' in result_df.columns:
+                                    display_cols.append('Region')
+                                display_cols.extend(['Max_Distance_in_Trip', 'Weight', 'Cube', 'Truck', 'VehicleCheck'])
                                 
-                                # หาประเภทรถของทริปนี้
-                                trip_no = trip_no_map.get(t, '6W001')
-                                if trip_no.startswith('4WJ'):
-                                    veh_type = 'JB'
-                                elif trip_no.startswith('4W'):
-                                    veh_type = '4W'
-                                else:
-                                    veh_type = '6W'
+                                # กรองคอลัมน์ที่มีอยู่จริง
+                                display_cols = [col for col in display_cols if col in result_df.columns]
+                                display_df = result_df[display_cols].copy()
                                 
-                                limits = vehicle_limits.get(veh_type, vehicle_limits['6W'])
-                                cube_util = (trip_cube / limits['max_c']) * 100
-                                weight_util = (trip_weight / limits['max_w']) * 100
-                                max_util = max(cube_util, weight_util)
+                                # ตั้งชื่อคอลัมน์ภาษาไทย
+                                col_names = {'Trip': 'ทริป', 'Code': 'รหัส', 'Name': 'ชื่อสาขา', 'Province': 'จังหวัด', 
+                                           'District': 'อำเภอ', 'Subdistrict': 'ตำบล',
+                                           'Region': 'ภาค', 'Max_Distance_in_Trip': 'ระยะทาง Max(km)', 
+                                           'Weight': 'น้ำหนัก(kg)', 'Cube': 'คิว(m³)', 'Truck': 'รถ', 'VehicleCheck': 'ตรวจสอบรถ'}
+                                display_df.columns = [col_names.get(c, c) for c in display_cols]
                                 
-                                # 🔴 เช็คเกิน 100% หรือต่ำกว่า 50%
-                                if max_util > 105:  # เกิน 105%
-                                    over_util_trips.add(t)
-                                    failed_trips.add(t)
-                                elif max_util < 50:  # ต่ำกว่า 50%
-                                    low_util_trips.add(t)
-                                    failed_trips.add(t)
-                                
-                                # เช็ค TripStatus ด้วย
-                                if 'TripStatus' in result_df.columns:
-                                    trip_status = trip_data['TripStatus'].iloc[0] if len(trip_data) > 0 else ''
-                                    if '❌' in str(trip_status) or '⛔' in str(trip_status):
-                                        failed_trips.add(t)
+                                # จัดรูปแบบคอลัมน์ระยะทาง
+                                st.dataframe(
+                                    display_df.style.format({
+                                        'ระยะทาง(km)': '{:.1f}',
+                                        'น้ำหนัก(kg)': '{:.2f}',
+                                        'คิว(m³)': '{:.2f}'
+                                    }),
+                                    use_container_width=True, 
+                                    height=400
+                                )
                             
-                            # เขียนข้อมูลใหม่ (แถวที่ header_row + 1 เป็นต้นไป)
-                            current_trip = None
-                            use_yellow = True
-                            row_num = header_row + 1
-                            sep_num = 1  # เริ่มนับ Sep. จาก 1
+                            # แสดงสาขาที่มีคำเตือน
+                            warning_branches = result_df[result_df['VehicleCheck'].str.contains('⚠️', na=False)]
+                            if len(warning_branches) > 0:
+                                with st.expander(f"⚠️ สาขาที่ใช้รถต่างจากปกติ ({len(warning_branches)} สาขา)"):
+                                    st.warning("สาขาเหล่านี้ปกติใช้รถประเภทอื่น แต่ถูกจัดให้ใช้รถประเภทที่ต่างออกไป")
+                                    display_cols_warn = ['Trip', 'Code', 'Name', 'Truck', 'VehicleCheck']
+                                    display_warn_df = warning_branches[display_cols_warn].copy()
+                                    display_warn_df.columns = ['ทริป', 'รหัส', 'ชื่อสาขา', 'รถที่จัด', 'ประวัติการใช้รถ']
+                                    st.dataframe(display_warn_df, use_container_width=True)
+                            
+                            st.markdown("---")
+                            
+                            # ดาวน์โหลด - เขียนทับชีต 2.Punthai ในไฟล์ต้นฉบับ พร้อมสลับสีเหลืองโทนส้ม-ขาว
+                            output = io.BytesIO()
+                            
+                            # สร้าง Trip_No map (JB ใช้ prefix 4WJ)
+                            trip_no_map = {}
+                            vehicle_counts = {'4W': 0, '4WJ': 0, '6W': 0}
                             
                             for trip_num in sorted(result_df['Trip'].unique()):
                                 if trip_num == 0:
                                     continue
-                                trip_data = result_df[result_df['Trip'] == trip_num].copy()
-                                trip_no = trip_no_map.get(trip_num, '')
+                                trip_summary = summary[summary['Trip'] == trip_num]
+                                if len(trip_summary) > 0:
+                                    truck_info = trip_summary.iloc[0]['Truck']
+                                    vehicle_type = truck_info.split()[0] if truck_info else '6W'
+                                    # JB ใช้ prefix 4WJ แทน
+                                    if vehicle_type == 'JB':
+                                        vehicle_type = '4WJ'
+                                    vehicle_counts[vehicle_type] = vehicle_counts.get(vehicle_type, 0) + 1
+                                    trip_no = f"{vehicle_type}{vehicle_counts[vehicle_type]:03d}"
+                                    trip_no_map[trip_num] = trip_no
+                            
+                            # โหลดไฟล์ต้นฉบับเพื่อ copy ทุกชีต
+                            from openpyxl import load_workbook
+                            from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+                            from copy import copy
+                            
+                            try:
+                                # โหลด workbook ต้นฉบับ
+                                wb = load_workbook(io.BytesIO(original_file_content))
                                 
-                                # เปลี่ยนสีเมื่อเปลี่ยนทริป
-                                if current_trip != trip_num:
-                                    current_trip = trip_num
-                                    use_yellow = not use_yellow
+                                # หาชีตเป้าหมาย (2.Punthai)
+                                target_sheet = None
+                                for sheet_name in wb.sheetnames:
+                                    if 'punthai' in sheet_name.lower() or '2.' in sheet_name.lower():
+                                        target_sheet = sheet_name
+                                        break
                                 
-                                fill = yellow_orange if use_yellow else white_fill
+                                if not target_sheet:
+                                    target_sheet = '2.Punthai'
+                                    if target_sheet not in wb.sheetnames:
+                                        wb.create_sheet(target_sheet)
                                 
-                                for _, row in trip_data.iterrows():
-                                    # เขียนข้อมูลตามโครงสร้างไฟล์ต้นฉบับ
-                                    # คอลัมน์: A=Sep, B=BU, C=รหัสสาขา, D=รหัส WMS, E=สาขา, F=Cube, G=Weight, H=Original QTY, I=Trip, J=Trip no
-                                    data = [
-                                        sep_num,  # A: Sep (ลำดับแถว)
-                                        row.get('BU', 211),  # B: BU (จากต้นฉบับ)
-                                        row.get('Code', ''),  # C: รหัสสาขา
-                                        row.get('Code', ''),  # D: รหัส WMS
-                                        row.get('Name', ''),  # E: สาขา
-                                        round(row.get('Cube', 0), 2) if pd.notna(row.get('Cube')) else 0,  # F: Cube
-                                        round(row.get('Weight', 0), 2) if pd.notna(row.get('Weight')) else 0,  # G: Weight
-                                        row.get('OriginalQty', 0) if pd.notna(row.get('OriginalQty')) else 0,  # H: Original QTY (จากต้นฉบับ)
+                                ws = wb[target_sheet]
+                                
+                                # ลบข้อมูลเก่า (เก็บแถวแรก header)
+                                # หา header row (แถวที่มี "รหัสสาขา" หรือ "Trip")
+                                header_row = 1
+                                for row_idx in range(1, min(5, ws.max_row + 1)):
+                                    for col_idx in range(1, min(15, ws.max_column + 1)):
+                                        cell_val = str(ws.cell(row=row_idx, column=col_idx).value or '')
+                                        if 'รหัสสาขา' in cell_val or 'Trip' in cell_val.upper():
+                                            header_row = row_idx
+                                            break
+                                
+                                # ลบข้อมูลตั้งแต่แถวหลัง header
+                                if ws.max_row > header_row:
+                                    ws.delete_rows(header_row + 1, ws.max_row - header_row)
+                                
+                                # สีเหลืองโทนส้ม-ขาว
+                                yellow_orange = PatternFill(start_color='FFE699', end_color='FFE699', fill_type='solid')
+                                white_fill = PatternFill(start_color='FFFFFF', end_color='FFFFFF', fill_type='solid')
+                                thin_border = Border(
+                                    left=Side(style='thin'),
+                                    right=Side(style='thin'),
+                                    top=Side(style='thin'),
+                                    bottom=Side(style='thin')
+                                )
+                                
+                                # เขียนข้อมูลใหม่ (แถวที่ header_row + 1 เป็นต้นไป)
+                                current_trip = None
+                                use_yellow = True
+                                row_num = header_row + 1
+                                sep_num = 1  # เริ่มนับ Sep. จาก 1
+                                
+                                for trip_num in sorted(result_df['Trip'].unique()):
+                                    if trip_num == 0:
+                                        continue
+                                    trip_data = result_df[result_df['Trip'] == trip_num].copy()
+                                    trip_no = trip_no_map.get(trip_num, '')
+                                    
+                                    # เปลี่ยนสีเมื่อเปลี่ยนทริป
+                                    if current_trip != trip_num:
+                                        current_trip = trip_num
+                                        use_yellow = not use_yellow
+                                    
+                                    fill = yellow_orange if use_yellow else white_fill
+                                    
+                                    for _, row in trip_data.iterrows():
+                                        # เขียนข้อมูลตามโครงสร้างไฟล์ต้นฉบับ
+                                        # คอลัมน์: A=Sep, B=BU, C=รหัสสาขา, D=รหัส WMS, E=สาขา, F=Cube, G=Weight, H=Original QTY, I=Trip, J=Trip no
+                                        data = [
+                                            sep_num,  # A: Sep (ลำดับแถว)
+                                            row.get('BU', 211),  # B: BU (จากต้นฉบับ)
+                                            row.get('Code', ''),  # C: รหัสสาขา
+                                            row.get('Code', ''),  # D: รหัส WMS
+                                            row.get('Name', ''),  # E: สาขา
+                                            round(row.get('Cube', 0), 2) if pd.notna(row.get('Cube')) else 0,  # F: Cube
+                                            round(row.get('Weight', 0), 2) if pd.notna(row.get('Weight')) else 0,  # G: Weight
+                                            row.get('OriginalQty', 0) if pd.notna(row.get('OriginalQty')) else 0,  # H: Original QTY (จากต้นฉบับ)
+                                            int(trip_num),  # I: Trip
+                                            trip_no,  # J: Trip no
+                                            '',  # K: วันที่โหลด
+                                            '',  # L: เวลาโหลด
+                                            '',  # M: ประตู
+                                            '',  # N: WAVE
+                                            '',  # O: remark
+                                            row.get('Latitude', 0) if pd.notna(row.get('Latitude')) else 0,  # P: lat
+                                            row.get('Longitude', 0) if pd.notna(row.get('Longitude')) else 0,  # Q: lon
+                                        ]
+                                        
+                                        for col_idx, value in enumerate(data, 1):
+                                            cell = ws.cell(row=row_num, column=col_idx, value=value)
+                                            cell.fill = fill
+                                            cell.border = thin_border
+                                        
+                                        row_num += 1
+                                        sep_num += 1  # เพิ่มลำดับ Sep
+                                    
+                                    # 🚛 เพิ่ม DC011 ปิดท้ายทุกทริป
+                                    dc_data = [
+                                        sep_num,  # A: Sep
+                                        'PROJECT',  # B: BU
+                                        'DC011',  # C: รหัสสาขา
+                                        'DC011',  # D: รหัส WMS
+                                        'บ.พีทีจี เอ็นเนอยี จำกัด (มหาชน) (DCวังน้อย)',  # E: สาขา
+                                        0,  # F: Cube
+                                        0,  # G: Weight
+                                        0,  # H: Original QTY
                                         int(trip_num),  # I: Trip
                                         trip_no,  # J: Trip no
                                         '',  # K: วันที่โหลด
@@ -7639,162 +5419,84 @@ def main():
                                         '',  # M: ประตู
                                         '',  # N: WAVE
                                         '',  # O: remark
-                                        '',  # P: lat (เว้นว่าง)
-                                        '',  # Q: lon (เว้นว่าง)
+                                        14.2167,  # P: lat (DC วังน้อย)
+                                        100.6167,  # Q: lon (DC วังน้อย)
                                     ]
                                     
-                                    for col_idx, value in enumerate(data, 1):
+                                    for col_idx, value in enumerate(dc_data, 1):
                                         cell = ws.cell(row=row_num, column=col_idx, value=value)
                                         cell.fill = fill
                                         cell.border = thin_border
-                                        # 🔴 ถ้าทริปไม่ผ่านเกณฑ์ ใช้ตัวหนังสือสีแดง
-                                        if trip_num in failed_trips:
-                                            cell.font = red_font
                                     
-                                    row_num += 1
-                                    sep_num += 1  # เพิ่มลำดับ Sep
-                                
-                                # 🚛 เพิ่ม DC011 ปิดท้ายทุกทริป
-                                dc_data = [
-                                    sep_num,  # A: Sep
-                                    'PROJECT',  # B: BU
-                                    'DC011',  # C: รหัสสาขา
-                                    'DC011',  # D: รหัส WMS
-                                    'บ.พีทีจี เอ็นเนอยี จำกัด (มหาชน) (DCวังน้อย)',  # E: สาขา
-                                    0,  # F: Cube
-                                    0,  # G: Weight
-                                    0,  # H: Original QTY
-                                    int(trip_num),  # I: Trip
-                                    trip_no,  # J: Trip no
-                                    '',  # K: วันที่โหลด
-                                    '',  # L: เวลาโหลด
-                                '',  # M: ประตู
-                                    '',  # N: WAVE
-                                    '',  # O: remark
-                                    '',  # P: lat (เว้นว่าง)
-                                    '',  # Q: lon (เว้นว่าง)
-                                ]
-                                
-                                for col_idx, value in enumerate(dc_data, 1):
-                                    cell = ws.cell(row=row_num, column=col_idx, value=value)
-                                    cell.fill = fill
-                                    cell.border = thin_border
-                                    # 🔴 ถ้าทริปไม่ผ่านเกณฑ์ ใช้ตัวหนังสือสีแดง
-                                    if trip_num in failed_trips:
-                                        cell.font = red_font
-                                
-                                row_num += 1
-                                sep_num += 1
-                            
-                            # บันทึกลง BytesIO
-                            wb.save(output)
-                            output.seek(0)
-                            
-                        except Exception as e:
-                            st.warning(f"⚠️ ไม่สามารถเขียนทับไฟล์ต้นฉบับได้: {e}")
-                            # Fallback: สร้างไฟล์ใหม่
-                            from openpyxl import Workbook
-                            wb = Workbook()
-                            ws = wb.active
-                            ws.title = '2.Punthai'
-                            
-                            # เขียน header
-                            headers = ['Sep.', 'BU', 'รหัสสาขา', 'รหัส WMS', 'สาขา', 'Total Cube', 'Total Wgt', 'Original QTY', 'Trip', 'Trip no']
-                            for col_num, header in enumerate(headers, 1):
-                                ws.cell(row=1, column=col_num, value=header)
-                            
-                            row_num = 2
-                            sep_num = 1  # เริ่มนับ Sep. จาก 1
-                            current_trip = None
-                            use_yellow = True
-                            yellow_orange = PatternFill(start_color='FFE699', end_color='FFE699', fill_type='solid')
-                            white_fill = PatternFill(start_color='FFFFFF', end_color='FFFFFF', fill_type='solid')
-                            red_font_fallback = Font(color='FF0000', bold=True)
-                            
-                            # 🔴 สร้าง map ของทริปที่ไม่ผ่านเกณฑ์ (รวมเกิน 100% หรือต่ำกว่า 50%)
-                            failed_trips_fallback = set()
-                            vehicle_limits_fb = {
-                                '4W': {'max_w': 2500, 'max_c': 5.0},
-                                'JB': {'max_w': 3500, 'max_c': 7.0},
-                                '6W': {'max_w': 6000, 'max_c': 20.0}
-                            }
-                            
-                            for t in result_df['Trip'].unique():
-                                if t == 0:
-                                    continue
-                                trip_data = result_df[result_df['Trip'] == t]
-                                trip_cube = trip_data['Cube'].sum()
-                                trip_weight = trip_data['Weight'].sum()
-                                
-                                trip_no = trip_no_map.get(t, '6W001')
-                                if trip_no.startswith('4WJ'):
-                                    veh_type = 'JB'
-                                elif trip_no.startswith('4W'):
-                                    veh_type = '4W'
-                                else:
-                                    veh_type = '6W'
-                                
-                                limits = vehicle_limits_fb.get(veh_type, vehicle_limits_fb['6W'])
-                                cube_util = (trip_cube / limits['max_c']) * 100
-                                weight_util = (trip_weight / limits['max_w']) * 100
-                                max_util = max(cube_util, weight_util)
-                                
-                                if max_util > 105 or max_util < 50:
-                                    failed_trips_fallback.add(t)
-                                
-                                if 'TripStatus' in result_df.columns:
-                                    trip_status = trip_data['TripStatus'].iloc[0] if len(trip_data) > 0 else ''
-                                    if '❌' in str(trip_status) or '⛔' in str(trip_status):
-                                        failed_trips_fallback.add(t)
-                            
-                            for trip_num in sorted(result_df['Trip'].unique()):
-                                if trip_num == 0:
-                                    continue
-                                trip_data = result_df[result_df['Trip'] == trip_num]
-                                trip_no = trip_no_map.get(trip_num, '')
-                                
-                                if current_trip != trip_num:
-                                    current_trip = trip_num
-                                    use_yellow = not use_yellow
-                                fill = yellow_orange if use_yellow else white_fill
-                                
-                                for _, row in trip_data.iterrows():
-                                    original_qty = row.get('OriginalQty', 0) if pd.notna(row.get('OriginalQty')) else 0
-                                    data = [sep_num, row.get('BU', 211), row.get('Code', ''), row.get('Code', ''), row.get('Name', ''),
-                                            round(row.get('Cube', 0), 2), round(row.get('Weight', 0), 2), original_qty, int(trip_num), trip_no]
-                                    for col_idx, value in enumerate(data, 1):
-                                        cell = ws.cell(row=row_num, column=col_idx, value=value)
-                                        cell.fill = fill
-                                        # 🔴 ถ้าทริปไม่ผ่านเกณฑ์ ใช้ตัวหนังสือสีแดง
-                                        if trip_num in failed_trips_fallback:
-                                            cell.font = red_font_fallback
                                     row_num += 1
                                     sep_num += 1
                                 
-                                # 🚛 เพิ่ม DC011 ปิดท้ายทุกทริป
-                                dc_data = [sep_num, 'PROJECT', 'DC011', 'DC011', 'บ.พีทีจี เอ็นเนอยี จำกัด (มหาชน) (DCวังน้อย)',
-                                           0, 0, 0, int(trip_num), trip_no]
-                                for col_idx, value in enumerate(dc_data, 1):
-                                    cell = ws.cell(row=row_num, column=col_idx, value=value)
-                                    cell.fill = fill
-                                    # 🔴 ถ้าทริปไม่ผ่านเกณฑ์ ใช้ตัวหนังสือสีแดง
-                                    if trip_num in failed_trips_fallback:
-                                        cell.font = red_font_fallback
-                                row_num += 1
-                                sep_num += 1
+                                # บันทึกลง BytesIO
+                                wb.save(output)
+                                output.seek(0)
+                                
+                            except Exception as e:
+                                st.warning(f"⚠️ ไม่สามารถเขียนทับไฟล์ต้นฉบับได้: {e}")
+                                # Fallback: สร้างไฟล์ใหม่
+                                from openpyxl import Workbook
+                                wb = Workbook()
+                                ws = wb.active
+                                ws.title = '2.Punthai'
+                                
+                                # เขียน header
+                                headers = ['Sep.', 'BU', 'รหัสสาขา', 'รหัส WMS', 'สาขา', 'Total Cube', 'Total Wgt', 'Original QTY', 'Trip', 'Trip no']
+                                for col_num, header in enumerate(headers, 1):
+                                    ws.cell(row=1, column=col_num, value=header)
+                                
+                                row_num = 2
+                                sep_num = 1  # เริ่มนับ Sep. จาก 1
+                                current_trip = None
+                                use_yellow = True
+                                yellow_orange = PatternFill(start_color='FFE699', end_color='FFE699', fill_type='solid')
+                                white_fill = PatternFill(start_color='FFFFFF', end_color='FFFFFF', fill_type='solid')
+                                
+                                for trip_num in sorted(result_df['Trip'].unique()):
+                                    if trip_num == 0:
+                                        continue
+                                    trip_data = result_df[result_df['Trip'] == trip_num]
+                                    trip_no = trip_no_map.get(trip_num, '')
+                                    
+                                    if current_trip != trip_num:
+                                        current_trip = trip_num
+                                        use_yellow = not use_yellow
+                                    fill = yellow_orange if use_yellow else white_fill
+                                    
+                                    for _, row in trip_data.iterrows():
+                                        original_qty = row.get('OriginalQty', 0) if pd.notna(row.get('OriginalQty')) else 0
+                                        data = [sep_num, row.get('BU', 211), row.get('Code', ''), row.get('Code', ''), row.get('Name', ''),
+                                                round(row.get('Cube', 0), 2), round(row.get('Weight', 0), 2), original_qty, int(trip_num), trip_no]
+                                        for col_idx, value in enumerate(data, 1):
+                                            cell = ws.cell(row=row_num, column=col_idx, value=value)
+                                            cell.fill = fill
+                                        row_num += 1
+                                        sep_num += 1
+                                    
+                                    # 🚛 เพิ่ม DC011 ปิดท้ายทุกทริป
+                                    dc_data = [sep_num, 'PROJECT', 'DC011', 'DC011', 'บ.พีทีจี เอ็นเนอยี จำกัด (มหาชน) (DCวังน้อย)',
+                                               0, 0, 0, int(trip_num), trip_no]
+                                    for col_idx, value in enumerate(dc_data, 1):
+                                        cell = ws.cell(row=row_num, column=col_idx, value=value)
+                                        cell.fill = fill
+                                    row_num += 1
+                                    sep_num += 1
+                                
+                                wb.save(output)
+                                output.seek(0)
                             
-                            wb.save(output)
-                            output.seek(0)
-                        
-                        col1, col2, col3 = st.columns([1, 2, 1])
-                        with col2:
-                            st.download_button(
-                                label="📥 ดาวน์โหลดผลลัพธ์ (Excel)",
-                                data=output.getvalue(),
-                                file_name=f"ผลจัดทริป_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                use_container_width=True
-                            )
+                            col1, col2, col3 = st.columns([1, 2, 1])
+                            with col2:
+                                st.download_button(
+                                    label="📥 ดาวน์โหลดผลลัพธ์ (Excel)",
+                                    data=output.getvalue(),
+                                    file_name=f"ผลจัดทริป_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    use_container_width=True
+                                )
                 
                 # ==========================================
                 # แท็บ 2: จัดกลุ่มสาขาตามภาค (ไม่สนน้ำหนัก)
