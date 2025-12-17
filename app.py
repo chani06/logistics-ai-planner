@@ -7235,11 +7235,49 @@ def predict_trips(test_df, model_data):
     test_df['BranchCount'] = test_df.apply(check_branch_count, axis=1)
     
     # ===============================================
-    # 🎯 Renumber trips: เริ่มจาก 1, 2, 3, ... (ไม่มีช่องว่าง)
+    # 🎯 Renumber trips: เรียงจากไกลมาใกล้ (ทริป 1 = ไกลสุด)
     # ===============================================
-    unique_trips = sorted(test_df['Trip'].dropna().unique())
-    trip_renumber_map = {old: new for new, old in enumerate(unique_trips, start=1)}
+    
+    # คำนวณระยะทาง centroid ของแต่ละทริปจาก DC
+    trip_distances = {}
+    for trip_num in test_df['Trip'].dropna().unique():
+        trip_data = test_df[test_df['Trip'] == trip_num]
+        lats = trip_data['Lat'].dropna().values
+        lons = trip_data['Lon'].dropna().values
+        if len(lats) > 0 and len(lons) > 0:
+            avg_lat = np.mean(lats)
+            avg_lon = np.mean(lons)
+            dist = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, avg_lat, avg_lon)
+            trip_distances[trip_num] = dist
+        else:
+            trip_distances[trip_num] = 0
+    
+    # เรียงทริปจากไกลมาใกล้ (ระยะทางมาก → ทริปหมายเลขน้อย)
+    sorted_trips = sorted(trip_distances.keys(), key=lambda x: -trip_distances[x])
+    trip_renumber_map = {old: new for new, old in enumerate(sorted_trips, start=1)}
     test_df['Trip'] = test_df['Trip'].map(trip_renumber_map)
+    
+    # 🔄 เรียงสาขาในแต่ละทริปจากไกลมาใกล้ด้วย
+    for trip_num in test_df['Trip'].dropna().unique():
+        trip_mask = test_df['Trip'] == trip_num
+        trip_data = test_df[trip_mask].copy()
+        
+        if len(trip_data) > 1:
+            # คำนวณระยะทางของแต่ละสาขาจาก DC
+            branch_dists = []
+            for idx, row in trip_data.iterrows():
+                if pd.notna(row['Lat']) and pd.notna(row['Lon']):
+                    dist = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, row['Lat'], row['Lon'])
+                else:
+                    dist = 0
+                branch_dists.append((idx, dist))
+            
+            # เรียงจากไกลมาใกล้
+            branch_dists.sort(key=lambda x: -x[1])
+            
+            # กำหนด Sequence ใหม่
+            for seq, (idx, _) in enumerate(branch_dists, start=1):
+                test_df.loc[idx, 'Sequence'] = seq
     
     # อัปเดต summary_df ด้วย
     if 'Trip' in summary_df.columns:
