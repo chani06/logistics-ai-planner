@@ -486,24 +486,14 @@ def get_punthai_vehicle_limits(trip_data, total_cube, branch_count):
         return {'max_vehicle': '6W', 'max_drops': 999, 'should_split': False}
 
 def get_max_vehicle_for_branch(branch_code):
-    """ดึงรถใหญ่สุดที่สาขานี้รองรับ (Auto Plan > Booking History > Punthai)"""
+    """ดึงรถใหญ่สุดที่สาขานี้รองรับ - ใช้จาก Auto Plan เท่านั้น!"""
     branch_code_str = str(branch_code).strip()
     
-    # 🔒 1. ลองหาจาก Auto Plan (ชีต info - MaxTruckType) ก่อน (สำคัญที่สุด!)
+    # 🔒 ใช้จาก Auto Plan (ชีต info - MaxTruckType) เท่านั้น!
     if branch_code_str in AUTO_PLAN_TRUCK_LIMITS:
         return AUTO_PLAN_TRUCK_LIMITS[branch_code_str]
     
-    # 2. ลองหาจาก Booking History (ข้อมูลจริง - ความเชื่อมั่นสูง)
-    booking_restrictions = BOOKING_RESTRICTIONS.get('branch_restrictions', {})
-    if branch_code_str in booking_restrictions:
-        return booking_restrictions[branch_code_str].get('max_vehicle', '6W')
-    
-    # 3. ถ้าไม่มี ลองหาจาก Punthai (แผน - สำรอง)
-    punthai_restrictions = PUNTHAI_PATTERNS.get('punthai_restrictions', {})
-    if branch_code_str in punthai_restrictions:
-        return punthai_restrictions[branch_code_str].get('max_vehicle', '6W')
-    
-    # 4. ถ้าไม่มีทั้งหมด = ใช้รถใหญ่ได้
+    # ถ้าไม่มีในไฟล์ = ใช้รถใหญ่ได้ (6W)
     return '6W'
 
 def get_max_vehicle_for_trip(trip_codes):
@@ -4987,7 +4977,7 @@ def predict_trips(test_df, model_data):
                     test_df.loc[test_df['Code'] == farthest_code, 'Trip'] = best_new_trip
                     distance_swaps += 1
     
-    # 🗺️ เรียงลำดับสาขาตาม Nearest Neighbor (เฉพาะทริปใหญ่ ≥ 8 สาขา - เพิ่มความเร็ว)
+    # 🗺️ เรียงลำดับสาขาตาม Nearest Neighbor (ทุกทริป - เรียงจากใกล้สุดไปใกล้สุด)
     # ⚡ Skip ถ้าใช้เวลาเกิน 28 วินาที
     if time.time() - start_time <= 28:
         for trip_num in test_df['Trip'].unique():
@@ -4995,10 +4985,10 @@ def predict_trips(test_df, model_data):
                 continue
             
             trip_codes = list(test_df[test_df['Trip'] == trip_num]['Code'].values)
-            if len(trip_codes) < 8:  # ⚡ Skip ถ้าน้อยกว่า 8 สาขา (เดิม 6)
+            if len(trip_codes) < 2:  # 🆕 ทำทุกทริปที่มี 2+ สาขา
                 continue
             
-            # เรียงตาม Nearest Neighbor แบบเร็ว (ใช้ cache)
+            # เรียงตาม Nearest Neighbor แบบเร็ว (ใช้ cache) - เริ่มจาก DC
             ordered = []
             remaining = trip_codes.copy()
             current_lat, current_lon = DC_WANG_NOI_LAT, DC_WANG_NOI_LON
