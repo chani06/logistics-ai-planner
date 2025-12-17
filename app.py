@@ -378,6 +378,15 @@ def normalize(val):
 
 def calculate_distance(lat1, lon1, lat2, lon2):
     """คำนวณระยะทางระหว่างสองจุด (กม.) - Haversine formula"""
+    # ตรวจสอบค่า None, NaN หรือ 0
+    try:
+        lat1 = float(lat1) if lat1 is not None else 0
+        lon1 = float(lon1) if lon1 is not None else 0
+        lat2 = float(lat2) if lat2 is not None else 0
+        lon2 = float(lon2) if lon2 is not None else 0
+    except (ValueError, TypeError):
+        return 0
+    
     if lat1 == 0 or lon1 == 0 or lat2 == 0 or lon2 == 0:
         return 0
     import math
