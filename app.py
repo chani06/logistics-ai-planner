@@ -36,8 +36,8 @@ MODEL_PATH = 'models/decision_tree_model.pkl'
 # ขีดจำกัดรถแต่ละประเภท
 LIMITS = {
     '4W': {'max_w': 2500, 'max_c': 5.0},   # ไม่เกิน 12 จุด, Cube ≤ 5 (Punthai ล้วน)
-    'JB': {'max_w': 3500, 'max_c': 8.0},   # ไม่เกิน 12 จุด, Cube ≤ 8
-    '6W': {'max_w': 5500, 'max_c': 20.0}   # ไม่จำกัดจุด, Cube ต้องเต็ม, Weight ≤ 5500
+    'JB': {'max_w': 3500, 'max_c': 7.0},   # ไม่เกิน 12 จุด, Cube ≤ 7
+    '6W': {'max_w': 6000, 'max_c': 20.0}   # ไม่จำกัดจุด, Cube ต้องเต็ม, Weight ≤ 6000
 }
 
 # 🔒 ขีดจำกัด 4W ตาม BU (Punthai ล้วน vs ผสม)
@@ -52,8 +52,8 @@ LIMITS_4W_MIXED = 4.0          # ผสม BU
 # - ถ้าผสม (Punthai + อื่น): ถ้า Cube 3-4 → ใช้ 4W ได้, ถ้าเกิน → JB
 PUNTHAI_LIMITS = {
     '4W': {'max_w': 2500, 'max_c': 5.0, 'max_drops': 12},  # Punthai ล้วน: ถ้าเกิน 5 cube → ใช้ JB
-    'JB': {'max_w': 3500, 'max_c': 8.0, 'max_drops': 7},   # Punthai ล้วน: ไม่เกิน 7 drop, Cube ≤ 8
-    '6W': {'max_w': 5500, 'max_c': 20.0, 'max_drops': 999}
+    'JB': {'max_w': 3500, 'max_c': 7.0, 'max_drops': 7},   # Punthai ล้วน: ไม่เกิน 7 drop, Cube ≤ 7
+    '6W': {'max_w': 6000, 'max_c': 20.0, 'max_drops': 999}
 }
 
 # 🚨 ห้ามเกิน 100% - ไม่มี Buffer
@@ -6106,13 +6106,34 @@ def predict_trips(test_df, model_data):
             trip_w = trip_data['Weight'].sum()
             trip_c = trip_data['Cube'].sum()
             
-            # ใช้รถที่ใหญ่ที่สุดที่รับได้
-            vehicle = trip_recommended_vehicles.get(trip_num, '6W')
+            # หารถที่ใหญ่ที่สุดที่ใช้ได้ (ตามข้อจำกัดสาขา)
+            trip_codes = list(trip_data['Code'].values)
+            max_allowed = get_max_vehicle_for_trip(trip_codes)
+            vehicle = trip_recommended_vehicles.get(trip_num, max_allowed)
+            
+            # ถ้ารถที่แนะนำใหญ่กว่าที่อนุญาต ให้ใช้รถที่อนุญาต
+            vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
+            if vehicle_sizes.get(vehicle, 3) > vehicle_sizes.get(max_allowed, 3):
+                vehicle = max_allowed
+                trip_recommended_vehicles[trip_num] = max_allowed
+            
             limits = LIMITS.get(vehicle, LIMITS['6W'])
             
             util = max((trip_w / limits['max_w']) * 100, (trip_c / limits['max_c']) * 100)
             
+            # 🔒 ถ้าเกิน 100% และห้ามใช้รถใหญ่กว่า → ต้องแยกทริป
+            should_split = False
             if util > 100:
+                should_split = True
+            
+            # 🔒 ถ้าใช้ JB เกิน แต่ห้าม 6W → ต้องแยกทริป
+            if vehicle == 'JB' and max_allowed in ['JB', '4W']:
+                jb_limits = LIMITS['JB']
+                jb_util = max((trip_w / jb_limits['max_w']) * 100, (trip_c / jb_limits['max_c']) * 100)
+                if jb_util > 100:
+                    should_split = True
+            
+            if should_split:
                 over_capacity_trips.append({
                     'trip_num': trip_num,
                     'util': util,
