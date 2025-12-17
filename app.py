@@ -1912,15 +1912,30 @@ def predict_trips(test_df, model_data):
             
             # เช็ค 4: ระยะทางใกล้กันพอ?
             close_distance = False
-            code_coords = get_branch_coordinates(code)
-            if code_coords:
+            # ดึงพิกัดจาก MASTER_DATA
+            code_lat, code_lon = None, None
+            if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                if len(master_row) > 0:
+                    code_lat = master_row.iloc[0].get('ละติจูด', None)
+                    code_lon = master_row.iloc[0].get('ลองติจูด', None)
+            
+            if code_lat and code_lon and pd.notna(code_lat) and pd.notna(code_lon):
                 for other_code in trip_codes:
-                    other_coords = get_branch_coordinates(other_code)
-                    if other_coords:
-                        dist = haversine_distance(code_coords[0], code_coords[1], other_coords[0], other_coords[1])
-                        if dist <= MAX_DISTANCE_IN_TRIP:
-                            close_distance = True
-                            break
+                    other_lat, other_lon = None, None
+                    if not MASTER_DATA.empty:
+                        other_row = MASTER_DATA[MASTER_DATA['Plan Code'] == other_code]
+                        if len(other_row) > 0:
+                            other_lat = other_row.iloc[0].get('ละติจูด', None)
+                            other_lon = other_row.iloc[0].get('ลองติจูด', None)
+                    if other_lat and other_lon and pd.notna(other_lat) and pd.notna(other_lon):
+                        try:
+                            dist = haversine_distance(float(code_lat), float(code_lon), float(other_lat), float(other_lon))
+                            if dist <= MAX_DISTANCE_IN_TRIP:
+                                close_distance = True
+                                break
+                        except:
+                            pass
             
             if close_distance:
                 valid_reasons.append('📏 ใกล้')
