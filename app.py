@@ -3678,136 +3678,93 @@ def predict_trips(test_df, model_data):
     all_trips = [t for t in all_trips if t is not None]
     
     # ===============================================
-    # 🎯 Phase 0.6: รวมเศษเหนือ/ใต้ กับสาขาภาคกลาง แล้วใช้ JB
-    # เงื่อนไข: ตำบล/อำเภอเดียวกัน หรือ อำเภอติดกัน (adjacent districts)
+    # 🎯 Phase 0.6: รวมเศษเหนือ/ใต้กับภาคกลางที่ตำบล/อำเภอติดกัน → ใช้ JB
+    # เงื่อนไข: ตำบล/อำเภอต้องติดกัน (adjacent_districts)
     # ===============================================
-    merge_far_to_nearby_count = 0
+    merge_north_south_central_count = 0
     
-    # หาทริปเหนือ/ใต้ที่ cube น้อยมาก (ไม่คุ้มใช้ 6W)
+    # หาทริปเหนือ/ใต้ที่ยังมีเศษ (cube < 95% ของ 6W)
+    remaining_north_south = []
+    central_trips = []
+    
     for idx, trip in enumerate(all_trips):
         if trip is None:
             continue
+        primary_prov = trip['primary_province']
+        region = get_region_type(primary_prov)
+        cube_util = (trip['cube'] / LIMITS['6W']['max_c']) * 100
         
-        primary_prov = trip.get('primary_province', '')
-        region = get_region_type(primary_prov) if primary_prov else 'unknown'
-        
-        # เฉพาะทริปเหนือ/ใต้ที่ cube < 7 (ไม่คุ้มใช้ 6W)
-        if region in ['north', 'south'] and trip['cube'] < 7.0:
-            trip_codes = list(trip['codes'])
-            
-            # ดึงข้อมูลตำบล/อำเภอ/จังหวัด ของทริปเหนือ/ใต้
-            trip_subdistricts = set()
-            trip_districts = set()
-            trip_provinces_info = set()
-            for code in trip_codes:
-                branch_rows = test_df[test_df['Code'] == code]
-                for _, row in branch_rows.iterrows():
-                    sub = row.get('Subdistrict', row.get('ตำบล', ''))
-                    dist = row.get('District', row.get('อำเภอ', ''))
-                    prov = row.get('Province', row.get('จังหวัด', ''))
-                    if sub:
-                        trip_subdistricts.add(sub)
-                    if dist and prov:
-                        trip_districts.add((dist, prov))
-                        trip_provinces_info.add(prov)
-            
-            # หาทริป nearby/far ที่ใกล้ที่สุด และ ตำบล/อำเภอติดกัน
-            best_nearby_idx = None
-            best_distance = float('inf')
-            best_adjacency_type = None  # 'subdistrict', 'district', 'adjacent'
-            
-            for other_idx, other_trip in enumerate(all_trips):
-                if other_trip is None or idx == other_idx:
-                    continue
-                
-                other_prov = other_trip.get('primary_province', '')
-                other_region = get_region_type(other_prov) if other_prov else 'unknown'
-                
-                # ต้องเป็น nearby หรือ far (ไม่ใช่เหนือ/ใต้ไกลๆ)
-                if other_region not in ['nearby', 'far']:
-                    continue
-                
-                # เช็ค capacity (รวมแล้วต้องใส่ JB ได้)
-                combined_cube = trip['cube'] + other_trip['cube']
-                combined_weight = trip['weight'] + other_trip['weight']
-                
-                # ต้องใส่ JB ได้ (≤ 7 cube, ≤ 3500 kg)
-                if combined_cube > LIMITS['JB']['max_c'] * BUFFER:
-                    continue
-                if combined_weight > LIMITS['JB']['max_w'] * BUFFER:
-                    continue
-                
-                # ดึงข้อมูลตำบล/อำเภอ/จังหวัด ของทริป nearby/far
-                other_subdistricts = set()
-                other_districts = set()
-                for other_code in other_trip['codes']:
-                    other_rows = test_df[test_df['Code'] == other_code]
-                    for _, row in other_rows.iterrows():
-                        sub = row.get('Subdistrict', row.get('ตำบล', ''))
-                        dist = row.get('District', row.get('อำเภอ', ''))
-                        prov = row.get('Province', row.get('จังหวัด', ''))
-                        if sub:
-                            other_subdistricts.add(sub)
-                        if dist and prov:
-                            other_districts.add((dist, prov))
-                
-                # === เช็คเงื่อนไขตำบล/อำเภอติดกัน ===
-                adjacency_type = None
-                
-                # 1. ตำบลเดียวกัน (ใกล้มาก)
-                if trip_subdistricts & other_subdistricts:
-                    adjacency_type = 'subdistrict'
-                
-                # 2. อำเภอเดียวกัน
-                elif trip_districts & other_districts:
-                    adjacency_type = 'district'
-                
-                # 3. อำเภอติดกัน (ใช้ are_adjacent_districts)
-                else:
-                    for (dist1, prov1) in trip_districts:
-                        for (dist2, prov2) in other_districts:
-                            if are_adjacent_districts(dist1, prov1, dist2, prov2):
-                                adjacency_type = 'adjacent'
-                                break
-                        if adjacency_type:
-                            break
-                
-                # ถ้าไม่ใกล้กัน → ข้าม
-                if adjacency_type is None:
-                    continue
-                
-                # คำนวณระยะทาง
-                trip_lat = trip.get('centroid_lat')
-                trip_lon = trip.get('centroid_lon')
-                other_lat = other_trip.get('centroid_lat')
-                other_lon = other_trip.get('centroid_lon')
-                if trip_lat and trip_lon and other_lat and other_lon:
-                    dist = haversine_distance(trip_lat, trip_lon, other_lat, other_lon)
-                    if dist < best_distance:
-                        best_distance = dist
-                        best_nearby_idx = other_idx
-                        best_adjacency_type = adjacency_type
-            
-            # ถ้าหา nearby ที่ติดกันได้ → รวมเข้าไป (ใช้ JB)
-            if best_nearby_idx is not None:
-                target_trip = all_trips[best_nearby_idx]
-                
-                # ย้ายสาขา
-                for code in trip_codes:
-                    test_df.loc[test_df['Code'] == code, 'Trip'] = target_trip['trip']
-                
-                # อัปเดต target_trip
-                target_trip['codes'].update(trip['codes'])
-                target_trip['cube'] += trip['cube']
-                target_trip['weight'] += trip['weight']
-                target_trip['count'] += trip['count']
-                target_trip['provinces'].update(trip['provinces'])
-                
-                # ลบ trip เดิม
-                all_trips[idx] = None
-                merge_far_to_nearby_count += 1
+        if region in ['north', 'south'] and cube_util < 95:
+            remaining_north_south.append({'idx': idx, 'trip': trip, 'region': region})
+        elif region in ['nearby', 'far']:
+            central_trips.append({'idx': idx, 'trip': trip})
     
-    # ลบทริปที่รวมแล้ว
+    # รวมเศษเหนือ/ใต้กับภาคกลาง ถ้าตำบล/อำเภอติดกัน
+    for ns_item in remaining_north_south:
+        ns_trip = ns_item['trip']
+        ns_idx = ns_item['idx']
+        
+        if all_trips[ns_idx] is None:
+            continue
+        
+        # หาสาขาที่อยู่ชายขอบ (ติดกับภาคกลาง)
+        for c_item in central_trips:
+            c_trip = c_item['trip']
+            c_idx = c_item['idx']
+            
+            if all_trips[c_idx] is None:
+                continue
+            
+            # เช็คว่าตำบล/อำเภอติดกันหรือไม่
+            adjacent_found = False
+            for ns_code in ns_trip['codes']:
+                ns_district = district_cache.get(ns_code, '')
+                ns_province = province_cache.get(ns_code, '')
+                
+                for c_code in c_trip['codes']:
+                    c_district = district_cache.get(c_code, '')
+                    c_province = province_cache.get(c_code, '')
+                    
+                    # เช็คด้วย are_adjacent_districts
+                    if are_adjacent_districts(ns_district, ns_province, c_district, c_province):
+                        adjacent_found = True
+                        break
+                if adjacent_found:
+                    break
+            
+            if not adjacent_found:
+                continue
+            
+            # เช็ค capacity รวมกัน (ใช้ JB limit)
+            combined_cube = ns_trip['cube'] + c_trip['cube']
+            combined_weight = ns_trip['weight'] + c_trip['weight']
+            combined_count = ns_trip['count'] + c_trip['count']
+            
+            # ใช้ JB limit (7 cube, 3500 kg) เพราะอยู่ชายขอบ
+            if combined_cube > LIMITS['JB']['max_c'] * BUFFER:
+                continue
+            if combined_weight > LIMITS['JB']['max_w'] * BUFFER:
+                continue
+            if combined_count > 12:  # JB limit
+                continue
+            
+            # รวมได้! ย้ายสาขาจาก north/south trip ไป central trip
+            for code in ns_trip['codes']:
+                test_df.loc[test_df['Code'] == code, 'Trip'] = c_trip['trip']
+            
+            # อัปเดต central trip
+            c_trip['codes'].update(ns_trip['codes'])
+            c_trip['cube'] = combined_cube
+            c_trip['weight'] = combined_weight
+            c_trip['count'] = combined_count
+            c_trip['provinces'].update(ns_trip['provinces'])
+            
+            # ลบ north/south trip
+            all_trips[ns_idx] = None
+            merge_north_south_central_count += 1
+            break  # หยุดหาสำหรับ ns_trip นี้
+    
+    # ลบทริปที่ถูกรวมแล้ว
     all_trips = [t for t in all_trips if t is not None]
     
     # 🎯 Phase 1: รวมทริปเล็ก (≤3 สาขา) กับทริปใกล้เคียง (FAST VERSION)
