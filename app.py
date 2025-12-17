@@ -2905,20 +2905,180 @@ def predict_trips(test_df, model_data):
             return haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
         return 0  # ไม่มีพิกัด ถือว่าใกล้ DC
     
-    # 🚀 **NEW ALGORITHM: เรียงสาขาตามพิกัดก่อน + เช็คข้อห้ามรถ**
-    # 🔥 Phase 1.77: เรียงสาขาตาม Nearest Neighbor จาก DC ก่อนจัดกลุ่ม
-    # เพื่อป้องกันไม่ให้ทริปกระโดดไปมา (วังน้อย → กทม → วังน้อย)
-    # 1. เรียงสาขาตามพิกัด (ใกล้กันอยู่ติดกัน)
-    # 2. วนทีละสาขาตามลำดับที่เรียงแล้ว
-    # 3. เช็คว่าเพิ่มเข้าทริปปัจจุบันได้ไหม (capacity + ระยะทาง + ข้อห้ามรถ)
-    # 4. ถ้าได้ → เพิ่มเข้าทริป
-    # 5. ถ้าไม่ได้ → ตัดทริปใหม่
+    # 🚀 **NEW ALGORITHM: จัดกลุ่มอำเภอ + ประวัติก่อน → เรียงภูมิภาค → จัดทริป**
+    # 
+    # ขั้นตอน:
+    # 1. 🏘️ จัดกลุ่มสาขาตามอำเภอก่อน - สาขาในอำเภอเดียวกันต้องอยู่ติดกัน
+    # 2. 📜 รวม cluster ตามประวัติ (trip_pairs) - สาขาที่เคยไปด้วยกันต้องอยู่ติดกัน
+    # 3. 🗺️ เรียงกลุ่มตามภูมิภาค (ใต้ → เหนือ → อีสาน → กทม/ปริมณฑล)
+    # 4. 🚛 จัดทริปตามลำดับที่เรียงแล้ว
     
-    # 🔥 เรียงสาขาตามพิกัด: ใช้ group_by_name_and_subdistrict + Nearest Neighbor
     all_codes_original = test_df['Code'].unique().tolist()
     
-    # ใช้ฟังก์ชัน group_by_name_and_subdistrict ที่มี nearest neighbor อยู่แล้ว
-    all_codes_ordered = group_by_name_and_subdistrict(all_codes_original)
+    # 🏘️ Phase 0.1: จัดกลุ่มสาขาตามอำเภอก่อน
+    def cluster_by_district(codes):
+        """จัดกลุ่มสาขาตามอำเภอ - สาขาในอำเภอเดียวกันต้องอยู่ติดกัน"""
+        district_groups = {}
+        for code in codes:
+            district = district_cache.get(code, '')
+            province = province_cache.get(code, '')
+            # ใช้ province + district เป็น key เพราะอำเภอชื่อซ้ำข้ามจังหวัดได้
+            key = f"{province}|{district}" if district else f"no_district|{code}"
+            if key not in district_groups:
+                district_groups[key] = []
+            district_groups[key].append(code)
+        return list(district_groups.values())
+    
+    # 📜 Phase 0.2: จัดกลุ่มสาขาตามประวัติ (trip_pairs clustering)
+    # สาขาที่เคยไปด้วยกันจะอยู่ใน cluster เดียวกัน
+    def cluster_by_history(codes, history_pairs):
+        """จัดกลุ่มสาขาตามประวัติที่เคยไปด้วยกัน"""
+        if not history_pairs:
+            return [[c] for c in codes]  # ไม่มีประวัติ → แต่ละสาขาเป็น cluster ตัวเอง
+        
+        # สร้าง adjacency list จาก trip_pairs
+        adj = {c: set() for c in codes}
+        for pair in history_pairs:
+            if len(pair) == 2:
+                a, b = pair
+                if a in adj and b in adj:
+                    adj[a].add(b)
+                    adj[b].add(a)
+        
+        # Union-Find เพื่อหา connected components
+        parent = {c: c for c in codes}
+        
+        def find(x):
+            if parent[x] != x:
+                parent[x] = find(parent[x])
+            return parent[x]
+        
+        def union(x, y):
+            px, py = find(x), find(y)
+            if px != py:
+                parent[px] = py
+        
+        # รวม cluster ตามประวัติ
+        for pair in history_pairs:
+            if len(pair) == 2:
+                a, b = pair
+                if a in parent and b in parent:
+                    union(a, b)
+        
+        # สร้าง clusters
+        clusters = {}
+        for c in codes:
+            root = find(c)
+            if root not in clusters:
+                clusters[root] = []
+            clusters[root].append(c)
+        
+        return list(clusters.values())
+    
+    # 🔥 รวม cluster: อำเภอ + ประวัติ
+    # 1. จัดกลุ่มตามอำเภอก่อน
+    district_clusters = cluster_by_district(all_codes_original)
+    
+    # 2. รวม clusters ที่มีประวัติไปด้วยกัน
+    def merge_clusters_by_history(clusters, history_pairs):
+        """รวม clusters ที่มีประวัติไปด้วยกัน"""
+        if not history_pairs or not clusters:
+            return clusters
+        
+        # สร้าง mapping: code -> cluster_index
+        code_to_cluster = {}
+        for i, cluster in enumerate(clusters):
+            for code in cluster:
+                code_to_cluster[code] = i
+        
+        # Union-Find สำหรับ clusters
+        parent = list(range(len(clusters)))
+        
+        def find(x):
+            if parent[x] != x:
+                parent[x] = find(parent[x])
+            return parent[x]
+        
+        def union(x, y):
+            px, py = find(x), find(y)
+            if px != py:
+                parent[px] = py
+        
+        # รวม clusters ที่มีสาขาเคยไปด้วยกัน
+        for pair in history_pairs:
+            if len(pair) == 2:
+                a, b = pair
+                if a in code_to_cluster and b in code_to_cluster:
+                    ci, cj = code_to_cluster[a], code_to_cluster[b]
+                    union(ci, cj)
+        
+        # สร้าง merged clusters
+        merged = {}
+        for i, cluster in enumerate(clusters):
+            root = find(i)
+            if root not in merged:
+                merged[root] = []
+            merged[root].extend(cluster)
+        
+        return list(merged.values())
+    
+    # รวม cluster ตามประวัติ
+    history_clusters = merge_clusters_by_history(district_clusters, trip_pairs)
+    
+    # 🗺️ เรียง cluster ตามภูมิภาค (ไกล → ใกล้)
+    def get_cluster_sort_key(cluster):
+        """คืน sort key สำหรับ cluster: (region_order, province, district, -max_distance)"""
+        region_order_map = {'south': 0, 'north': 1, 'far': 2, 'nearby': 3, 'unknown': 4}
+        
+        # หา region, province, district ของ cluster (ใช้สาขาแรก)
+        provinces = []
+        districts = []
+        regions = []
+        max_dist = 0
+        
+        for code in cluster:
+            prov = province_cache.get(code, '')
+            dist = district_cache.get(code, '')
+            region = get_region_type(prov) if prov else 'unknown'
+            
+            if prov:
+                provinces.append(prov)
+            if dist:
+                districts.append(dist)
+            regions.append(region)
+            
+            # คำนวณระยะทางจาก DC
+            lat, lon = coord_cache.get(code, (None, None))
+            if lat and lon:
+                d = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
+                max_dist = max(max_dist, d)
+        
+        # ใช้ region ที่พบบ่อยที่สุด
+        main_region = max(set(regions), key=regions.count) if regions else 'unknown'
+        main_province = provinces[0] if provinces else ''
+        main_district = districts[0] if districts else ''
+        
+        return (region_order_map.get(main_region, 4), main_province, main_district, -max_dist)
+    
+    # เรียง clusters ตามภูมิภาค
+    history_clusters.sort(key=get_cluster_sort_key)
+    
+    # เรียงสาขาภายใน cluster ตามระยะทาง (ไกล → ใกล้)
+    def sort_cluster_codes(cluster):
+        """เรียงสาขาใน cluster ตามระยะทางจาก DC (ไกลมาก่อน)"""
+        def get_dist(code):
+            lat, lon = coord_cache.get(code, (None, None))
+            if lat and lon:
+                return haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
+            return 0
+        return sorted(cluster, key=lambda c: -get_dist(c))  # ไกลมาก่อน
+    
+    # รวม clusters เป็น list เดียว (เรียงตามภูมิภาค + ประวัติอยู่ติดกัน)
+    all_codes_ordered = []
+    for cluster in history_clusters:
+        sorted_cluster = sort_cluster_codes(cluster)
+        all_codes_ordered.extend(sorted_cluster)
+    
     all_codes = all_codes_ordered.copy()
     
     def get_lat_lon(branch_code):
