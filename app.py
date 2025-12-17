@@ -3180,8 +3180,8 @@ def predict_trips(test_df, model_data):
     for trip in all_trips:
         trip['primary_province'] = get_primary_province(trip)
     
-    # เรียงตามจังหวัดหลัก → ระยะทาง → จำนวนสาขา → utilization
-    all_trips.sort(key=lambda x: (x['primary_province'], x['distance_from_dc'], x['count'], x['util']))
+    # 🔄 เรียงตามจังหวัดหลัก → ระยะทางจาก DC (ไกลไปใกล้ เพื่อให้รถไกลออกก่อน)
+    all_trips.sort(key=lambda x: (x['primary_province'], -x['distance_from_dc'], x['count'], x['util']))
     
     # ===============================================
     # 🎯 Phase 0.3: บังคับรวมสาขาตำบลเดียวกันที่ถูกแยกทริป
@@ -6579,51 +6579,96 @@ def predict_trips(test_df, model_data):
     test_df['Subdistrict'] = test_df['Code'].apply(get_subdistrict)
     test_df['District'] = test_df['Code'].apply(get_district)
     
-    # เพิ่มคอลัมน์ระยะทางระหว่างสาขาในทริป และเรียงลำดับ
+    # เพิ่มคอลัมน์ระยะทางระหว่างสาขาในทริป และเรียงลำดับด้วย Nearest Neighbor
     def add_distance_and_sort(df):
-        # คำนวณระยะทาง max ระหว่างสาขาติดกัน (consecutive) ในแต่ละทริป
+        """
+        🔄 เรียงสาขาภายในแต่ละทริปด้วย Nearest Neighbor Algorithm
+        - เริ่มจาก DC → หาสาขาที่ใกล้ที่สุด → หาถัดไปที่ใกล้ที่สุด → ...
+        - ป้องกันการกระโดดไปมา
+        """
+        # สร้าง coord cache จาก MASTER_DATA
+        coord_cache_local = {}
+        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+            for _, row in MASTER_DATA.iterrows():
+                code = row['Plan Code']
+                lat = row.get('ละติจูด', 0)
+                lon = row.get('ลองติจูด', 0)
+                if lat and lon and pd.notna(lat) and pd.notna(lon):
+                    coord_cache_local[code] = (float(lat), float(lon))
+        
+        # เก็บลำดับ Sequence ใหม่สำหรับแต่ละ code
+        new_sequences = {}
         trip_distances = {}
+        
         for trip_num in df['Trip'].unique():
-            trip_data = df[df['Trip'] == trip_num]
-            
-            # เรียงตาม Sequence ถ้ามี
-            if 'Sequence' in trip_data.columns:
-                trip_data = trip_data.sort_values('Sequence', ascending=True)
-            
-            trip_codes = trip_data['Code'].tolist()
-            max_consecutive_dist = 0
-            
-            # 🔒 คำนวณระยะทางระหว่างสาขาติดกัน (ไม่ใช่ทุกคู่)
-            # สาขา 1 → สาขา 2, สาขา 2 → สาขา 3, ...
-            for i in range(len(trip_codes) - 1):
-                code1, code2 = trip_codes[i], trip_codes[i + 1]
+            if trip_num == 0:
+                continue
                 
-                # ดึงพิกัด
-                if not MASTER_DATA.empty:
-                    m1 = MASTER_DATA[MASTER_DATA['Plan Code'] == code1]
-                    m2 = MASTER_DATA[MASTER_DATA['Plan Code'] == code2]
-                    
-                    if len(m1) > 0 and len(m2) > 0:
-                        lat1 = m1.iloc[0].get('ละติจูด', 0)
-                        lon1 = m1.iloc[0].get('ลองติจูด', 0)
-                        lat2 = m2.iloc[0].get('ละติจูด', 0)
-                        lon2 = m2.iloc[0].get('ลองติจูด', 0)
-                        
-                        if lat1 and lon1 and lat2 and lon2:
-                            dist = haversine_distance(lat1, lon1, lat2, lon2)
-                            if dist > max_consecutive_dist:
-                                max_consecutive_dist = dist
+            trip_data = df[df['Trip'] == trip_num]
+            trip_codes = trip_data['Code'].tolist()
+            
+            if len(trip_codes) <= 1:
+                # สาขาเดี่ยว
+                if trip_codes:
+                    new_sequences[trip_codes[0]] = 1
+                trip_distances[trip_num] = 0
+                continue
+            
+            # 🔄 Nearest Neighbor Algorithm
+            # สร้างลิสต์พิกัด
+            points = []
+            for code in trip_codes:
+                lat, lon = coord_cache_local.get(code, (None, None))
+                if lat and lon:
+                    points.append((code, lat, lon))
+                else:
+                    # ไม่มีพิกัด ให้ไว้ท้าย
+                    points.append((code, DC_WANG_NOI_LAT, DC_WANG_NOI_LON))
+            
+            # เรียงลำดับด้วย Nearest Neighbor จาก DC
+            sorted_codes = []
+            remaining = points.copy()
+            current_lat, current_lon = DC_WANG_NOI_LAT, DC_WANG_NOI_LON
+            
+            while remaining:
+                best_idx = 0
+                best_dist = haversine_distance(current_lat, current_lon, remaining[0][1], remaining[0][2])
+                
+                for i, (_, lat, lon) in enumerate(remaining[1:], 1):
+                    dist = haversine_distance(current_lat, current_lon, lat, lon)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_idx = i
+                
+                best_point = remaining.pop(best_idx)
+                sorted_codes.append(best_point[0])
+                current_lat, current_lon = best_point[1], best_point[2]
+            
+            # กำหนด Sequence ใหม่
+            for seq, code in enumerate(sorted_codes, 1):
+                new_sequences[code] = seq
+            
+            # คำนวณ max consecutive distance
+            max_consecutive_dist = 0
+            for i in range(len(sorted_codes) - 1):
+                code1, code2 = sorted_codes[i], sorted_codes[i + 1]
+                lat1, lon1 = coord_cache_local.get(code1, (0, 0))
+                lat2, lon2 = coord_cache_local.get(code2, (0, 0))
+                if lat1 and lon1 and lat2 and lon2:
+                    dist = haversine_distance(lat1, lon1, lat2, lon2)
+                    if dist > max_consecutive_dist:
+                        max_consecutive_dist = dist
             
             trip_distances[trip_num] = round(max_consecutive_dist, 2)
+        
+        # เพิ่มคอลัมน์ Sequence ใหม่
+        df['Sequence'] = df['Code'].map(new_sequences).fillna(999)
         
         # เพิ่มคอลัมน์ระยะทาง max ระหว่างสาขาติดกันในทริป
         df['Max_Distance_in_Trip'] = df['Trip'].map(trip_distances)
         
-        # เรียงลำดับภายในแต่ละทริป: Trip → Sequence (ถ้ามี) หรือ Weight
-        if 'Sequence' in df.columns:
-            df = df.sort_values(['Trip', 'Sequence'], ascending=[True, True])
-        else:
-            df = df.sort_values(['Trip', 'Weight'], ascending=[True, False])
+        # เรียงลำดับภายในแต่ละทริป: Trip → Sequence (Nearest Neighbor order)
+        df = df.sort_values(['Trip', 'Sequence'], ascending=[True, True])
         return df
     
     test_df = add_distance_and_sort(test_df)
