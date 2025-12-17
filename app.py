@@ -1840,6 +1840,26 @@ def predict_trips(test_df, model_data):
             trip_codes = trip_data['Code'].unique()
             total_distance = 0  # Skip all distance calculations
             
+            # 🔴 ตรวจสอบว่าทริปผ่านเกณฑ์หรือไม่
+            max_util_check = max(w_util, c_util)
+            trip_issues = []
+            
+            # ปัญหา 1: เกิน 100%
+            if max_util_check > 100:
+                trip_issues.append(f'⛔ เกิน {max_util_check:.0f}%')
+            
+            # ปัญหา 2: ใช้รถผิดประเภท (6W ในเขตต้องห้าม)
+            if suggested == '6W' and has_any_nearby_branch:
+                trip_issues.append('⛔ 6W ในกทม/ปริมณฑล')
+            
+            # ปัญหา 3: ใช้รถใหญ่กว่าที่สาขาอนุญาต
+            if suggested == '6W' and min_max_size < 3:
+                trip_issues.append('⛔ 6W ในสาขาจำกัด')
+            elif suggested == 'JB' and min_max_size < 2:
+                trip_issues.append('⛔ JB ในสาขาจำกัด 4W')
+            
+            trip_status = '❌ ไม่ผ่าน: ' + ', '.join(trip_issues) if trip_issues else '✅ ผ่าน'
+            
             summary_data.append({
                 'Trip': int(trip_num),
                 'Branches': len(trip_data['Code'].unique()),
@@ -1848,7 +1868,8 @@ def predict_trips(test_df, model_data):
                 'Truck': f"{suggested} {source}",
                 'Weight_Use%': w_util,
                 'Cube_Use%': c_util,
-                'Total_Distance': total_distance
+                'Total_Distance': total_distance,
+                'TripStatus': trip_status
             })
         
 
@@ -1986,6 +2007,12 @@ def predict_trips(test_df, model_data):
             return ', '.join(trip_codes[:5]) + ('...' if len(trip_codes) > 5 else '')
         
         test_df_result['TripPartners'] = test_df_result.apply(get_trip_partners, axis=1)
+        
+        # 🔴 เพิ่มคอลัมน์ TripStatus จาก summary_df
+        trip_status_map = {}
+        for _, row in summary_df.iterrows():
+            trip_status_map[row['Trip']] = row['TripStatus']
+        test_df_result['TripStatus'] = test_df_result['Trip'].map(trip_status_map)
         
         # Mark VehicleCheck if strict constraint enforced
         def vehicle_check_str(row):
@@ -6983,6 +7010,16 @@ def main():
                                 top=Side(style='thin'),
                                 bottom=Side(style='thin')
                             )
+                            # 🔴 สีแดงสำหรับทริปที่ไม่ผ่านเกณฑ์
+                            red_font = Font(color='FF0000', bold=True)
+                            
+                            # สร้าง map ของทริปที่ไม่ผ่านเกณฑ์
+                            failed_trips = set()
+                            if 'TripStatus' in result_df.columns:
+                                for t in result_df['Trip'].unique():
+                                    trip_status = result_df[result_df['Trip'] == t]['TripStatus'].iloc[0] if len(result_df[result_df['Trip'] == t]) > 0 else ''
+                                    if '❌' in str(trip_status) or '⛔' in str(trip_status):
+                                        failed_trips.add(t)
                             
                             # เขียนข้อมูลใหม่ (แถวที่ header_row + 1 เป็นต้นไป)
                             current_trip = None
@@ -7030,6 +7067,9 @@ def main():
                                         cell = ws.cell(row=row_num, column=col_idx, value=value)
                                         cell.fill = fill
                                         cell.border = thin_border
+                                        # 🔴 ถ้าทริปไม่ผ่านเกณฑ์ ใช้ตัวหนังสือสีแดง
+                                        if trip_num in failed_trips:
+                                            cell.font = red_font
                                     
                                     row_num += 1
                                     sep_num += 1  # เพิ่มลำดับ Sep
@@ -7059,6 +7099,9 @@ def main():
                                     cell = ws.cell(row=row_num, column=col_idx, value=value)
                                     cell.fill = fill
                                     cell.border = thin_border
+                                    # 🔴 ถ้าทริปไม่ผ่านเกณฑ์ ใช้ตัวหนังสือสีแดง
+                                    if trip_num in failed_trips:
+                                        cell.font = red_font
                                 
                                 row_num += 1
                                 sep_num += 1
@@ -7086,6 +7129,15 @@ def main():
                             use_yellow = True
                             yellow_orange = PatternFill(start_color='FFE699', end_color='FFE699', fill_type='solid')
                             white_fill = PatternFill(start_color='FFFFFF', end_color='FFFFFF', fill_type='solid')
+                            red_font_fallback = Font(color='FF0000', bold=True)
+                            
+                            # สร้าง map ของทริปที่ไม่ผ่านเกณฑ์
+                            failed_trips_fallback = set()
+                            if 'TripStatus' in result_df.columns:
+                                for t in result_df['Trip'].unique():
+                                    trip_status = result_df[result_df['Trip'] == t]['TripStatus'].iloc[0] if len(result_df[result_df['Trip'] == t]) > 0 else ''
+                                    if '❌' in str(trip_status) or '⛔' in str(trip_status):
+                                        failed_trips_fallback.add(t)
                             
                             for trip_num in sorted(result_df['Trip'].unique()):
                                 if trip_num == 0:
@@ -7105,6 +7157,9 @@ def main():
                                     for col_idx, value in enumerate(data, 1):
                                         cell = ws.cell(row=row_num, column=col_idx, value=value)
                                         cell.fill = fill
+                                        # 🔴 ถ้าทริปไม่ผ่านเกณฑ์ ใช้ตัวหนังสือสีแดง
+                                        if trip_num in failed_trips_fallback:
+                                            cell.font = red_font_fallback
                                     row_num += 1
                                     sep_num += 1
                                 
@@ -7114,6 +7169,9 @@ def main():
                                 for col_idx, value in enumerate(dc_data, 1):
                                     cell = ws.cell(row=row_num, column=col_idx, value=value)
                                     cell.fill = fill
+                                    # 🔴 ถ้าทริปไม่ผ่านเกณฑ์ ใช้ตัวหนังสือสีแดง
+                                    if trip_num in failed_trips_fallback:
+                                        cell.font = red_font_fallback
                                 row_num += 1
                                 sep_num += 1
                             
