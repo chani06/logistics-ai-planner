@@ -6799,38 +6799,29 @@ def predict_trips(test_df, model_data):
     
     test_df = calculate_detailed_distances(test_df)
     
-    # เพิ่มคอลัมน์เช็คว่าสาขาเคยใช้รถประเภทนี้หรือไม่
+    # เพิ่มคอลัมน์เช็คว่าสาขาใช้รถประเภทนี้ได้หรือไม่ (อ้างอิงจาก Auto Plan เท่านั้น!)
     def check_vehicle_history(row):
         code = row['Code']
         trip = row['Trip']
         truck_type = trip_truck_type_map.get(trip, '6W')
         
-        if code not in branch_vehicles:
-            return "✅ ใช้ได้ (สาขาใหม่)"
-        
-        vehicle_history = branch_vehicles.get(code, {})
-        if not vehicle_history:
-            return "✅ ใช้ได้ (ไม่มีประวัติ)"
-        
         vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
-        requested_size = vehicle_sizes.get(truck_type, 0)
+        requested_size = vehicle_sizes.get(truck_type, 3)
         
-        # หารถใหญ่สุดที่สาขาเคยใช้
-        max_used_size = max(vehicle_sizes.get(v, 0) for v in vehicle_history)
-        max_used_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(max_used_size, '6W')
+        # 🔒 อ้างอิงจาก AUTO_PLAN_TRUCK_LIMITS เท่านั้น (ไม่ใช้ Booking History)
+        if code in AUTO_PLAN_TRUCK_LIMITS:
+            max_allowed = AUTO_PLAN_TRUCK_LIMITS[code]
+            max_allowed_size = vehicle_sizes.get(max_allowed, 3)
+            
+            if requested_size <= max_allowed_size:
+                # รถที่ขอใช้ เล็กกว่าหรือเท่ากับที่อนุญาต = ใช้ได้
+                return f"✅ ใช้ได้ (อนุญาต {max_allowed})"
+            else:
+                # รถที่ขอใช้ ใหญ่กว่าที่อนุญาต = ห้าม
+                return f"🚫 จำกัด {max_allowed} (Auto Plan)"
         
-        # ถ้าเคยใช้รถประเภทนี้
-        if truck_type in vehicle_history:
-            count = vehicle_history[truck_type]
-            return f"✅ เคยใช้ ({count} ครั้ง)"
-        
-        # ถ้าขอใช้รถเล็กกว่าที่เคยใช้ = ใช้ได้
-        if requested_size < max_used_size:
-            return f"✅ ใช้ได้ (เคยใช้ {max_used_vehicle})"
-        
-        # ถ้าขอใช้รถใหญ่กว่าที่เคยใช้ = อาจเข้าไม่ได้
-        history_str = ", ".join([f"{v}:{c}" for v, c in vehicle_history.items()])
-        return f"🚫 จำกัด {max_used_vehicle} ({history_str})"
+        # ถ้าไม่มีใน Auto Plan = ใช้ได้ทุกประเภท (ไม่มีข้อจำกัด)
+        return "✅ ใช้ได้ (ไม่มีข้อจำกัด)"
     
     test_df['VehicleCheck'] = test_df.apply(check_vehicle_history, axis=1)
     
