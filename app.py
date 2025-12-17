@@ -2868,12 +2868,21 @@ def predict_trips(test_df, model_data):
         # 🔥🔥🔥 ขั้นตอนที่ 0: หาสาขาที่ต้องไปด้วยกัน (Reference เดียวกัน / เคยไปด้วยกัน / ตำบลเดียวกัน)
         # 🔒 เช็คข้อห้ามรถของ seed ก่อน
         seed_max_vehicle = get_max_vehicle_for_branch(seed_code)
+        
+        # 🔥 เช็คว่าเป็นภาคที่ต้องใช้ 6W หรือไม่ (เหนือ/ใต้/อีสาน)
+        seed_region = get_region_type(seed_province) if seed_province else 'unknown'
+        is_far_region = seed_region in ['north', 'south', 'far']  # ภาคที่ใช้ 6W ได้
+        
         if seed_max_vehicle == '4W':
             max_cube = LIMITS['4W']['max_c'] * BUFFER
             max_weight = LIMITS['4W']['max_w'] * BUFFER
         elif seed_max_vehicle == 'JB':
             max_cube = LIMITS['JB']['max_c'] * BUFFER
             max_weight = LIMITS['JB']['max_w'] * BUFFER
+        elif is_far_region:
+            # 🔥 ภาคไกล (เหนือ/ใต้/อีสาน) → ใช้ 6W ให้เต็ม 20 cube
+            max_cube = LIMITS['6W']['max_c'] * BUFFER  # 20 cube
+            max_weight = LIMITS['6W']['max_w'] * BUFFER  # 6000 kg
         
         # 🆕 ลำดับที่ 0.1: หาสาขาที่มี Reference เดียวกัน (อยู่ที่เดียวกัน)
         seed_ref = LOCATION_CODE_TO_REF.get(seed_code, '')
@@ -2993,6 +3002,16 @@ def predict_trips(test_df, model_data):
                 
                 if not last_lat or not code_lat:
                     continue
+                
+                # 🔥 เช็คว่าอยู่ภูมิภาคเดียวกันหรือไม่ (ป้องกันการรวมภาคไกลกับภาคกลาง)
+                code_region = get_region_type(code_province) if code_province else 'unknown'
+                
+                # 🚨 ห้ามรวมสาขาจากภาคที่แตกต่างกัน
+                # เช่น ภาคกลาง (nearby) ห้ามรวมกับ ภาคอีสาน (far)
+                if is_far_region and code_region == 'nearby':
+                    continue  # ภาคไกลห้ามรวมกับภาคกลาง
+                elif seed_region == 'nearby' and code_region in ['north', 'south', 'far']:
+                    continue  # ภาคกลางห้ามรวมกับภาคไกล
                 
                 # ระยะจากสาขาสุดท้าย (สาขาติดกัน)
                 dist_from_last = haversine_distance(last_lat, last_lon, code_lat, code_lon)
@@ -7394,11 +7413,50 @@ def main():
                             # 🔴 สีแดงสำหรับทริปที่ไม่ผ่านเกณฑ์
                             red_font = Font(color='FF0000', bold=True)
                             
-                            # สร้าง map ของทริปที่ไม่ผ่านเกณฑ์
+                            # 🔴 สร้าง map ของทริปที่ไม่ผ่านเกณฑ์ (รวมเกิน 100% หรือต่ำกว่า 50%)
                             failed_trips = set()
-                            if 'TripStatus' in result_df.columns:
-                                for t in result_df['Trip'].unique():
-                                    trip_status = result_df[result_df['Trip'] == t]['TripStatus'].iloc[0] if len(result_df[result_df['Trip'] == t]) > 0 else ''
+                            low_util_trips = set()  # ทริปที่ utilization ต่ำ (<50%)
+                            over_util_trips = set()  # ทริปที่ utilization เกิน (>100%)
+                            
+                            # ค่า limit สำหรับแต่ละรถ
+                            vehicle_limits = {
+                                '4W': {'max_w': 2500, 'max_c': 5.0},
+                                'JB': {'max_w': 3500, 'max_c': 7.0},
+                                '6W': {'max_w': 6000, 'max_c': 20.0}
+                            }
+                            
+                            for t in result_df['Trip'].unique():
+                                if t == 0:
+                                    continue
+                                trip_data = result_df[result_df['Trip'] == t]
+                                trip_cube = trip_data['Cube'].sum()
+                                trip_weight = trip_data['Weight'].sum()
+                                
+                                # หาประเภทรถของทริปนี้
+                                trip_no = trip_no_map.get(t, '6W001')
+                                if trip_no.startswith('4WJ'):
+                                    veh_type = 'JB'
+                                elif trip_no.startswith('4W'):
+                                    veh_type = '4W'
+                                else:
+                                    veh_type = '6W'
+                                
+                                limits = vehicle_limits.get(veh_type, vehicle_limits['6W'])
+                                cube_util = (trip_cube / limits['max_c']) * 100
+                                weight_util = (trip_weight / limits['max_w']) * 100
+                                max_util = max(cube_util, weight_util)
+                                
+                                # 🔴 เช็คเกิน 100% หรือต่ำกว่า 50%
+                                if max_util > 105:  # เกิน 105%
+                                    over_util_trips.add(t)
+                                    failed_trips.add(t)
+                                elif max_util < 50:  # ต่ำกว่า 50%
+                                    low_util_trips.add(t)
+                                    failed_trips.add(t)
+                                
+                                # เช็ค TripStatus ด้วย
+                                if 'TripStatus' in result_df.columns:
+                                    trip_status = trip_data['TripStatus'].iloc[0] if len(trip_data) > 0 else ''
                                     if '❌' in str(trip_status) or '⛔' in str(trip_status):
                                         failed_trips.add(t)
                             
@@ -7512,11 +7570,39 @@ def main():
                             white_fill = PatternFill(start_color='FFFFFF', end_color='FFFFFF', fill_type='solid')
                             red_font_fallback = Font(color='FF0000', bold=True)
                             
-                            # สร้าง map ของทริปที่ไม่ผ่านเกณฑ์
+                            # 🔴 สร้าง map ของทริปที่ไม่ผ่านเกณฑ์ (รวมเกิน 100% หรือต่ำกว่า 50%)
                             failed_trips_fallback = set()
-                            if 'TripStatus' in result_df.columns:
-                                for t in result_df['Trip'].unique():
-                                    trip_status = result_df[result_df['Trip'] == t]['TripStatus'].iloc[0] if len(result_df[result_df['Trip'] == t]) > 0 else ''
+                            vehicle_limits_fb = {
+                                '4W': {'max_w': 2500, 'max_c': 5.0},
+                                'JB': {'max_w': 3500, 'max_c': 7.0},
+                                '6W': {'max_w': 6000, 'max_c': 20.0}
+                            }
+                            
+                            for t in result_df['Trip'].unique():
+                                if t == 0:
+                                    continue
+                                trip_data = result_df[result_df['Trip'] == t]
+                                trip_cube = trip_data['Cube'].sum()
+                                trip_weight = trip_data['Weight'].sum()
+                                
+                                trip_no = trip_no_map.get(t, '6W001')
+                                if trip_no.startswith('4WJ'):
+                                    veh_type = 'JB'
+                                elif trip_no.startswith('4W'):
+                                    veh_type = '4W'
+                                else:
+                                    veh_type = '6W'
+                                
+                                limits = vehicle_limits_fb.get(veh_type, vehicle_limits_fb['6W'])
+                                cube_util = (trip_cube / limits['max_c']) * 100
+                                weight_util = (trip_weight / limits['max_w']) * 100
+                                max_util = max(cube_util, weight_util)
+                                
+                                if max_util > 105 or max_util < 50:
+                                    failed_trips_fallback.add(t)
+                                
+                                if 'TripStatus' in result_df.columns:
+                                    trip_status = trip_data['TripStatus'].iloc[0] if len(trip_data) > 0 else ''
                                     if '❌' in str(trip_status) or '⛔' in str(trip_status):
                                         failed_trips_fallback.add(t)
                             
