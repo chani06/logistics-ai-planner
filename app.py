@@ -1950,7 +1950,7 @@ def predict_trips(test_df, model_data):
         
         # Mark VehicleCheck if strict constraint enforced
         def vehicle_check_str(row):
-            truck = row['Truck']
+            truck = str(row.get('Truck', '')) if pd.notna(row.get('Truck')) else ''
             if '🔒' in truck or 'บังคับสาขา' in truck:
                 return '🔒 จำกัดสาขา'
             return '✅ ใช้ตามไฟล์'
