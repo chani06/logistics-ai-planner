@@ -1721,10 +1721,55 @@ def predict_trips(test_df, model_data):
         
         return test_df_input
     
+    # 🔒 ฟังก์ชันแยกสาขาที่มีข้อจำกัดรถออกจากทริปที่ใช้รถใหญ่เกินไป
+    def split_restricted_branches(df):
+        """แยกสาขาที่จำกัด 4W/JB ออกจากทริปที่มี Cube/Weight เกินความจุรถที่อนุญาต"""
+        vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
+        
+        for trip_num in df['Trip'].dropna().unique():
+            trip_data = df[df['Trip'] == trip_num]
+            total_w = trip_data['Weight'].sum()
+            total_c = trip_data['Cube'].sum()
+            trip_codes = list(trip_data['Code'].unique())
+            
+            # หาสาขาที่มีข้อจำกัดและไม่มีข้อจำกัด
+            codes_4w_only = []  # จำกัด 4W
+            codes_jb_only = []  # จำกัด JB
+            codes_no_limit = []  # ไม่จำกัด
+            
+            for code in trip_codes:
+                max_v = get_max_vehicle_for_branch(code)
+                if max_v == '4W':
+                    codes_4w_only.append(code)
+                elif max_v == 'JB':
+                    codes_jb_only.append(code)
+                else:
+                    codes_no_limit.append(code)
+            
+            # 🔴 ถ้ามีสาขาจำกัด 4W แต่ Cube รวมเกิน 4W capacity (5.0) → แยก
+            if codes_4w_only and total_c > LIMITS['4W']['max_c']:
+                # สาขาที่จำกัด 4W ต้องแยกออกไปทริปใหม่
+                new_trip_num = df['Trip'].max() + 1
+                for code in codes_4w_only:
+                    df.loc[df['Code'] == code, 'Trip'] = new_trip_num
+            
+            # 🔴 ถ้ามีสาขาจำกัด JB แต่ Cube รวมเกิน JB capacity (7.0) → แยก
+            elif codes_jb_only and total_c > LIMITS['JB']['max_c']:
+                # ถ้ามีทั้งสาขาจำกัด JB และไม่จำกัด → แยกสาขาที่จำกัด JB ออก
+                if codes_no_limit:
+                    new_trip_num = df['Trip'].max() + 1
+                    for code in codes_jb_only:
+                        df.loc[df['Code'] == code, 'Trip'] = new_trip_num
+        
+        return df
+    
     # ★★★ ถ้ามีคอลัมน์ Trip ในไฟล์ ใช้โดยตรงเลย ★★★
     if use_file_trips:
         # ใช้ Trip จากไฟล์โดยตรง
         test_df_result = test_df.copy()
+        
+        # 🔒 แยกสาขาที่มีข้อจำกัดรถออกก่อน
+        test_df_result = split_restricted_branches(test_df_result)
         
         # ดึงประเภทรถจาก TripNo
         trip_truck_map_file = {}
