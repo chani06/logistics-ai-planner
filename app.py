@@ -510,6 +510,8 @@ def get_max_vehicle_for_trip(trip_codes):
     """
     หารถใหญ่สุดที่ทริปนี้ใช้ได้ (เช็คข้อจำกัดของทุกสาขาในทริป)
     
+    🆕 เพิ่มเงื่อนไข: ถ้าทริปมีสาขาจาก nearby (กทม/ปริมณฑล/ภาคกลาง) รวมด้วย → ห้าม 6W
+    
     Args:
         trip_codes: set ของ branch codes ในทริป
     
@@ -520,6 +522,8 @@ def get_max_vehicle_for_trip(trip_codes):
     max_allowed = '6W'  # เริ่มจากใหญ่สุด แล้วจำกัดตามข้อจำกัดสาขา
     min_priority = 3  # ค่าใหญ่สุดคือไม่มีข้อจำกัด
     
+    has_nearby_province = False  # 🆕 เช็คว่ามีสาขาในกทม/ปริมณฑล/ภาคกลางหรือไม่
+    
     for code in trip_codes:
         branch_max = get_max_vehicle_for_branch(code)
         priority = vehicle_priority.get(branch_max, 3)
@@ -528,6 +532,19 @@ def get_max_vehicle_for_trip(trip_codes):
         if priority < min_priority:
             min_priority = priority
             max_allowed = branch_max
+        
+        # 🆕 เช็คจังหวัดของสาขา
+        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+            master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+            if len(master_row) > 0:
+                prov = master_row.iloc[0].get('จังหวัด', '')
+                if pd.notna(prov) and get_region_type(str(prov)) == 'nearby':
+                    has_nearby_province = True
+    
+    # 🆕 ถ้ามีสาขาในกทม/ปริมณฑล/ภาคกลางรวมด้วย → ห้าม 6W (ใช้ได้แค่ JB หรือ 4W)
+    if has_nearby_province and min_priority == 3:
+        min_priority = 2  # ลดลงเป็น JB
+        max_allowed = 'JB'
     
     return max_allowed
 
