@@ -2780,120 +2780,85 @@ def predict_trips(test_df, model_data):
     def group_by_name_and_subdistrict(codes):
         """
         จัดกลุ่มสาขาตามลำดับ แล้วเรียงตามระยะทาง nearest neighbor:
-        🔥 ลำดับใหม่: ตำบล > ชื่อ > อำเภอ > จังหวัด
-        0. 🆕 ตำบลเดียวกัน + จังหวัดเดียวกัน (สำคัญที่สุด - บังคับรวม)
-        1. ชื่อเหมือนกัน + ตำบลเดียวกัน + จังหวัดเดียวกัน
-        2. ชื่อเหมือนกัน + อำเภอเดียวกัน + จังหวัดเดียวกัน
-        3. ตำบลเดียวกัน (แม้ชื่อต่าง) → รวมก่อน
-        4. อำเภอเดียวกัน + จังหวัดเดียวกัน
-        5. จังหวัดเดียวกัน
-        6. ที่เหลือ
+        🔥 ลำดับใหม่: ภาค (ไกล→ใกล้) → จังหวัด → อำเภอ → ตำบล → ระยะทาง
         
-        🆕 เรียงกลุ่มตามระยะทาง: เริ่มจากใกล้ DC → nearest neighbor ไปเรื่อยๆ
+        1. 🚛 ภาคใต้ (ไกลสุด) → ใช้ 6W
+        2. 🚛 ภาคเหนือ → ใช้ 6W  
+        3. 🚛 ภาคอื่น (อีสาน/ตะวันออก) → ใช้ 6W ได้
+        4. 🏙️ ภาคใกล้ (กทม/ปริมณฑล) → ใช้ 4W/JB
+        
+        ภายในแต่ละภาค: จังหวัด → อำเภอ → ตำบล → ระยะทาง (ไกล→ใกล้)
         """
-        # สร้าง key สำหรับจัดกลุ่ม
-        groups = {}  # key: (priority, province, district, base_name, subdistrict) -> [codes]
+        # 🔥 แยกตามภาค (region) ก่อน
+        region_groups = {
+            'south': [],   # 1. ใต้ (ไกลสุด)
+            'north': [],   # 2. เหนือ
+            'far': [],     # 3. อีสาน/ตะวันออก
+            'nearby': [],  # 4. กทม/ปริมณฑล (ใกล้สุด)
+            'unknown': []  # 5. ไม่ทราบ
+        }
         
         for code in codes:
-            name = name_cache.get(code, '')
-            base_name = get_base_name(name)
-            subdistrict = subdistrict_cache.get(code, '')
-            district = district_cache.get(code, '')
             province = province_cache.get(code, '')
-            
-            # 🔥 สร้าง group key - ใช้ลำดับความสำคัญ (เลขน้อย = สำคัญกว่า)
-            # ให้ความสำคัญกับตำบลเดียวกันก่อน!
-            if subdistrict and province:
-                # ลำดับ 0: ตำบลเดียวกัน + จังหวัดเดียวกัน (🔥 สำคัญที่สุด - บังคับรวม)
-                key = (0, province, district, '', subdistrict)
-            elif base_name and subdistrict and province:
-                # ลำดับ 1: ชื่อ + ตำบล + จังหวัด
-                key = (1, province, district, base_name, subdistrict)
-            elif base_name and district and province:
-                # ลำดับ 2: ชื่อ + อำเภอ + จังหวัด
-                key = (2, province, district, base_name, '')
-            elif base_name and province:
-                # ลำดับ 3: ชื่อ + จังหวัด
-                key = (3, province, district, base_name, '')
-            elif base_name:
-                # ลำดับ 4: ชื่อเดียวกัน (แม้ต่างจังหวัด - เช่น โลตัส กทม กับ โลตัส ชลบุรี)
-                key = (4, province, '', base_name, '')
-            elif province and district:
-                # ลำดับ 5: จังหวัด + อำเภอ (รวมสาขาในอำเภอเดียวกัน)
-                key = (5, province, district, '', '')
-            elif province:
-                # ลำดับ 6: จังหวัดเดียวกัน
-                key = (6, province, '', '', '')
-            else:
-                # ลำดับ 7: ที่เหลือ
-                key = (7, province if province else code, '', '', '', '')
-            
-            if key not in groups:
-                groups[key] = []
-            groups[key].append(code)
+            region = get_region_type(province) if province else 'unknown'
+            region_groups[region].append(code)
         
-        # 🆕 เรียงกลุ่มด้วย nearest neighbor approach
-        # เริ่มจากกลุ่มที่ใกล้ DC ที่สุด แล้วหากลุ่มถัดไปที่ใกล้ที่สุด
-        result = []
-        remaining_groups = list(groups.items())  # [(key, [codes]), ...]
-        
-        # หาตำแหน่งเฉลี่ยของแต่ละกลุ่ม
-        def get_group_center(group_codes):
-            lats, lons = [], []
-            for code in group_codes:
+        # 🔥 ฟังก์ชันเรียงสาขาในแต่ละภาคตาม: จังหวัด → อำเภอ → ตำบล → ระยะทาง (ไกล→ใกล้)
+        def sort_region_codes(region_codes):
+            """เรียงสาขาในภาคตาม: จังหวัด → อำเภอ → ตำบล → ระยะทาง (ไกล→ใกล้)"""
+            if not region_codes:
+                return []
+            
+            # สร้างข้อมูลสำหรับเรียง
+            code_info = []
+            for code in region_codes:
+                province = province_cache.get(code, '')
+                district = district_cache.get(code, '')
+                subdistrict = subdistrict_cache.get(code, '')
                 lat, lon = coord_cache.get(code, (None, None))
+                
+                # คำนวณระยะทางจาก DC (ไกล = ค่ามาก)
                 if lat and lon:
-                    lats.append(lat)
-                    lons.append(lon)
-            if lats and lons:
-                return (sum(lats) / len(lats), sum(lons) / len(lons))
-            return (None, None)
+                    dist = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
+                else:
+                    dist = 0
+                
+                code_info.append({
+                    'code': code,
+                    'province': province,
+                    'district': district,
+                    'subdistrict': subdistrict,
+                    'distance': dist
+                })
+            
+            # เรียงตาม: จังหวัด → อำเภอ → ตำบล → ระยะทาง (ไกล→ใกล้)
+            # ใช้ -distance เพราะต้องการไกลก่อน
+            code_info.sort(key=lambda x: (
+                x['province'],
+                x['district'],
+                x['subdistrict'],
+                -x['distance']  # ไกลมาก่อน
+            ))
+            
+            return [c['code'] for c in code_info]
         
-        # เริ่มจากกลุ่มที่ใกล้ DC ที่สุด
-        if remaining_groups:
-            # หากลุ่มที่ใกล้ DC ที่สุด
-            def dist_from_dc(item):
-                key, group_codes = item
-                priority = key[0]
-                center_lat, center_lon = get_group_center(group_codes)
-                if center_lat and center_lon:
-                    dist = calculate_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, center_lat, center_lon)
-                    return (priority, dist)  # เรียงตาม priority ก่อน แล้วระยะทาง
-                return (priority, 9999)
-            
-            remaining_groups.sort(key=dist_from_dc)
-            current_key, current_group = remaining_groups.pop(0)
-            
-            # เรียงสมาชิกในกลุ่มแรกตาม nearest neighbor
-            group_sorted = sort_by_distance_from_dc(current_group)
-            ordered = build_route_nearest_neighbor(group_sorted)
-            result.extend(ordered)
-            
-            # หากลุ่มถัดไปที่ใกล้กับกลุ่มปัจจุบันที่สุด
-            while remaining_groups:
-                # ใช้ตำแหน่งสุดท้ายของ result เป็นจุดอ้างอิง
-                last_code = result[-1] if result else None
-                last_lat, last_lon = coord_cache.get(last_code, (None, None)) if last_code else (DC_WANG_NOI_LAT, DC_WANG_NOI_LON)
-                
-                if not last_lat:
-                    last_lat, last_lon = DC_WANG_NOI_LAT, DC_WANG_NOI_LON
-                
-                # หากลุ่มที่ใกล้ที่สุด
-                def dist_from_last(item):
-                    key, group_codes = item
-                    priority = key[0]
-                    center_lat, center_lon = get_group_center(group_codes)
-                    if center_lat and center_lon:
-                        dist = calculate_distance(last_lat, last_lon, center_lat, center_lon)
-                        return (priority, dist)  # priority ก่อน แล้วระยะทาง
-                    return (priority, 9999)
-                
-                remaining_groups.sort(key=dist_from_last)
-                next_key, next_group = remaining_groups.pop(0)
-                
-                # เรียงสมาชิกในกลุ่มตาม nearest neighbor จากจุดสุดท้าย
-                ordered_group = build_route_nearest_neighbor_from_point(next_group, last_lat, last_lon)
-                result.extend(ordered_group)
+        # 🔥 รวมผลลัพธ์ตามลำดับภาค (ไกล→ใกล้)
+        result = []
+        
+        # 1. ใต้ (ไกลสุด)
+        result.extend(sort_region_codes(region_groups['south']))
+        
+        # 2. เหนือ
+        result.extend(sort_region_codes(region_groups['north']))
+        
+        # 3. อีสาน/ตะวันออก/ตะวันตก
+        result.extend(sort_region_codes(region_groups['far']))
+        
+        # 4. กทม/ปริมณฑล (ใกล้สุด)
+        result.extend(sort_region_codes(region_groups['nearby']))
+        
+        # 5. ไม่ทราบ
+        result.extend(sort_region_codes(region_groups['unknown']))
         
         return result
     
@@ -4514,24 +4479,16 @@ def predict_trips(test_df, model_data):
                 else:
                     recommended = 'JB'  # กำหนดไว้ก่อน จะแยกภายหลัง
                     region_changes['nearby_6w_to_jb'] += 1
-            # 🚛 ภาคเหนือทั้งหมด → บังคับใช้ 6W เท่านั้น (ถ้าได้ ≥18 cube)
+            # 🚛 ภาคเหนือทั้งหมด → บังคับใช้ 6W เท่านั้น (ไม่ว่า cube จะเท่าไหร่)
             elif has_north:
-                if total_c >= 18.0:
-                    recommended = '6W'
-                    region_changes['far_keep_6w'] += 1
-                else:
-                    # เหนือแต่ไม่ถึง 18 cube → แยกเป็น JB
-                    recommended = 'JB'
-                    region_changes['other'] += 1
-            # 🚛 ภาคใต้ทั้งหมด → บังคับใช้ 6W เท่านั้น (ถ้าได้ ≥18 cube)
+                # 🔥 เหนือ = 6W เท่านั้น! เก็บเศษรอรวมกับทริปอื่น
+                recommended = '6W'
+                region_changes['far_keep_6w'] += 1
+            # 🚛 ภาคใต้ทั้งหมด → บังคับใช้ 6W เท่านั้น (ไม่ว่า cube จะเท่าไหร่)
             elif has_south:
-                if total_c >= 18.0:
-                    recommended = '6W'
-                    region_changes['far_keep_6w'] += 1
-                else:
-                    # ใต้แต่ไม่ถึง 18 cube → แยกเป็น JB
-                    recommended = 'JB'
-                    region_changes['other'] += 1
+                # 🔥 ใต้ = 6W เท่านั้น! เก็บเศษรอรวมกับทริปอื่น
+                recommended = '6W'
+                region_changes['far_keep_6w'] += 1
             else:
                 # 🎯 พื้นที่ไกล (far) - ยืดหยุ่น ใช้ JB ได้ถ้าเหมาะสม
                 # เป้าหมาย: 6W ต้องได้ขั้นต่ำ 18 cube (90%), ห้ามเกิน 20 cube
