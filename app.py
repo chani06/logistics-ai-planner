@@ -36,8 +36,8 @@ MODEL_PATH = 'models/decision_tree_model.pkl'
 # ขีดจำกัดรถแต่ละประเภท
 LIMITS = {
     '4W': {'max_w': 2500, 'max_c': 5.0},   # ไม่เกิน 12 จุด, Cube ≤ 5 (Punthai ล้วน)
-    'JB': {'max_w': 3500, 'max_c': 7.0},   # ไม่เกิน 12 จุด, Cube ≤ 7
-    '6W': {'max_w': 6000, 'max_c': 20.0}   # ไม่จำกัดจุด, Cube ต้องเต็ม, Weight ≤ 6000
+    'JB': {'max_w': 3500, 'max_c': 8.0},   # ไม่เกิน 12 จุด, Cube ≤ 8
+    '6W': {'max_w': 5500, 'max_c': 20.0}   # ไม่จำกัดจุด, Cube ต้องเต็ม, Weight ≤ 5500
 }
 
 # 🔒 ขีดจำกัด 4W ตาม BU (Punthai ล้วน vs ผสม)
@@ -52,8 +52,8 @@ LIMITS_4W_MIXED = 4.0          # ผสม BU
 # - ถ้าผสม (Punthai + อื่น): ถ้า Cube 3-4 → ใช้ 4W ได้, ถ้าเกิน → JB
 PUNTHAI_LIMITS = {
     '4W': {'max_w': 2500, 'max_c': 5.0, 'max_drops': 12},  # Punthai ล้วน: ถ้าเกิน 5 cube → ใช้ JB
-    'JB': {'max_w': 3500, 'max_c': 7.0, 'max_drops': 7},   # Punthai ล้วน: ไม่เกิน 7 drop
-    '6W': {'max_w': 6000, 'max_c': 20.0, 'max_drops': 999}
+    'JB': {'max_w': 3500, 'max_c': 8.0, 'max_drops': 7},   # Punthai ล้วน: ไม่เกิน 7 drop, Cube ≤ 8
+    '6W': {'max_w': 5500, 'max_c': 20.0, 'max_drops': 999}
 }
 
 # 🚨 ห้ามเกิน 100% - ไม่มี Buffer
@@ -1832,9 +1832,17 @@ def predict_trips(test_df, model_data):
                                 suggested = 'JB'
                                 source = source + " → JB"
                                 w_util, c_util = jb_w_util, jb_c_util
+                            else:
+                                # JB ก็ยังเกิน → ให้เตือน
+                                suggested = 'JB'
+                                source = source + " → JB (🚫 เกินแต่ห้าม 6W)"
+                                w_util, c_util = jb_w_util, jb_c_util
                         # ถ้า JB ก็ยังเกิน ให้เตือนว่าเกิน ไม่ขยายเป็น 6W
                         elif suggested == 'JB':
-                            source = source + " (🚫 เกินขนาดแต่ห้ามใช้ 6W)"
+                            source = source + " (🚫 เกินขนาดแต่ห้ามใช้ 6W - ต้องแยกทริป)"
+                        elif suggested == '4W' and '4W' in allowed and 'JB' not in allowed:
+                            # สาขาจำกัด 4W เท่านั้น แต่เกิน → ต้องแยกทริป
+                            source = source + " (🚫 4W เกินขนาด - ต้องแยกทริป)"
                     else:
                         # ไม่มีข้อจำกัดสาขา สามารถขยายเป็น 6W ได้
                         if suggested == '4W' and 'JB' in LIMITS:
@@ -1868,6 +1876,9 @@ def predict_trips(test_df, model_data):
             # ปัญหา 1: เกิน 100%
             if max_util_check > 100:
                 trip_issues.append(f'⛔ เกิน {max_util_check:.0f}%')
+                # ถ้าเกินแล้วห้ามใช้รถใหญ่กว่า → ต้องแยกทริป
+                if min_max_size < 3:
+                    trip_issues.append('🔧 ต้องแยกทริป')
             
             # ปัญหา 2: ใช้รถผิดประเภท (6W ในเขตต้องห้าม)
             if suggested == '6W' and has_any_nearby_branch:
@@ -2002,8 +2013,27 @@ def predict_trips(test_df, model_data):
             if close_distance:
                 valid_reasons.append('📏 ใกล้')
             
+            # 🔴 เช็ค 5: จังหวัดต่างกันมาก? (ภาคเหนือ + ภาคใต้ = ไม่ควรรวม)
+            different_regions = False
+            my_province = code_data['Province'].iloc[0] if 'Province' in code_data.columns and len(code_data) > 0 else None
+            my_region = get_region_type(str(my_province)) if my_province and pd.notna(my_province) else None
+            
+            for other_code in trip_codes:
+                other_data = test_df_result[test_df_result['Code'] == other_code]
+                other_province = other_data['Province'].iloc[0] if 'Province' in other_data.columns and len(other_data) > 0 else None
+                other_region = get_region_type(str(other_province)) if other_province and pd.notna(other_province) else None
+                
+                # เช็คว่าภาคต่างกันมากไหม (north + south = ไม่ควรรวม)
+                if my_region and other_region:
+                    if (my_region == 'north' and other_region == 'south') or (my_region == 'south' and other_region == 'north'):
+                        different_regions = True
+                        issues.append(f'🚫 {my_province} + {other_province}')
+                        break
+            
             # สรุปผล
-            if valid_reasons:
+            if issues:
+                return '❌ ' + ', '.join(issues)
+            elif valid_reasons:
                 return '✅ ' + ', '.join(valid_reasons)
             else:
                 return '⚠️ ไม่พบเหตุผลจับคู่'
