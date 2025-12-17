@@ -567,19 +567,20 @@ def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None, p
     1. ใส่ของได้พอดี (ไม่เกินขีดจำกัด 105%)
     2. ใช้งานได้ใกล้ 100% มากที่สุด (เป้าหมาย: 90-100%)
     3. เคารพข้อจำกัดของสาขา (ถ้าสาขาใช้แค่ 4W = ต้องใช้ 4W เท่านั้น)
-    4. 🆕 พื้นที่ใกล้ DC (กทม/ปริมณฑล/ภาคกลาง) → ใช้ JB ก่อน 4W
+    4. 🆕 พื้นที่ใกล้ DC → ใช้รถเล็กก่อน (4W → JB → 6W)
     """
     vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
     max_size = vehicle_sizes.get(max_allowed, 3)
     
     # ตรวจสอบข้อจำกัดของสาขาทั้งหมดในกลุ่ม
-    branch_max_vehicle = '4W'  # 🔒 เริ่มต้นที่ 4W (เล็กสุด) แล้วขยายเมื่อจำเป็น
+    branch_max_vehicle = '6W'  # เริ่มจากใหญ่สุด
     is_nearby_area = False  # เช็คว่าเป็นพื้นที่ใกล้ DC หรือไม่
+    avg_distance_from_dc = 0  # 🆕 ระยะเฉลี่ยจาก DC
     
     if trip_codes is not None and len(trip_codes) > 0:
         for code in trip_codes:
             branch_max = get_max_vehicle_for_branch(code)
-            # หารถที่เล็กที่สุดที่ต้องใช้
+            # หารถที่เล็กที่สุดที่อนุญาต
             if vehicle_sizes.get(branch_max, 3) < vehicle_sizes.get(branch_max_vehicle, 3):
                 branch_max_vehicle = branch_max
         
@@ -588,7 +589,9 @@ def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None, p
             max_allowed = branch_max_vehicle
             max_size = vehicle_sizes.get(max_allowed, 3)
         
-        # 🆕 เช็คว่าเป็นพื้นที่ใกล้ DC หรือไม่
+        # 🆕 คำนวณระยะเฉลี่ยจาก DC และเช็คพื้นที่
+        total_dist = 0
+        dist_count = 0
         if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
             for code in trip_codes:
                 master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
@@ -596,13 +599,23 @@ def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None, p
                     prov = master_row.iloc[0].get('จังหวัด', '')
                     if pd.notna(prov) and get_region_type(prov) == 'nearby':
                         is_nearby_area = True
-                        break
+                    
+                    # คำนวณระยะจาก DC
+                    lat = master_row.iloc[0].get('ละติจูด', None)
+                    lon = master_row.iloc[0].get('ลองติจูด', None)
+                    if lat and lon and pd.notna(lat) and pd.notna(lon):
+                        dist = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, float(lat), float(lon))
+                        total_dist += dist
+                        dist_count += 1
+        
+        if dist_count > 0:
+            avg_distance_from_dc = total_dist / dist_count
     
-    # 🆕 พื้นที่ใกล้ DC หรือ prefer_jb_for_nearby=True → ลำดับ JB ก่อน 4W
-    if is_nearby_area or prefer_jb_for_nearby:
-        truck_order = ['JB', '4W', '6W']  # JB ก่อน 4W
+    # 🆕 พื้นที่ใกล้ DC (nearby หรือ ระยะ < 100km) → ใช้รถเล็กก่อน (4W → JB)
+    if is_nearby_area or avg_distance_from_dc < 100:
+        truck_order = ['4W', 'JB', '6W']  # รถเล็กก่อน
     else:
-        truck_order = ['4W', 'JB', '6W']  # ปกติ 4W ก่อน
+        truck_order = ['4W', 'JB', '6W']  # ปกติก็ใช้รถเล็กก่อน
     
     best_truck = None
     best_utilization = 0
@@ -4977,7 +4990,7 @@ def predict_trips(test_df, model_data):
                     test_df.loc[test_df['Code'] == farthest_code, 'Trip'] = best_new_trip
                     distance_swaps += 1
     
-    # 🗺️ เรียงลำดับสาขาตาม Nearest Neighbor (ทุกทริป - เรียงจากใกล้สุดไปใกล้สุด)
+    # 🗺️ เรียงลำดับสาขา: ไกลสุดจาก DC ก่อน → ใกล้สุด (เพื่อให้รถวิ่งกลับมา DC)
     # ⚡ Skip ถ้าใช้เวลาเกิน 28 วินาที
     if time.time() - start_time <= 28:
         for trip_num in test_df['Trip'].unique():
@@ -4985,35 +4998,22 @@ def predict_trips(test_df, model_data):
                 continue
             
             trip_codes = list(test_df[test_df['Trip'] == trip_num]['Code'].values)
-            if len(trip_codes) < 2:  # 🆕 ทำทุกทริปที่มี 2+ สาขา
+            if len(trip_codes) < 2:  # ทำทุกทริปที่มี 2+ สาขา
                 continue
             
-            # เรียงตาม Nearest Neighbor แบบเร็ว (ใช้ cache) - เริ่มจาก DC
-            ordered = []
-            remaining = trip_codes.copy()
-            current_lat, current_lon = DC_WANG_NOI_LAT, DC_WANG_NOI_LON
-            
-            while remaining and len(ordered) < len(trip_codes):
-                nearest = None
-                min_dist = float('inf')
-                
-                for code in remaining:
-                    lat, lon = coord_cache.get(code, (None, None))
-                    if lat:
-                        dist = haversine_distance(current_lat, current_lon, lat, lon)
-                        if dist < min_dist:
-                            min_dist = dist
-                            nearest = code
-                
-                if nearest:
-                    ordered.append(nearest)
-                    remaining.remove(nearest)
-                    lat, lon = coord_cache.get(nearest, (None, None))
-                    if lat:
-                        current_lat, current_lon = lat, lon
+            # 🆕 เรียงจากไกลสุดมาใกล้สุด: หาระยะทางจาก DC แล้ว sort
+            distances_from_dc = []
+            for code in trip_codes:
+                lat, lon = coord_cache.get(code, (None, None))
+                if lat and lon:
+                    dist = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
+                    distances_from_dc.append((code, dist))
                 else:
-                    ordered.extend(remaining)
-                    break
+                    distances_from_dc.append((code, 0))
+            
+            # เรียงจากไกลสุด (dist มากสุด) มาใกล้สุด (dist น้อยสุด)
+            distances_from_dc.sort(key=lambda x: x[1], reverse=True)
+            ordered = [x[0] for x in distances_from_dc]
             
             # อัปเดต Sequence
             for seq, code in enumerate(ordered, start=1):
