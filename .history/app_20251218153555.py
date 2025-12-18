@@ -8743,7 +8743,7 @@ def main():
                         # ดาวน์โหลด - เขียนทับชีต 2.Punthai ในไฟล์ต้นฉบับ พร้อมสลับสีเหลืองโทนส้ม-ขาว
                         output = io.BytesIO()
                         
-                        # 🆕 โหลด location_map พร้อมพิกัดจากไฟล์ สถานที่ส่ง.xlsx ก่อน
+                        # 🆕 สร้าง mapping สำหรับ ตำบล, อำเภอ, จังหวัด, Route จากไฟล์ สถานที่ส่ง.xlsx (โหลดก่อนคำนวณระยะทาง)
                         location_map = {}
                         try:
                             df_location = pd.read_excel('Dc/สถานที่ส่ง.xlsx')
@@ -8759,15 +8759,27 @@ def main():
                                         'lon': loc_row.get('ลองติจูด', 0)
                                     }
                         except Exception:
-                            pass
+                            # Fallback to MASTER_DATA
+                            if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                                for _, master_row in MASTER_DATA.iterrows():
+                                    code = str(master_row.get('Plan Code', '')).strip().upper()
+                                    if code:
+                                        location_map[code] = {
+                                            'ตำบล': master_row.get('ตำบล', ''),
+                                            'อำเภอ': master_row.get('อำเภอ', ''),
+                                            'จังหวัด': master_row.get('จังหวัด', ''),
+                                            'Route': '',
+                                            'lat': master_row.get('ละติจูด', 0),
+                                            'lon': master_row.get('ลองติจูด', 0)
+                                        }
                         
                         # 🆕 คำนวณระยะทางไกลสุดของแต่ละทริป และเรียงจากไกลมาใกล้
                         def get_trip_max_distance(trip_num, df):
-                            """คำนวณระยะทางไกลสุดของสาขาในทริป"""
+                            """คำนวณระยะทางไกลสุดของสาขาในทริป - ดึงพิกัดจาก location_map"""
                             trip_data = df[df['Trip'] == trip_num]
                             max_dist = 0
                             for _, row in trip_data.iterrows():
-                                branch_code = str(row.get('Code', '')).upper()
+                                branch_code = str(row.get('Code', '')).strip().upper()
                                 loc = location_map.get(branch_code, {})
                                 lat = loc.get('lat', 0) or row.get('Latitude', row.get('lat', 0))
                                 lon = loc.get('lon', 0) or row.get('Longitude', row.get('lon', 0))
@@ -8814,6 +8826,32 @@ def main():
                         from openpyxl import load_workbook
                         from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
                         from copy import copy
+                        
+                        # 🆕 สร้าง mapping สำหรับ ตำบล, อำเภอ, จังหวัด, Route จากไฟล์ สถานที่ส่ง.xlsx
+                        location_map = {}
+                        try:
+                            df_location = pd.read_excel('Dc/สถานที่ส่ง.xlsx')
+                            for _, loc_row in df_location.iterrows():
+                                code = str(loc_row.get('Plan Code', '')).strip().upper()
+                                if code and code != 'NAN':
+                                    location_map[code] = {
+                                        'ตำบล': loc_row.get('ตำบล', ''),
+                                        'อำเภอ': loc_row.get('อำเภอ', ''),
+                                        'จังหวัด': loc_row.get('จังหวัด', ''),
+                                        'Route': loc_row.get('Reference', '')  # 🆕 ใช้คอลัมน์ Reference เป็น Route
+                                    }
+                        except Exception:
+                            # Fallback to MASTER_DATA
+                            if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                                for _, master_row in MASTER_DATA.iterrows():
+                                    code = master_row.get('Plan Code', '')
+                                    if code:
+                                        location_map[code] = {
+                                            'ตำบล': master_row.get('ตำบล', ''),
+                                            'อำเภอ': master_row.get('อำเภอ', ''),
+                                            'จังหวัด': master_row.get('จังหวัด', ''),
+                                            'Route': ''
+                                        }
                         
                         try:
                             # โหลด workbook ต้นฉบับ จาก session_state

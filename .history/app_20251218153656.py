@@ -8815,6 +8815,32 @@ def main():
                         from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
                         from copy import copy
                         
+                        # 🆕 สร้าง mapping สำหรับ ตำบล, อำเภอ, จังหวัด, Route จากไฟล์ สถานที่ส่ง.xlsx
+                        location_map = {}
+                        try:
+                            df_location = pd.read_excel('Dc/สถานที่ส่ง.xlsx')
+                            for _, loc_row in df_location.iterrows():
+                                code = str(loc_row.get('Plan Code', '')).strip().upper()
+                                if code and code != 'NAN':
+                                    location_map[code] = {
+                                        'ตำบล': loc_row.get('ตำบล', ''),
+                                        'อำเภอ': loc_row.get('อำเภอ', ''),
+                                        'จังหวัด': loc_row.get('จังหวัด', ''),
+                                        'Route': loc_row.get('Reference', '')  # 🆕 ใช้คอลัมน์ Reference เป็น Route
+                                    }
+                        except Exception:
+                            # Fallback to MASTER_DATA
+                            if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                                for _, master_row in MASTER_DATA.iterrows():
+                                    code = master_row.get('Plan Code', '')
+                                    if code:
+                                        location_map[code] = {
+                                            'ตำบล': master_row.get('ตำบล', ''),
+                                            'อำเภอ': master_row.get('อำเภอ', ''),
+                                            'จังหวัด': master_row.get('จังหวัด', ''),
+                                            'Route': ''
+                                        }
+                        
                         try:
                             # โหลด workbook ต้นฉบับ จาก session_state
                             wb = load_workbook(io.BytesIO(st.session_state.original_file_content))
