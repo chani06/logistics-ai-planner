@@ -8887,13 +8887,13 @@ def main():
                                         row.get('OriginalQty', 0) if pd.notna(row.get('OriginalQty')) else 0,  # K: Original QTY (จากต้นฉบับ)
                                         int(trip_num),  # L: Trip
                                         trip_no,  # M: Trip no
-                                        '',  # N: วันที่โหลด
-                                        '',  # O: เวลาโหลด
-                                        '',  # P: ประตู
-                                        '',  # Q: WAVE
-                                        '',  # R: remark
-                                        '',  # S: lat (เว้นว่าง)
-                                        '',  # T: lon (เว้นว่าง)
+                                        '',  # K: วันที่โหลด
+                                        '',  # L: เวลาโหลด
+                                        '',  # M: ประตู
+                                        '',  # N: WAVE
+                                        '',  # O: remark
+                                        '',  # P: lat (เว้นว่าง)
+                                        '',  # Q: lon (เว้นว่าง)
                                     ]
                                     
                                     for col_idx, value in enumerate(data, 1):
