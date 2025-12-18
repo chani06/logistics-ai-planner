@@ -1304,13 +1304,14 @@ def get_region_type(province):
         if nearby in prov:
             return 'nearby'
     
-    # 🚛 ภาคเหนือทั้งหมด (18 จังหวัด) → บังคับใช้ 6W
+    # 🚛 ภาคเหนือทั้งหมด (17 จังหวัด) → บังคับใช้ 6W
+    # 🔥 ย้าย ชัยภูมิ ไป far (อีสาน) เพราะอยู่ในกลุ่มอีสานกลาง
     north_provinces = [
         # เหนือตอนบน
         'เชียงใหม่', 'เชียงราย', 'แม่ฮ่องสอน', 'น่าน', 'พะเยา', 'ลำปาง', 'ลำพูน', 'แพร่',
         # เหนือตอนล่าง
         'กำแพงเพชร', 'ตาก', 'นครสวรรค์', 'พิจิตร', 'พิษณุโลก', 'สุโขทัย', 
-        'อุตรดิตถ์', 'อุทัยธานี', 'เพชรบูรณ์', 'ชัยภูมิ'
+        'อุตรดิตถ์', 'อุทัยธานี', 'เพชรบูรณ์'
     ]
     
     for north in north_provinces:
@@ -7442,35 +7443,52 @@ def predict_trips(test_df, model_data):
     test_df['BranchCount'] = test_df.apply(check_branch_count, axis=1)
     
     # ===============================================
-    # 🎯 Renumber trips: เรียงจากไกลมาใกล้ (ทริป 1 = ไกลสุด)
+    # 🎯 Renumber trips: เรียงตามภูมิภาค → ระยะทาง (ทริป 1 = ไกลสุด)
+    # ลำดับภาค: ใต้ → เหนือ → อีสาน/ตะวันออก/ตะวันตก → ปริมณฑล/กทม
     # ===============================================
     
-    # คำนวณระยะทาง centroid ของแต่ละทริปจาก DC
-    trip_distances = {}
+    # คำนวณ region และ ระยะทาง centroid ของแต่ละทริปจาก DC
+    trip_info = {}  # {trip_num: (region_order, distance)}
+    region_order_map = {'south': 0, 'north': 1, 'far': 2, 'nearby': 3, 'unknown': 4}
     
     # หาชื่อคอลัมน์ Lat/Lon ที่ถูกต้อง
     lat_col = 'Lat' if 'Lat' in test_df.columns else ('Latitude' if 'Latitude' in test_df.columns else None)
     lon_col = 'Lon' if 'Lon' in test_df.columns else ('Longitude' if 'Longitude' in test_df.columns else None)
     
-    if lat_col and lon_col:
-        for trip_num in test_df['Trip'].dropna().unique():
-            trip_data = test_df[test_df['Trip'] == trip_num]
+    for trip_num in test_df['Trip'].dropna().unique():
+        trip_data = test_df[test_df['Trip'] == trip_num]
+        
+        # หา region หลักของทริป (ใช้จังหวัดที่พบบ่อยที่สุด)
+        if 'Province' in trip_data.columns:
+            provinces = trip_data['Province'].dropna().tolist()
+            if provinces:
+                # หา region ของแต่ละจังหวัด
+                regions = [get_region_type(p) for p in provinces]
+                main_region = max(set(regions), key=regions.count) if regions else 'unknown'
+            else:
+                main_region = 'unknown'
+        else:
+            main_region = 'unknown'
+        
+        region_order = region_order_map.get(main_region, 4)
+        
+        # คำนวณระยะทาง
+        if lat_col and lon_col:
             lats = trip_data[lat_col].dropna().values
             lons = trip_data[lon_col].dropna().values
             if len(lats) > 0 and len(lons) > 0:
                 avg_lat = np.mean(lats)
                 avg_lon = np.mean(lons)
                 dist = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, avg_lat, avg_lon)
-                trip_distances[trip_num] = dist
             else:
-                trip_distances[trip_num] = 0
-    else:
-        # ไม่มีคอลัมน์พิกัด → ใช้ลำดับเดิม
-        for trip_num in test_df['Trip'].dropna().unique():
-            trip_distances[trip_num] = 0
+                dist = 0
+        else:
+            dist = 0
+        
+        trip_info[trip_num] = (region_order, -dist)  # -dist เพราะต้องการไกลก่อน
     
-    # เรียงทริปจากไกลมาใกล้ (ระยะทางมาก → ทริปหมายเลขน้อย)
-    sorted_trips = sorted(trip_distances.keys(), key=lambda x: -trip_distances[x])
+    # เรียงทริปตาม: ภูมิภาค → ระยะทาง (ไกลก่อน)
+    sorted_trips = sorted(trip_info.keys(), key=lambda x: trip_info[x])
     trip_renumber_map = {old: new for new, old in enumerate(sorted_trips, start=1)}
     test_df['Trip'] = test_df['Trip'].map(trip_renumber_map)
     
