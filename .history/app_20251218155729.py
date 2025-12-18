@@ -9090,8 +9090,7 @@ def main():
                                 for _, row in trip_data.iterrows():
                                     original_qty = row.get('OriginalQty', 0) if pd.notna(row.get('OriginalQty')) else 0
                                     branch_code = row.get('Code', '')
-                                    branch_code_upper = str(branch_code).strip().upper()
-                                    loc = location_map.get(branch_code_upper, {})
+                                    loc = location_map.get(branch_code, {}) or location_map.get(str(branch_code).upper(), {})
                                     data = [sep_num, row.get('BU', 211), branch_code, branch_code, row.get('Name', ''),
                                             loc.get('ตำบล', ''), loc.get('อำเภอ', ''), loc.get('จังหวัด', ''), loc.get('Route', ''),
                                             round(row.get('Cube', 0), 2), round(row.get('Weight', 0), 2), original_qty, int(trip_num), trip_no]
