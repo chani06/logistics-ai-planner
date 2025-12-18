@@ -5387,6 +5387,81 @@ def predict_trips(test_df, model_data):
             
             region_split_count += 1
     
+    # 🚨 Phase 1.77: แยกสาขาที่อยู่คนละ Logistics Zone (Highway-Based)
+    zone_split_count = 0
+    
+    for trip_num in sorted(test_df['Trip'].unique()):
+        if trip_num == 0:
+            continue
+        
+        trip_data = test_df[test_df['Trip'] == trip_num]
+        trip_codes = list(trip_data['Code'].values)
+        
+        if len(trip_codes) < 2:
+            continue
+        
+        # แยกสาขาตาม Logistics Zone
+        zone_codes = {}  # {zone: [codes]}
+        code_provinces = {}  # {code: province}
+        
+        for code in trip_codes:
+            prov = get_province(code)
+            if prov:
+                code_provinces[code] = prov
+                zone = get_logistics_zone(prov, None)  # ใช้ global function
+                if zone:
+                    if zone not in zone_codes:
+                        zone_codes[zone] = []
+                    zone_codes[zone].append(code)
+                else:
+                    if 'other' not in zone_codes:
+                        zone_codes['other'] = []
+                    zone_codes['other'].append(code)
+        
+        # 🚫 ตรวจ No Cross-Zone violations (ห้ามข้ามเขา)
+        provinces_in_trip = list(set(code_provinces.values()))
+        cross_zone_violation = False
+        for i, prov1 in enumerate(provinces_in_trip):
+            for prov2 in provinces_in_trip[i+1:]:
+                if is_cross_zone_violation(prov1, prov2):
+                    cross_zone_violation = True
+                    break
+            if cross_zone_violation:
+                break
+        
+        # 🚨 ถ้ามี cross-zone violation หรือ zone ที่รวมไม่ได้ → ต้องแยก
+        if len(zone_codes) > 1 or cross_zone_violation:
+            # รวมโค้ดจาก zone ที่ merge ได้เข้าด้วยกัน
+            merged_groups = []
+            processed_zones = set()
+            
+            for zone1 in zone_codes.keys():
+                if zone1 in processed_zones:
+                    continue
+                
+                group = list(zone_codes[zone1])
+                processed_zones.add(zone1)
+                
+                if not cross_zone_violation:
+                    for zone2 in zone_codes.keys():
+                        if zone2 != zone1 and zone2 not in processed_zones:
+                            if can_combine_zones_by_highway(zone1, zone2):
+                                group.extend(zone_codes[zone2])
+                                processed_zones.add(zone2)
+                
+                merged_groups.append(group)
+            
+            # ถ้ามีหลายกลุ่มที่รวมไม่ได้ → แยกออก
+            if len(merged_groups) > 1:
+                sorted_groups = sorted(merged_groups, key=len, reverse=True)
+                
+                for codes in sorted_groups[1:]:
+                    new_trip = test_df['Trip'].max() + 1
+                    for code in codes:
+                        test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip
+                
+                zone_split_count += 1
+    
     # 🚨 Phase 1.78: แยกสาขาที่ห่างกันเกิน 30km (ป้องกันทริปกระโดด เช่น วังน้อย+กทม)
     distance_split_count = 0
     MAX_TRIP_DISTANCE_KM = 30  # ระยะห่างสูงสุดระหว่างสาขาในทริปเดียวกัน
