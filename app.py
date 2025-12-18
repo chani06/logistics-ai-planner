@@ -7212,27 +7212,13 @@ def predict_trips(test_df, model_data):
         
         max_allowed_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(min_max_size, '6W')
         
-        # เลือกรถ: เช็คข้อจำกัดสาขาก่อน แล้วค่อยใช้ประวัติ/AI
-        if trip_num in trip_recommended_vehicles:
-            # มีประวัติ
-            suggested_from_history = trip_recommended_vehicles[trip_num]
-            
-            # เช็คว่ารถจากประวัติขัดกับข้อจำกัดสาขาหรือไม่
-            if vehicle_sizes.get(suggested_from_history, 0) > min_max_size:
-                # ถ้าขัด - ต้องลดลงตามข้อจำกัดสาขา
-                suggested = max_allowed_vehicle
-                source = f"📜 ประวัติ → {max_allowed_vehicle} (จำกัดสาขา)"
-            else:
-                # ไม่ขัด - ใช้ตามประวัติ
-                suggested = suggested_from_history
-                source = "📜 ประวัติ"
+        # 🆕 เลือกรถ: ใช้ Auto Plan (ข้อจำกัดสาขา) + AI เท่านั้น (ไม่ใช้ประวัติ)
+        # ประวัติอาจผิดพลาด - Auto Plan เป็นค่าจริงจากไฟล์ info sheet
+        suggested = suggest_truck(total_w, total_c, max_allowed_vehicle, trip_codes)
+        if min_max_size < 3:
+            source = f"🤖 AI (จำกัด {max_allowed_vehicle} ตาม AutoPlan)"
         else:
-            # ไม่มีประวัติ - ใช้ AI พร้อมเคารพข้อจำกัดสาขา
-            suggested = suggest_truck(total_w, total_c, max_allowed_vehicle, trip_codes)
-            if min_max_size < 3:
-                source = f"🤖 AI (จำกัด {max_allowed_vehicle})"
-            else:
-                source = "🤖 AI"
+            source = "🤖 AI"
         
         # 🔒 เช็คว่าเป็นพื้นที่ nearby (กรุงเทพ+ปริมณฑล) หรือไม่ → ห้าม 6W เด็ดขาด!
         provinces = set()
