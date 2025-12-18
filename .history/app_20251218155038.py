@@ -9067,18 +9067,7 @@ def main():
                             for trip_num in sorted_trips:
                                 if trip_num == 0:
                                     continue
-                                trip_data = result_df[result_df['Trip'] == trip_num].copy()
-                                
-                                # 🆕 เพิ่มคอลัมน์จังหวัดจาก location_map เพื่อใช้ sort
-                                trip_data['_province'] = trip_data['Code'].apply(
-                                    lambda c: location_map.get(str(c).upper(), {}).get('จังหวัด', '')
-                                )
-                                trip_data['_district'] = trip_data['Code'].apply(
-                                    lambda c: location_map.get(str(c).upper(), {}).get('อำเภอ', '')
-                                )
-                                # 🆕 Sort สาขาภายในทริปตามจังหวัด → อำเภอ
-                                trip_data = trip_data.sort_values(['_province', '_district', 'Code'], ascending=[True, True, True])
-                                
+                                trip_data = result_df[result_df['Trip'] == trip_num]
                                 trip_no = trip_no_map.get(trip_num, '')
                                 
                                 if current_trip != trip_num:
