@@ -8747,14 +8747,7 @@ def main():
                         location_map = {}
                         try:
                             import os
-                            # ใช้ absolute path จาก directory ของไฟล์ app.py
-                            app_dir = os.path.dirname(os.path.abspath(__file__))
-                            location_file = os.path.join(app_dir, 'Dc', 'สถานที่ส่ง.xlsx')
-                            
-                            # Fallback ถ้าใช้ relative path
-                            if not os.path.exists(location_file):
-                                location_file = 'Dc/สถานที่ส่ง.xlsx'
-                            
+                            location_file = 'Dc/สถานที่ส่ง.xlsx'
                             if os.path.exists(location_file):
                                 df_location = pd.read_excel(location_file)
                                 for _, loc_row in df_location.iterrows():
@@ -8768,8 +8761,9 @@ def main():
                                             'lat': loc_row.get('ละติจูด', 0),
                                             'lon': loc_row.get('ลองติจูด', 0)
                                         }
+                                st.info(f"📍 โหลดข้อมูลสถานที่ส่ง {len(location_map)} สาขา")
                             else:
-                                st.warning(f"⚠️ ไม่พบไฟล์สถานที่ส่ง (ลอง: {location_file})")
+                                st.warning(f"⚠️ ไม่พบไฟล์ {location_file}")
                         except Exception as e:
                             st.warning(f"⚠️ ไม่สามารถโหลดไฟล์สถานที่ส่ง: {e}")
                         
@@ -8809,59 +8803,20 @@ def main():
                                 return max(province_counts.keys(), key=lambda p: province_counts[p])
                             return ''
                         
-                        # 🆕 ดึงอำเภอหลักของแต่ละทริป
-                        def get_trip_main_district(trip_num, df):
-                            """ดึงอำเภอหลักของทริป"""
-                            trip_data = df[df['Trip'] == trip_num]
-                            district_counts = {}
-                            for _, row in trip_data.iterrows():
-                                branch_code = str(row.get('Code', '')).upper()
-                                loc = location_map.get(branch_code, {})
-                                district = loc.get('อำเภอ', '')
-                                if district:
-                                    district_counts[district] = district_counts.get(district, 0) + 1
-                            if district_counts:
-                                return max(district_counts.keys(), key=lambda d: district_counts[d])
-                            return ''
-                        
-                        # 🆕 ดึง Route หลักของแต่ละทริป
-                        def get_trip_main_route(trip_num, df):
-                            """ดึง Route หลักของทริป"""
-                            trip_data = df[df['Trip'] == trip_num]
-                            route_counts = {}
-                            for _, row in trip_data.iterrows():
-                                branch_code = str(row.get('Code', '')).upper()
-                                loc = location_map.get(branch_code, {})
-                                route = loc.get('Route', '')
-                                if route:
-                                    route_counts[route] = route_counts.get(route, 0) + 1
-                            if route_counts:
-                                return max(route_counts.keys(), key=lambda r: route_counts[r])
-                            return ''
-                        
-                        # เรียงทริปตาม จังหวัด → อำเภอ → Route → ระยะทาง (ไกลมาใกล้)
+                        # เรียงทริปตามจังหวัดและระยะทาง (ไกลมาใกล้)
                         trip_distances = {}
                         trip_provinces = {}
-                        trip_districts = {}
-                        trip_routes = {}
                         for trip_num in result_df['Trip'].unique():
                             if trip_num == 0:
                                 continue
                             trip_distances[trip_num] = get_trip_max_distance(trip_num, result_df)
                             trip_provinces[trip_num] = get_trip_main_province(trip_num, result_df)
-                            trip_districts[trip_num] = get_trip_main_district(trip_num, result_df)
-                            trip_routes[trip_num] = get_trip_main_route(trip_num, result_df)
                         
-                        # 🆕 เรียงลำดับทริป: จังหวัด → อำเภอ → Route → ระยะทาง (ไกลมาใกล้)
+                        # 🆕 เรียงลำดับทริป: จังหวัด (ตามตัวอักษร) → ระยะทาง (ไกลมาใกล้)
                         sorted_trips = sorted(trip_distances.keys(), 
-                                             key=lambda t: (
-                                                 trip_provinces.get(t, ''),
-                                                 trip_districts.get(t, ''),
-                                                 trip_routes.get(t, ''),
-                                                 -trip_distances.get(t, 0)
-                                             ))
+                                             key=lambda t: (trip_provinces.get(t, ''), -trip_distances.get(t, 0)))
                         
-                        # สร้าง Trip_No map (เรียงตาม จังหวัด → อำเภอ → Route → ระยะทาง)
+                        # สร้าง Trip_No map (เรียงตามจังหวัด → ระยะทาง)
                         trip_no_map = {}
                         vehicle_counts = {'4W': 0, '4WJ': 0, '6W': 0}
                         
