@@ -9323,31 +9323,9 @@ def main():
                     
                     # ดาวน์โหลด
                     st.markdown("---")
-                    
-                    # 🆕 Sort ตามจังหวัด → อำเภอ → ตำบล เพื่อให้สาขาที่อยู่ใกล้กันไปด้วยกัน
-                    df_export = df_region.copy()
-                    df_export = df_export.sort_values(['จังหวัด', 'อำเภอ', 'ตำบล', 'Code'], 
-                                                       ascending=[True, True, True, True])
-                    
-                    # 🆕 เลือกคอลัมน์ที่ต้องการ export และจัดลำดับ
-                    export_cols = ['Code', 'Name', 'ตำบล', 'อำเภอ', 'จังหวัด', 'Region', 'Weight', 'Cube']
-                    # กรองเฉพาะคอลัมน์ที่มีอยู่
-                    export_cols = [c for c in export_cols if c in df_export.columns]
-                    df_export = df_export[export_cols].drop_duplicates('Code')
-                    
-                    # Rename columns for Thai display
-                    col_rename = {
-                        'Code': 'รหัสสาขา',
-                        'Name': 'ชื่อสาขา',
-                        'Region': 'ภาค',
-                        'Weight': 'น้ำหนัก',
-                        'Cube': 'คิว'
-                    }
-                    df_export = df_export.rename(columns=col_rename)
-                    
                     output_region = io.BytesIO()
                     with pd.ExcelWriter(output_region, engine='xlsxwriter') as writer:
-                        df_export.to_excel(writer, sheet_name='สาขาทั้งหมด', index=False)
+                        df_region.to_excel(writer, sheet_name='สาขาทั้งหมด', index=False)
                         region_summary.to_excel(writer, sheet_name='สรุปตามภาค', index=False)
                     
                     col1, col2, col3 = st.columns([1, 2, 1])

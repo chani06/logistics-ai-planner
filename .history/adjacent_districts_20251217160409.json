@@ -1,0 +1,254 @@
+{
+  "description": "ข้อมูลอำเภอที่ติดกันข้ามจังหวัด สำหรับการจัดกลุ่มทริป",
+  "version": "1.0",
+  "last_updated": "2024-12-17",
+  
+  "adjacent_districts": [
+    {
+      "comment": "=== นครราชสีมา ↔ สระบุรี (ทางผ่านหลัก มิตรภาพ) ===",
+      "pairs": [
+        {"district1": "สีคิ้ว", "province1": "นครราชสีมา", "district2": "มวกเหล็ก", "province2": "สระบุรี"},
+        {"district1": "สีคิ้ว", "province1": "นครราชสีมา", "district2": "แก่งคอย", "province2": "สระบุรี"},
+        {"district1": "สีคิ้ว", "province1": "นครราชสีมา", "district2": "วังม่วง", "province2": "สระบุรี"},
+        {"district1": "ปากช่อง", "province1": "นครราชสีมา", "district2": "มวกเหล็ก", "province2": "สระบุรี"},
+        {"district1": "ปากช่อง", "province1": "นครราชสีมา", "district2": "วังม่วง", "province2": "สระบุรี"}
+      ]
+    },
+    {
+      "comment": "=== นครราชสีมา ↔ ชัยภูมิ ===",
+      "pairs": [
+        {"district1": "ด่านขุนทด", "province1": "นครราชสีมา", "district2": "บำเหน็จณรงค์", "province2": "ชัยภูมิ"},
+        {"district1": "ด่านขุนทด", "province1": "นครราชสีมา", "district2": "เทพสถิต", "province2": "ชัยภูมิ"},
+        {"district1": "เทพารักษ์", "province1": "นครราชสีมา", "district2": "เทพสถิต", "province2": "ชัยภูมิ"},
+        {"district1": "ขามทะเลสอ", "province1": "นครราชสีมา", "district2": "จัตุรัส", "province2": "ชัยภูมิ"},
+        {"district1": "สูงเนิน", "province1": "นครราชสีมา", "district2": "ซับใหญ่", "province2": "ชัยภูมิ"}
+      ]
+    },
+    {
+      "comment": "=== นครราชสีมา ↔ บุรีรัมย์ ===",
+      "pairs": [
+        {"district1": "หนองบุญมาก", "province1": "นครราชสีมา", "district2": "หนองกี่", "province2": "บุรีรัมย์"},
+        {"district1": "หนองบุญมาก", "province1": "นครราชสีมา", "district2": "นางรอง", "province2": "บุรีรัมย์"},
+        {"district1": "โชคชัย", "province1": "นครราชสีมา", "district2": "หนองกี่", "province2": "บุรีรัมย์"},
+        {"district1": "ครบุรี", "province1": "นครราชสีมา", "district2": "ลำปลายมาศ", "province2": "บุรีรัมย์"},
+        {"district1": "เสิงสาง", "province1": "นครราชสีมา", "district2": "นางรอง", "province2": "บุรีรัมย์"}
+      ]
+    },
+    {
+      "comment": "=== นครราชสีมา ↔ ขอนแก่น ===",
+      "pairs": [
+        {"district1": "ด่านขุนทด", "province1": "นครราชสีมา", "district2": "สีชมพู", "province2": "ขอนแก่น"},
+        {"district1": "พระทองคำ", "province1": "นครราชสีมา", "district2": "หนองเรือ", "province2": "ขอนแก่น"}
+      ]
+    },
+    {
+      "comment": "=== นครราชสีมา ↔ ปราจีนบุรี ===",
+      "pairs": [
+        {"district1": "วังน้ำเขียว", "province1": "นครราชสีมา", "district2": "นาดี", "province2": "ปราจีนบุรี"},
+        {"district1": "ปักธงชัย", "province1": "นครราชสีมา", "district2": "นาดี", "province2": "ปราจีนบุรี"}
+      ]
+    },
+    {
+      "comment": "=== นครราชสีมา ↔ นครนายก ===",
+      "pairs": [
+        {"district1": "ปากช่อง", "province1": "นครราชสีมา", "district2": "บ้านนา", "province2": "นครนายก"}
+      ]
+    },
+    {
+      "comment": "=== สระบุรี ↔ ลพบุรี ===",
+      "pairs": [
+        {"district1": "พระพุทธบาท", "province1": "สระบุรี", "district2": "โคกสำโรง", "province2": "ลพบุรี"},
+        {"district1": "พระพุทธบาท", "province1": "สระบุรี", "district2": "เมืองลพบุรี", "province2": "ลพบุรี"},
+        {"district1": "เสาไห้", "province1": "สระบุรี", "district2": "บ้านหมี่", "province2": "ลพบุรี"},
+        {"district1": "หนองโดน", "province1": "สระบุรี", "district2": "โคกสำโรง", "province2": "ลพบุรี"}
+      ]
+    },
+    {
+      "comment": "=== สระบุรี ↔ นครนายก ===",
+      "pairs": [
+        {"district1": "แก่งคอย", "province1": "สระบุรี", "district2": "บ้านนา", "province2": "นครนายก"},
+        {"district1": "มวกเหล็ก", "province1": "สระบุรี", "district2": "บ้านนา", "province2": "นครนายก"}
+      ]
+    },
+    {
+      "comment": "=== สระบุรี ↔ พระนครศรีอยุธยา ===",
+      "pairs": [
+        {"district1": "หนองแค", "province1": "สระบุรี", "district2": "วังน้อย", "province2": "พระนครศรีอยุธยา"},
+        {"district1": "วิหารแดง", "province1": "สระบุรี", "district2": "วังน้อย", "province2": "พระนครศรีอยุธยา"},
+        {"district1": "หนองแซง", "province1": "สระบุรี", "district2": "ภาชี", "province2": "พระนครศรีอยุธยา"}
+      ]
+    },
+    {
+      "comment": "=== ลพบุรี ↔ ชัยภูมิ ===",
+      "pairs": [
+        {"district1": "ลำสนธิ", "province1": "ลพบุรี", "district2": "เทพสถิต", "province2": "ชัยภูมิ"}
+      ]
+    },
+    {
+      "comment": "=== ลพบุรี ↔ เพชรบูรณ์ ===",
+      "pairs": [
+        {"district1": "ชัยบาดาล", "province1": "ลพบุรี", "district2": "ศรีเทพ", "province2": "เพชรบูรณ์"},
+        {"district1": "ลำสนธิ", "province1": "ลพบุรี", "district2": "วิเชียรบุรี", "province2": "เพชรบูรณ์"}
+      ]
+    },
+    {
+      "comment": "=== ชัยภูมิ ↔ ขอนแก่น ===",
+      "pairs": [
+        {"district1": "ภูเขียว", "province1": "ชัยภูมิ", "district2": "ชุมแพ", "province2": "ขอนแก่น"},
+        {"district1": "คอนสาร", "province1": "ชัยภูมิ", "district2": "ชุมแพ", "province2": "ขอนแก่น"},
+        {"district1": "แก้งคร้อ", "province1": "ชัยภูมิ", "district2": "ภูผาม่าน", "province2": "ขอนแก่น"},
+        {"district1": "เมืองชัยภูมิ", "province1": "ชัยภูมิ", "district2": "หนองเรือ", "province2": "ขอนแก่น"}
+      ]
+    },
+    {
+      "comment": "=== ชัยภูมิ ↔ เพชรบูรณ์ ===",
+      "pairs": [
+        {"district1": "หนองบัวระเหว", "province1": "ชัยภูมิ", "district2": "หล่มสัก", "province2": "เพชรบูรณ์"},
+        {"district1": "เทพสถิต", "province1": "ชัยภูมิ", "district2": "น้ำหนาว", "province2": "เพชรบูรณ์"}
+      ]
+    },
+    {
+      "comment": "=== ชัยภูมิ ↔ นครราชสีมา ===",
+      "pairs": [
+        {"district1": "จัตุรัส", "province1": "ชัยภูมิ", "district2": "ขามทะเลสอ", "province2": "นครราชสีมา"},
+        {"district1": "ซับใหญ่", "province1": "ชัยภูมิ", "district2": "สูงเนิน", "province2": "นครราชสีมา"}
+      ]
+    },
+    {
+      "comment": "=== บุรีรัมย์ ↔ สุรินทร์ ===",
+      "pairs": [
+        {"district1": "ประโคนชัย", "province1": "บุรีรัมย์", "district2": "เมืองสุรินทร์", "province2": "สุรินทร์"},
+        {"district1": "พลับพลาชัย", "province1": "บุรีรัมย์", "district2": "ปราสาท", "province2": "สุรินทร์"},
+        {"district1": "กระสัง", "province1": "บุรีรัมย์", "district2": "รัตนบุรี", "province2": "สุรินทร์"}
+      ]
+    },
+    {
+      "comment": "=== บุรีรัมย์ ↔ ขอนแก่น ===",
+      "pairs": [
+        {"district1": "บ้านใหม่ไชยพจน์", "province1": "บุรีรัมย์", "district2": "พล", "province2": "ขอนแก่น"},
+        {"district1": "พุทไธสง", "province1": "บุรีรัมย์", "district2": "หนองสองห้อง", "province2": "ขอนแก่น"}
+      ]
+    },
+    {
+      "comment": "=== สุรินทร์ ↔ อุบลราชธานี ===",
+      "pairs": [
+        {"district1": "สังขะ", "province1": "สุรินทร์", "district2": "น้ำยืน", "province2": "อุบลราชธานี"},
+        {"district1": "บัวเชด", "province1": "สุรินทร์", "district2": "เดชอุดม", "province2": "อุบลราชธานี"}
+      ]
+    },
+    {
+      "comment": "=== สุรินทร์ ↔ ศรีสะเกษ ===",
+      "pairs": [
+        {"district1": "ปราสาท", "province1": "สุรินทร์", "district2": "ขุขันธ์", "province2": "ศรีสะเกษ"},
+        {"district1": "สังขะ", "province1": "สุรินทร์", "district2": "ขุนหาญ", "province2": "ศรีสะเกษ"}
+      ]
+    },
+    {
+      "comment": "=== ขอนแก่น ↔ มหาสารคาม ===",
+      "pairs": [
+        {"district1": "เมืองขอนแก่น", "province1": "ขอนแก่น", "district2": "เมืองมหาสารคาม", "province2": "มหาสารคาม"},
+        {"district1": "บ้านฝาง", "province1": "ขอนแก่น", "district2": "กันทรวิชัย", "province2": "มหาสารคาม"},
+        {"district1": "โนนศิลา", "province1": "ขอนแก่น", "district2": "เชียงยืน", "province2": "มหาสารคาม"}
+      ]
+    },
+    {
+      "comment": "=== ขอนแก่น ↔ อุดรธานี ===",
+      "pairs": [
+        {"district1": "น้ำพอง", "province1": "ขอนแก่น", "district2": "กุมภวาปี", "province2": "อุดรธานี"},
+        {"district1": "อุบลรัตน์", "province1": "ขอนแก่น", "district2": "หนองแสง", "province2": "อุดรธานี"}
+      ]
+    },
+    {
+      "comment": "=== ปราจีนบุรี ↔ สระแก้ว ===",
+      "pairs": [
+        {"district1": "กบินทร์บุรี", "province1": "ปราจีนบุรี", "district2": "เมืองสระแก้ว", "province2": "สระแก้ว"},
+        {"district1": "นาดี", "province1": "ปราจีนบุรี", "district2": "วัฒนานคร", "province2": "สระแก้ว"}
+      ]
+    },
+    {
+      "comment": "=== ปราจีนบุรี ↔ ฉะเชิงเทรา ===",
+      "pairs": [
+        {"district1": "เมืองปราจีนบุรี", "province1": "ปราจีนบุรี", "district2": "พนมสารคาม", "province2": "ฉะเชิงเทรา"},
+        {"district1": "บ้านสร้าง", "province1": "ปราจีนบุรี", "district2": "บางน้ำเปรี้ยว", "province2": "ฉะเชิงเทรา"}
+      ]
+    },
+    {
+      "comment": "=== ฉะเชิงเทรา ↔ ชลบุรี ===",
+      "pairs": [
+        {"district1": "พนมสารคาม", "province1": "ฉะเชิงเทรา", "district2": "พนัสนิคม", "province2": "ชลบุรี"},
+        {"district1": "แปลงยาว", "province1": "ฉะเชิงเทรา", "district2": "บ่อทอง", "province2": "ชลบุรี"}
+      ]
+    },
+    {
+      "comment": "=== ชลบุรี ↔ ระยอง ===",
+      "pairs": [
+        {"district1": "บ่อทอง", "province1": "ชลบุรี", "district2": "ปลวกแดง", "province2": "ระยอง"},
+        {"district1": "ศรีราชา", "province1": "ชลบุรี", "district2": "บ้านฉาง", "province2": "ระยอง"},
+        {"district1": "สัตหีบ", "province1": "ชลบุรี", "district2": "เมืองระยอง", "province2": "ระยอง"}
+      ]
+    },
+    {
+      "comment": "=== นครสวรรค์ ↔ พิจิตร ===",
+      "pairs": [
+        {"district1": "ท่าตะโก", "province1": "นครสวรรค์", "district2": "ตะพานหิน", "province2": "พิจิตร"},
+        {"district1": "ไพศาลี", "province1": "นครสวรรค์", "district2": "บึงนาราง", "province2": "พิจิตร"}
+      ]
+    },
+    {
+      "comment": "=== นครสวรรค์ ↔ กำแพงเพชร ===",
+      "pairs": [
+        {"district1": "ลาดยาว", "province1": "นครสวรรค์", "district2": "เมืองกำแพงเพชร", "province2": "กำแพงเพชร"},
+        {"district1": "แม่วงก์", "province1": "นครสวรรค์", "district2": "คลองลาน", "province2": "กำแพงเพชร"}
+      ]
+    },
+    {
+      "comment": "=== พิษณุโลก ↔ เพชรบูรณ์ ===",
+      "pairs": [
+        {"district1": "นครไทย", "province1": "พิษณุโลก", "district2": "หล่มสัก", "province2": "เพชรบูรณ์"},
+        {"district1": "ชาติตระการ", "province1": "พิษณุโลก", "district2": "น้ำหนาว", "province2": "เพชรบูรณ์"}
+      ]
+    },
+    {
+      "comment": "=== เพชรบูรณ์ ↔ เลย ===",
+      "pairs": [
+        {"district1": "น้ำหนาว", "province1": "เพชรบูรณ์", "district2": "ภูกระดึง", "province2": "เลย"},
+        {"district1": "หล่มเก่า", "province1": "เพชรบูรณ์", "district2": "ด่านซ้าย", "province2": "เลย"}
+      ]
+    },
+    {
+      "comment": "=== ประจวบคีรีขันธ์ ↔ ชุมพร ===",
+      "pairs": [
+        {"district1": "บางสะพานน้อย", "province1": "ประจวบคีรีขันธ์", "district2": "ปะทิว", "province2": "ชุมพร"},
+        {"district1": "บางสะพาน", "province1": "ประจวบคีรีขันธ์", "district2": "ปะทิว", "province2": "ชุมพร"}
+      ]
+    },
+    {
+      "comment": "=== ชุมพร ↔ ระนอง ===",
+      "pairs": [
+        {"district1": "พะโต๊ะ", "province1": "ชุมพร", "district2": "เมืองระนอง", "province2": "ระนอง"},
+        {"district1": "หลังสวน", "province1": "ชุมพร", "district2": "กระบุรี", "province2": "ระนอง"}
+      ]
+    },
+    {
+      "comment": "=== ชุมพร ↔ สุราษฎร์ธานี ===",
+      "pairs": [
+        {"district1": "หลังสวน", "province1": "ชุมพร", "district2": "ไชยา", "province2": "สุราษฎร์ธานี"},
+        {"district1": "ท่าแซะ", "province1": "ชุมพร", "district2": "ท่าฉาง", "province2": "สุราษฎร์ธานี"}
+      ]
+    },
+    {
+      "comment": "=== สุราษฎร์ธานี ↔ นครศรีธรรมราช ===",
+      "pairs": [
+        {"district1": "เมืองสุราษฎร์ธานี", "province1": "สุราษฎร์ธานี", "district2": "ขนอม", "province2": "นครศรีธรรมราช"},
+        {"district1": "เวียงสระ", "province1": "สุราษฎร์ธานี", "district2": "ฉวาง", "province2": "นครศรีธรรมราช"}
+      ]
+    },
+    {
+      "comment": "=== นครศรีธรรมราช ↔ สงขลา ===",
+      "pairs": [
+        {"district1": "หัวไทร", "province1": "นครศรีธรรมราช", "district2": "ระโนด", "province2": "สงขลา"},
+        {"district1": "ชะอวด", "province1": "นครศรีธรรมราช", "district2": "รัตภูมิ", "province2": "สงขลา"}
+      ]
+    }
+  ]
+}

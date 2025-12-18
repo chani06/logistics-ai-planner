@@ -2536,25 +2536,6 @@ def predict_trips(test_df, model_data):
             
             # 🚨 ตรวจว่ามี zone ที่ "รวมไม่ได้" หรือไม่
             if len(zone_codes) > 1:
-                # 🚫 ก่อนอื่น เช็ค No Cross-Zone violations (ห้ามข้ามเขา)
-                # หา province ของแต่ละ code
-                code_provinces = {}
-                for code in trip_codes:
-                    prov = get_province_from_df(df, code)
-                    if prov:
-                        code_provinces[code] = prov
-                
-                # เช็คว่ามี cross-zone violation หรือไม่
-                provinces_in_trip = list(set(code_provinces.values()))
-                cross_zone_violation = False
-                for i, prov1 in enumerate(provinces_in_trip):
-                    for prov2 in provinces_in_trip[i+1:]:
-                        if is_cross_zone_violation(prov1, prov2):
-                            cross_zone_violation = True
-                            break
-                    if cross_zone_violation:
-                        break
-                
                 # รวมโค้ดจาก zone ที่ merge ได้เข้าด้วยกัน
                 merged_groups = []
                 processed_zones = set()
@@ -2566,13 +2547,11 @@ def predict_trips(test_df, model_data):
                     group = list(zone_codes[zone1])
                     processed_zones.add(zone1)
                     
-                    # ถ้ามี cross-zone violation → ห้ามรวมเลย
-                    if not cross_zone_violation:
-                        for zone2 in zone_codes.keys():
-                            if zone2 != zone1 and zone2 not in processed_zones:
-                                if can_merge_zones(zone1, zone2):
-                                    group.extend(zone_codes[zone2])
-                                    processed_zones.add(zone2)
+                    for zone2 in zone_codes.keys():
+                        if zone2 != zone1 and zone2 not in processed_zones:
+                            if can_merge_zones(zone1, zone2):
+                                group.extend(zone_codes[zone2])
+                                processed_zones.add(zone2)
                     
                     merged_groups.append(group)
                 
@@ -4459,22 +4438,30 @@ def predict_trips(test_df, model_data):
         trip['region_group'] = get_region_group(trip['primary_province']) or 'zzz_other'
         trip['region'] = get_region_type(trip['primary_province']) or 'other'
     
-    # 🔄 เรียงตาม LIFO: ไกลสุดอยู่ลำดับแรก (โหลดก่อน) → ใกล้สุดอยู่ท้าย
-    # หลักการ: "ไกลสุดอยู่ลึก ใกล้สุดอยู่ท้าย"
+    # 🔄 เรียงตาม Logistics Zone → จังหวัด → ระยะทาง (ป้องกันทริปกระโดดข้าม Zone)
     # ลำดับ region: south → north → far → nearby
+    # Zone order: A→B→C→D→E→F→G (ไกลไปใกล้)
     region_order = {'south': 0, 'north': 1, 'far': 2, 'nearby': 3, 'other': 4}
-    
-    # Zone order ตาม priority จาก LOGISTICS_ZONES (ไกล→ใกล้ = 1→99)
-    # ยิ่ง priority ต่ำ = ยิ่งไกลจาก DC = โหลดก่อน
-    zone_order = {}
-    for zone_name, zone_info in LOGISTICS_ZONES.items():
-        zone_order[zone_name] = zone_info.get('priority', 50)
-    
+    zone_order = {
+        'ZONE_A_พะเยา': 1,
+        'ZONE_B_น่าน': 2,
+        'ZONE_C_แพร่': 3,
+        'ZONE_D_อุตรดิตถ์': 4,
+        'ZONE_E1_พิษณุโลก_ในเมือง': 5,
+        'ZONE_E2_พิษณุโลก_มหาวิทยาลัย': 6,
+        'ZONE_E3_พิษณุโลก_ตะวันออก': 7,
+        'ZONE_F1_พิจิตร_สายหลัก': 8,
+        'ZONE_F2_พิจิตร_ตะวันออก': 9,
+        'ZONE_F3_พิจิตร_สาย117': 10,
+        'ZONE_G_นครสวรรค์': 11,
+        'ใต้ฝั่งอันดามัน': 20,
+        'ใต้ฝั่งอ่าวไทย': 21
+    }
     all_trips.sort(key=lambda x: (
         region_order.get(x.get('region', 'other'), 4),  # 1. ภูมิภาค (ใต้→เหนือ→ไกล→ใกล้)
-        zone_order.get(x.get('logistics_zone', 'zzz_other'), 99),  # 2. Logistics Zone (priority จาก LOGISTICS_ZONES)
-        -x.get('distance_from_dc', 0),  # 3. ระยะทางจาก DC (ไกลไปใกล้)
-        x['primary_province'],  # 4. จังหวัด
+        zone_order.get(x.get('logistics_zone', 'zzz_other'), 99),  # 2. Logistics Zone (A→G)
+        x['primary_province'],  # 3. จังหวัด
+        -x['distance_from_dc'],  # 4. ระยะทางจาก DC (ไกลไปใกล้)
         x['count'],
         x['util']
     ))
@@ -5386,81 +5373,6 @@ def predict_trips(test_df, model_data):
                     test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip
             
             region_split_count += 1
-    
-    # 🚨 Phase 1.77: แยกสาขาที่อยู่คนละ Logistics Zone (Highway-Based)
-    zone_split_count = 0
-    
-    for trip_num in sorted(test_df['Trip'].unique()):
-        if trip_num == 0:
-            continue
-        
-        trip_data = test_df[test_df['Trip'] == trip_num]
-        trip_codes = list(trip_data['Code'].values)
-        
-        if len(trip_codes) < 2:
-            continue
-        
-        # แยกสาขาตาม Logistics Zone
-        zone_codes = {}  # {zone: [codes]}
-        code_provinces = {}  # {code: province}
-        
-        for code in trip_codes:
-            prov = get_province(code)
-            if prov:
-                code_provinces[code] = prov
-                zone = get_logistics_zone(prov, None)  # ใช้ global function
-                if zone:
-                    if zone not in zone_codes:
-                        zone_codes[zone] = []
-                    zone_codes[zone].append(code)
-                else:
-                    if 'other' not in zone_codes:
-                        zone_codes['other'] = []
-                    zone_codes['other'].append(code)
-        
-        # 🚫 ตรวจ No Cross-Zone violations (ห้ามข้ามเขา)
-        provinces_in_trip = list(set(code_provinces.values()))
-        cross_zone_violation = False
-        for i, prov1 in enumerate(provinces_in_trip):
-            for prov2 in provinces_in_trip[i+1:]:
-                if is_cross_zone_violation(prov1, prov2):
-                    cross_zone_violation = True
-                    break
-            if cross_zone_violation:
-                break
-        
-        # 🚨 ถ้ามี cross-zone violation หรือ zone ที่รวมไม่ได้ → ต้องแยก
-        if len(zone_codes) > 1 or cross_zone_violation:
-            # รวมโค้ดจาก zone ที่ merge ได้เข้าด้วยกัน
-            merged_groups = []
-            processed_zones = set()
-            
-            for zone1 in zone_codes.keys():
-                if zone1 in processed_zones:
-                    continue
-                
-                group = list(zone_codes[zone1])
-                processed_zones.add(zone1)
-                
-                if not cross_zone_violation:
-                    for zone2 in zone_codes.keys():
-                        if zone2 != zone1 and zone2 not in processed_zones:
-                            if can_combine_zones_by_highway(zone1, zone2):
-                                group.extend(zone_codes[zone2])
-                                processed_zones.add(zone2)
-                
-                merged_groups.append(group)
-            
-            # ถ้ามีหลายกลุ่มที่รวมไม่ได้ → แยกออก
-            if len(merged_groups) > 1:
-                sorted_groups = sorted(merged_groups, key=len, reverse=True)
-                
-                for codes in sorted_groups[1:]:
-                    new_trip = test_df['Trip'].max() + 1
-                    for code in codes:
-                        test_df.loc[test_df['Code'] == code, 'Trip'] = new_trip
-                
-                zone_split_count += 1
     
     # 🚨 Phase 1.78: แยกสาขาที่ห่างกันเกิน 30km (ป้องกันทริปกระโดด เช่น วังน้อย+กทม)
     distance_split_count = 0
@@ -9074,43 +8986,27 @@ def main():
                                 return region
                         return 'อื่นๆ'
                     
-                    # เพิ่มคอลัมน์ภาค และ ตำบล/อำเภอ/จังหวัด จาก Master
-                    # 🆕 สร้าง mapping สำหรับ ตำบล, อำเภอ, จังหวัด
-                    subdistrict_map = {}
-                    district_map = {}
-                    province_map = {}
-                    
-                    if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
-                        for _, row in MASTER_DATA.iterrows():
-                            code = row.get('Plan Code', '')
-                            if code:
-                                subdistrict = row.get('ตำบล', '')
-                                district = row.get('อำเภอ', '')
-                                province = row.get('จังหวัด', '')
-                                if subdistrict:
-                                    subdistrict_map[code] = subdistrict
-                                if district:
-                                    district_map[code] = district
-                                if province:
-                                    province_map[code] = province
-                    
-                    # 🆕 เพิ่มคอลัมน์ ตำบล, อำเภอ
-                    df_region['ตำบล'] = df_region['Code'].map(subdistrict_map).fillna('')
-                    df_region['อำเภอ'] = df_region['Code'].map(district_map).fillna('')
-                    df_region['จังหวัด'] = df_region['Code'].map(province_map).fillna('')
-                    
-                    # ดึงจังหวัดจาก Master ถ้า Province ไม่มี
+                    # เพิ่มคอลัมน์ภาค - ดึงจังหวัดจาก Master ถ้าไม่มี
                     if 'Province' not in df_region.columns or df_region['Province'].isna().any():
-                        # ใส่จังหวัดให้แต่ละสาขา
-                        if 'Province' not in df_region.columns:
-                            df_region['Province'] = df_region['จังหวัด']
-                        else:
-                            # เติมเฉพาะที่เป็น NaN
-                            df_region['Province'] = df_region.apply(
-                                lambda row: province_map.get(row['Code'], row.get('Province', 'UNKNOWN')) 
-                                if pd.isna(row.get('Province')) else row['Province'],
-                                axis=1
-                            )
+                        # ดึงจังหวัดจาก Master
+                        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                            province_map = {}
+                            for _, row in MASTER_DATA.iterrows():
+                                code = row.get('Plan Code', '')
+                                province = row.get('จังหวัด', '')
+                                if code and province:
+                                    province_map[code] = province
+                            
+                            # ใส่จังหวัดให้แต่ละสาขา
+                            if 'Province' not in df_region.columns:
+                                df_region['Province'] = df_region['Code'].map(province_map)
+                            else:
+                                # เติมเฉพาะที่เป็น NaN
+                                df_region['Province'] = df_region.apply(
+                                    lambda row: province_map.get(row['Code'], row.get('Province', 'UNKNOWN')) 
+                                    if pd.isna(row.get('Province')) else row['Province'],
+                                    axis=1
+                                )
                     
                     df_region['Region'] = df_region['Province'].apply(get_region)
                     
@@ -9323,31 +9219,9 @@ def main():
                     
                     # ดาวน์โหลด
                     st.markdown("---")
-                    
-                    # 🆕 Sort ตามจังหวัด → อำเภอ → ตำบล เพื่อให้สาขาที่อยู่ใกล้กันไปด้วยกัน
-                    df_export = df_region.copy()
-                    df_export = df_export.sort_values(['จังหวัด', 'อำเภอ', 'ตำบล', 'Code'], 
-                                                       ascending=[True, True, True, True])
-                    
-                    # 🆕 เลือกคอลัมน์ที่ต้องการ export และจัดลำดับ
-                    export_cols = ['Code', 'Name', 'ตำบล', 'อำเภอ', 'จังหวัด', 'Region', 'Weight', 'Cube']
-                    # กรองเฉพาะคอลัมน์ที่มีอยู่
-                    export_cols = [c for c in export_cols if c in df_export.columns]
-                    df_export = df_export[export_cols].drop_duplicates('Code')
-                    
-                    # Rename columns for Thai display
-                    col_rename = {
-                        'Code': 'รหัสสาขา',
-                        'Name': 'ชื่อสาขา',
-                        'Region': 'ภาค',
-                        'Weight': 'น้ำหนัก',
-                        'Cube': 'คิว'
-                    }
-                    df_export = df_export.rename(columns=col_rename)
-                    
                     output_region = io.BytesIO()
                     with pd.ExcelWriter(output_region, engine='xlsxwriter') as writer:
-                        df_export.to_excel(writer, sheet_name='สาขาทั้งหมด', index=False)
+                        df_region.to_excel(writer, sheet_name='สาขาทั้งหมด', index=False)
                         region_summary.to_excel(writer, sheet_name='สรุปตามภาค', index=False)
                     
                     col1, col2, col3 = st.columns([1, 2, 1])

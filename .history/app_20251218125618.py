@@ -9074,43 +9074,27 @@ def main():
                                 return region
                         return 'อื่นๆ'
                     
-                    # เพิ่มคอลัมน์ภาค และ ตำบล/อำเภอ/จังหวัด จาก Master
-                    # 🆕 สร้าง mapping สำหรับ ตำบล, อำเภอ, จังหวัด
-                    subdistrict_map = {}
-                    district_map = {}
-                    province_map = {}
-                    
-                    if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
-                        for _, row in MASTER_DATA.iterrows():
-                            code = row.get('Plan Code', '')
-                            if code:
-                                subdistrict = row.get('ตำบล', '')
-                                district = row.get('อำเภอ', '')
-                                province = row.get('จังหวัด', '')
-                                if subdistrict:
-                                    subdistrict_map[code] = subdistrict
-                                if district:
-                                    district_map[code] = district
-                                if province:
-                                    province_map[code] = province
-                    
-                    # 🆕 เพิ่มคอลัมน์ ตำบล, อำเภอ
-                    df_region['ตำบล'] = df_region['Code'].map(subdistrict_map).fillna('')
-                    df_region['อำเภอ'] = df_region['Code'].map(district_map).fillna('')
-                    df_region['จังหวัด'] = df_region['Code'].map(province_map).fillna('')
-                    
-                    # ดึงจังหวัดจาก Master ถ้า Province ไม่มี
+                    # เพิ่มคอลัมน์ภาค - ดึงจังหวัดจาก Master ถ้าไม่มี
                     if 'Province' not in df_region.columns or df_region['Province'].isna().any():
-                        # ใส่จังหวัดให้แต่ละสาขา
-                        if 'Province' not in df_region.columns:
-                            df_region['Province'] = df_region['จังหวัด']
-                        else:
-                            # เติมเฉพาะที่เป็น NaN
-                            df_region['Province'] = df_region.apply(
-                                lambda row: province_map.get(row['Code'], row.get('Province', 'UNKNOWN')) 
-                                if pd.isna(row.get('Province')) else row['Province'],
-                                axis=1
-                            )
+                        # ดึงจังหวัดจาก Master
+                        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                            province_map = {}
+                            for _, row in MASTER_DATA.iterrows():
+                                code = row.get('Plan Code', '')
+                                province = row.get('จังหวัด', '')
+                                if code and province:
+                                    province_map[code] = province
+                            
+                            # ใส่จังหวัดให้แต่ละสาขา
+                            if 'Province' not in df_region.columns:
+                                df_region['Province'] = df_region['Code'].map(province_map)
+                            else:
+                                # เติมเฉพาะที่เป็น NaN
+                                df_region['Province'] = df_region.apply(
+                                    lambda row: province_map.get(row['Code'], row.get('Province', 'UNKNOWN')) 
+                                    if pd.isna(row.get('Province')) else row['Province'],
+                                    axis=1
+                                )
                     
                     df_region['Region'] = df_region['Province'].apply(get_region)
                     
@@ -9323,31 +9307,9 @@ def main():
                     
                     # ดาวน์โหลด
                     st.markdown("---")
-                    
-                    # 🆕 Sort ตามจังหวัด → อำเภอ → ตำบล เพื่อให้สาขาที่อยู่ใกล้กันไปด้วยกัน
-                    df_export = df_region.copy()
-                    df_export = df_export.sort_values(['จังหวัด', 'อำเภอ', 'ตำบล', 'Code'], 
-                                                       ascending=[True, True, True, True])
-                    
-                    # 🆕 เลือกคอลัมน์ที่ต้องการ export และจัดลำดับ
-                    export_cols = ['Code', 'Name', 'ตำบล', 'อำเภอ', 'จังหวัด', 'Region', 'Weight', 'Cube']
-                    # กรองเฉพาะคอลัมน์ที่มีอยู่
-                    export_cols = [c for c in export_cols if c in df_export.columns]
-                    df_export = df_export[export_cols].drop_duplicates('Code')
-                    
-                    # Rename columns for Thai display
-                    col_rename = {
-                        'Code': 'รหัสสาขา',
-                        'Name': 'ชื่อสาขา',
-                        'Region': 'ภาค',
-                        'Weight': 'น้ำหนัก',
-                        'Cube': 'คิว'
-                    }
-                    df_export = df_export.rename(columns=col_rename)
-                    
                     output_region = io.BytesIO()
                     with pd.ExcelWriter(output_region, engine='xlsxwriter') as writer:
-                        df_export.to_excel(writer, sheet_name='สาขาทั้งหมด', index=False)
+                        df_region.to_excel(writer, sheet_name='สาขาทั้งหมด', index=False)
                         region_summary.to_excel(writer, sheet_name='สรุปตามภาค', index=False)
                     
                     col1, col2, col3 = st.columns([1, 2, 1])
