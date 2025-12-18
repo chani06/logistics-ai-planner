@@ -3069,27 +3069,10 @@ def predict_trips(test_df, model_data):
     
     # 🗺️ จัดกลุ่มสาขาตามพิกัดก่อน (Spatial Clustering) + จับคู่สาขาชื่อคล้ายกัน
     def create_distance_based_clusters(codes, max_distance_km=25):
-        """จัดกลุ่มสาขาที่อยู่ใกล้กัน (ไม่เกิน max_distance_km) + บังคับรวมสาขาชื่อคล้ายกัน + บังคับรวม location เดียวกัน + บังคับรวม Route เดียวกัน"""
+        """จัดกลุ่มสาขาที่อยู่ใกล้กัน (ไม่เกิน max_distance_km) + บังคับรวมสาขาชื่อคล้ายกัน + บังคับรวม location เดียวกัน"""
         # ⚡ Speed: Skip clustering if too few codes
         if len(codes) < 10:
             return [codes]  # Return all as one cluster
-        
-        # 🆕 Phase -1: จับกลุ่มสาขาที่มี Route (Reference) เดียวกัน - ต้องอยู่ทริปเดียวกัน!
-        route_groups = {}  # route -> [codes]
-        for code in codes:
-            code_upper = str(code).upper()
-            route = LOCATION_CODE_TO_REF.get(code_upper, '')
-            if route and route != 'NAN':
-                if route not in route_groups:
-                    route_groups[route] = []
-                route_groups[route].append(code)
-        
-        # สร้างกลุ่มสาขาที่มี Route เดียวกัน (มี 2+ codes)
-        same_route_groups = [group for group in route_groups.values() if len(group) > 1]
-        grouped_by_route = set()
-        for group in same_route_groups:
-            for code in group:
-                grouped_by_route.add(code)
         
         # 🔥 Phase 0: จับคู่สาขาที่มี base code เดียวกัน (M862, P862, S862, ZS862 → ต้องอยู่ด้วยกัน)
         location_groups = {}  # base_code -> [codes]
@@ -3107,12 +3090,9 @@ def predict_trips(test_df, model_data):
             for code in group:
                 grouped_by_location.add(code)
         
-        # รวม grouped_by_route กับ grouped_by_location
-        grouped_by_location |= grouped_by_route
-        
         # 🔥 Phase 1: จับคู่สาขาที่มีชื่อคล้ายกัน (เช่น คลองหลวง 3,4,8,10) ให้อยู่กลุ่มเดียวกันเสมอ
         similar_groups = []  # เก็บกลุ่มสาขาที่ชื่อคล้ายกัน
-        grouped_codes = set(grouped_by_location)  # เริ่มจากสาขาที่ถูกจัดกลุ่มด้วย location และ route แล้ว
+        grouped_codes = set(grouped_by_location)  # เริ่มจากสาขาที่ถูกจัดกลุ่มด้วย location แล้ว
         
         # ตรวจสอบทุกคู่สาขาที่ยังไม่ถูกจัดกลุ่ม
         for i, code1 in enumerate(codes):
@@ -3185,8 +3165,8 @@ def predict_trips(test_df, model_data):
             
             clusters.append(cluster)
         
-        # 🔥 เพิ่มกลุ่มสาขา Route เดียวกัน + location เดียวกัน + ชื่อคล้ายกันเข้าไป (จะอยู่ข้างหน้าสุด - ส่งก่อน)
-        all_clusters = same_route_groups + same_location_groups + similar_groups + clusters
+        # 🔥 เพิ่มกลุ่มสาขา location เดียวกัน + ชื่อคล้ายกันเข้าไป (จะอยู่ข้างหน้าสุด - ส่งก่อน)
+        all_clusters = same_location_groups + similar_groups + clusters
         
         return all_clusters
     
@@ -9071,8 +9051,7 @@ def main():
                                     if '❌' in str(trip_status) or '⛔' in str(trip_status):
                                         failed_trips_fallback.add(t)
                             
-                            # 🆕 ใช้ sorted_trips ที่เรียงตามระยะทาง (ไกลมาใกล้)
-                            for trip_num in sorted_trips:
+                            for trip_num in sorted(result_df['Trip'].unique()):
                                 if trip_num == 0:
                                     continue
                                 trip_data = result_df[result_df['Trip'] == trip_num]
