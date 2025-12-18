@@ -3814,15 +3814,69 @@ def predict_trips(test_df, model_data):
                     'trip': trip,
                     'region': region,
                     'region_group': region_group,
+                    'primary_province': primary_prov,  # 🆕 เพิ่ม primary_province
                     'cube': trip['cube'],
                     'weight': trip['weight'],
                     'count': trip['count'],
                     'cube_6w': cube_6w
                 })
     
-    # รวมทริปในภาคเดียวกัน
+    # 🆕 รวมทริปจังหวัดเดียวกันก่อน (ลำดับแรก)
     merge_north_south_count = 0
     merged_indices = set()
+    
+    # Pass 1: รวมจังหวัดเดียวกัน
+    for i, t1 in enumerate(north_south_trips):
+        if t1['idx'] in merged_indices:
+            continue
+        
+        for j, t2 in enumerate(north_south_trips):
+            if i >= j or t2['idx'] in merged_indices:
+                continue
+            
+            # ต้องอยู่จังหวัดเดียวกัน
+            if t1['primary_province'] != t2['primary_province']:
+                continue
+            
+            # เช็ค capacity รวมกัน (ต้องไม่เกิน 6W)
+            combined_cube = t1['cube'] + t2['cube']
+            combined_weight = t1['weight'] + t2['weight']
+            combined_count = t1['count'] + t2['count']
+            
+            if combined_cube > LIMITS['6W']['max_c'] * BUFFER:
+                continue
+            if combined_weight > LIMITS['6W']['max_w'] * BUFFER:
+                continue
+            
+            # รวมได้! ย้ายสาขาจาก trip2 ไป trip1
+            trip1 = all_trips[t1['idx']]
+            trip2 = all_trips[t2['idx']]
+            
+            if trip1 is None or trip2 is None:
+                continue
+            
+            # ย้ายสาขา
+            for code in trip2['codes']:
+                test_df.loc[test_df['Code'] == code, 'Trip'] = trip1['trip']
+            
+            # อัปเดต trip1
+            trip1['codes'].update(trip2['codes'])
+            trip1['cube'] = combined_cube
+            trip1['weight'] = combined_weight
+            trip1['count'] = combined_count
+            trip1['provinces'].update(trip2['provinces'])
+            
+            # ลบ trip2
+            all_trips[t2['idx']] = None
+            merged_indices.add(t2['idx'])
+            merge_north_south_count += 1
+            
+            # อัปเดต t1 สำหรับ iteration ถัดไป
+            t1['cube'] = combined_cube
+            t1['weight'] = combined_weight
+            t1['count'] = combined_count
+    
+    # Pass 2: รวมกลุ่มภาคเดียวกัน (ถ้ายังไม่เต็ม)
     
     for i, t1 in enumerate(north_south_trips):
         if t1['idx'] in merged_indices:
