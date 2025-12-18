@@ -1900,15 +1900,37 @@ def predict_trips(test_df, model_data):
             # หาพิกัดของแต่ละสาขา
             code_coords = {}
             for code in trip_codes:
-                if code in coord_cache:
+                lat, lon = None, None
+                
+                # 1. ลองจาก coord_cache ก่อน
+                if code in coord_cache and coord_cache[code][0] is not None:
                     code_coords[code] = coord_cache[code]
-                elif not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                    continue
+                
+                # 2. 🆕 ลองจาก DataFrame โดยตรง (Lat/Lon columns)
+                code_row = df[df['Code'] == code]
+                if len(code_row) > 0:
+                    lat_col = code_row.iloc[0].get('Lat') or code_row.iloc[0].get('Latitude')
+                    lon_col = code_row.iloc[0].get('Lon') or code_row.iloc[0].get('Longitude')
+                    if pd.notna(lat_col) and pd.notna(lon_col):
+                        lat, lon = float(lat_col), float(lon_col)
+                        code_coords[code] = (lat, lon)
+                        continue
+                
+                # 3. ลองจาก MASTER_DATA
+                if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
                     master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
                     if len(master_row) > 0:
                         lat = master_row.iloc[0].get('Latitude') or master_row.iloc[0].get('lat')
                         lon = master_row.iloc[0].get('Longitude') or master_row.iloc[0].get('lng')
                         if pd.notna(lat) and pd.notna(lon):
                             code_coords[code] = (float(lat), float(lon))
+                            continue
+                
+                # 4. 🆕 ลองจาก get_lat_lon_from_master
+                lat, lon = get_lat_lon_from_master(code)
+                if lat is not None and lon is not None:
+                    code_coords[code] = (lat, lon)
             
             if len(code_coords) < 2:
                 continue
@@ -1963,6 +1985,46 @@ def predict_trips(test_df, model_data):
         
         return df
     
+    # 🆕 ฟังก์ชันแยกสาขาที่อยู่คนละกลุ่มภาค (เหนือตอนบน vs เหนือตอนล่าง, ใต้ฝั่งอันดามัน vs ใต้ฝั่งอ่าวไทย)
+    def split_different_region_groups(df):
+        """แยกสาขาที่อยู่คนละกลุ่มภาค - ป้องกันรวม อุตรดิตถ์ + พะเยา"""
+        for trip_num in df['Trip'].dropna().unique():
+            trip_data = df[df['Trip'] == trip_num]
+            trip_codes = list(trip_data['Code'].unique())
+            
+            if len(trip_codes) < 2:
+                continue
+            
+            # แยกสาขาตามกลุ่มภาค
+            region_group_codes = {}  # {region_group: [codes]}
+            
+            for code in trip_codes:
+                prov = get_province(code)
+                if prov:
+                    rg = get_region_group(prov)
+                    if rg:
+                        if rg not in region_group_codes:
+                            region_group_codes[rg] = []
+                        region_group_codes[rg].append(code)
+                    else:
+                        # ไม่มี region group → ใส่ใน 'other'
+                        if 'other' not in region_group_codes:
+                            region_group_codes['other'] = []
+                        region_group_codes['other'].append(code)
+            
+            # 🚨 ถ้ามีหลายกลุ่มภาค (เช่น เหนือตอนบน + เหนือตอนล่าง) → ต้องแยก!
+            if len(region_group_codes) > 1:
+                # หากลุ่มใหญ่สุด เก็บไว้ กลุ่มอื่นย้ายไปทริปใหม่
+                sorted_groups = sorted(region_group_codes.items(), key=lambda x: len(x[1]), reverse=True)
+                main_group = sorted_groups[0][1]  # กลุ่มใหญ่สุด
+                
+                for group_name, codes in sorted_groups[1:]:
+                    new_trip_num = df['Trip'].max() + 1
+                    for code in codes:
+                        df.loc[df['Code'] == code, 'Trip'] = new_trip_num
+        
+        return df
+    
     # 🔒 ฟังก์ชันแยกสาขาที่อยู่คนละภูมิภาค (nearby vs far)
     def split_mixed_regions(df):
         """แยกสาขา nearby (กทม/ปริมณฑล) ออกจากสาขา far (ต่างจังหวัด) ในทริปเดียวกัน"""
@@ -2007,6 +2069,9 @@ def predict_trips(test_df, model_data):
         
         # 🔒 แยกสาขาที่อยู่คนละภูมิภาค (nearby vs far)
         test_df_result = split_mixed_regions(test_df_result)
+        
+        # 🆕 แยกสาขาที่อยู่คนละกลุ่มภาค (เหนือตอนบน vs เหนือตอนล่าง)
+        test_df_result = split_different_region_groups(test_df_result)
         
         # 🔒 Phase 1.78: แยกสาขาที่ห่างกันเกิน 30km (ป้องกันทริปกระโดด)
         test_df_result = split_distant_branches(test_df_result, max_distance_km=30)
