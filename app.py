@@ -3176,6 +3176,15 @@ def predict_trips(test_df, model_data):
         for pair_code in list(all_codes):
             pair_key = tuple(sorted([seed_code, pair_code]))
             if pair_key in trip_pairs:
+                # 🔥🔥🔥 ตรวจสอบว่าอยู่จังหวัดเดียวกันหรือติดกันก่อน (ป้องกันรวมข้ามจังหวัดไกล)
+                pair_province = get_province(pair_code)
+                pair_district = district_cache.get(pair_code, '')
+                same_prov = (pair_province == seed_province) if pair_province and seed_province else False
+                districts_adj = are_adjacent_districts(seed_district, seed_province, pair_district, pair_province)
+                
+                # 🚨 ถ้าต่างจังหวัดและไม่ใช่อำเภอติดกัน → ข้ามสาขานี้ (ป้องกันอุตรดิตถ์+พะเยา)
+                if not same_prov and not districts_adj:
+                    continue
                 next_weight = test_df[test_df['Code'] == pair_code]['Weight'].sum()
                 next_cube = test_df[test_df['Code'] == pair_code]['Cube'].sum()
                 
