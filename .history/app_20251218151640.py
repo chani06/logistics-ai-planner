@@ -5387,40 +5387,6 @@ def predict_trips(test_df, model_data):
             
             region_split_count += 1
     
-    # 🆕 Phase 1.76: รวมสาขาที่มี Route เดียวกันให้อยู่ในทริปเดียวกัน
-    # สาขาที่มี Reference (Route) เดียวกันจากไฟล์ สถานที่ส่ง.xlsx ต้องอยู่ด้วยกัน
-    route_merge_count = 0
-    
-    # สร้าง mapping ของ Route → Trip ที่มีสาขานั้นอยู่แล้ว
-    route_to_trip = {}  # {route: trip_num ที่ควรรวม}
-    
-    for trip_num in sorted(test_df['Trip'].unique()):
-        if trip_num == 0:
-            continue
-        trip_data = test_df[test_df['Trip'] == trip_num]
-        for code in trip_data['Code'].values:
-            code_upper = str(code).strip().upper()
-            route = LOCATION_CODE_TO_REF.get(code_upper, '')
-            if route and route not in route_to_trip:
-                route_to_trip[route] = trip_num
-    
-    # หาสาขาที่อยู่คนละทริปแต่มี Route เดียวกัน → ย้ายไปทริปแรกที่พบ
-    for trip_num in sorted(test_df['Trip'].unique()):
-        if trip_num == 0:
-            continue
-        trip_data = test_df[test_df['Trip'] == trip_num]
-        
-        for code in trip_data['Code'].values:
-            code_upper = str(code).strip().upper()
-            route = LOCATION_CODE_TO_REF.get(code_upper, '')
-            
-            if route and route in route_to_trip:
-                target_trip = route_to_trip[route]
-                if target_trip != trip_num:
-                    # ย้ายสาขานี้ไปทริปที่มี Route เดียวกัน
-                    test_df.loc[test_df['Code'] == code, 'Trip'] = target_trip
-                    route_merge_count += 1
-    
     # 🚨 Phase 1.77: แยกสาขาที่อยู่คนละ Logistics Zone (Highway-Based)
     zone_split_count = 0
     
