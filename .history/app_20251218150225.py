@@ -8978,7 +8978,7 @@ def main():
                             ws.title = '2.Punthai'
                             
                             # เขียน header
-                            headers = ['Sep.', 'BU', 'รหัสสาขา', 'รหัส WMS', 'สาขา', 'ตำบล', 'อำเภอ', 'จังหวัด', 'Route', 'Total Cube', 'Total Wgt', 'Original QTY', 'Trip', 'Trip no']
+                            headers = ['Sep.', 'BU', 'รหัสสาขา', 'รหัส WMS', 'สาขา', 'ตำบล', 'อำเภอ', 'จังหวัด', 'Total Cube', 'Total Wgt', 'Original QTY', 'Trip', 'Trip no']
                             for col_num, header in enumerate(headers, 1):
                                 ws.cell(row=1, column=col_num, value=header)
                             
@@ -9040,9 +9040,9 @@ def main():
                                 for _, row in trip_data.iterrows():
                                     original_qty = row.get('OriginalQty', 0) if pd.notna(row.get('OriginalQty')) else 0
                                     branch_code = row.get('Code', '')
-                                    loc = location_map.get(branch_code, {}) or location_map.get(str(branch_code).upper(), {})
+                                    loc = location_map.get(branch_code, {})
                                     data = [sep_num, row.get('BU', 211), branch_code, branch_code, row.get('Name', ''),
-                                            loc.get('ตำบล', ''), loc.get('อำเภอ', ''), loc.get('จังหวัด', ''), loc.get('Route', ''),
+                                            loc.get('ตำบล', ''), loc.get('อำเภอ', ''), loc.get('จังหวัด', ''),
                                             round(row.get('Cube', 0), 2), round(row.get('Weight', 0), 2), original_qty, int(trip_num), trip_no]
                                     for col_idx, value in enumerate(data, 1):
                                         cell = ws.cell(row=row_num, column=col_idx, value=value)
@@ -9055,7 +9055,7 @@ def main():
                                 
                                 # 🚛 เพิ่ม DC011 ปิดท้ายทุกทริป
                                 dc_data = [sep_num, 'PROJECT', 'DC011', 'DC011', 'บ.พีทีจี เอ็นเนอยี จำกัด (มหาชน) (DCวังน้อย)',
-                                           '', '', 'พระนครศรีอยุธยา', '', 0, 0, 0, int(trip_num), trip_no]
+                                           '', '', 'พระนครศรีอยุธยา', 0, 0, 0, int(trip_num), trip_no]
                                 for col_idx, value in enumerate(dc_data, 1):
                                     cell = ws.cell(row=row_num, column=col_idx, value=value)
                                     cell.fill = fill

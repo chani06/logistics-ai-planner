@@ -8804,8 +8804,8 @@ def main():
                             if ws.max_row > header_row:
                                 ws.delete_rows(header_row + 1, ws.max_row - header_row)
                             
-                            # 🆕 เขียน header ใหม่ที่มีคอลัมน์ ตำบล, อำเภอ, จังหวัด, Route
-                            new_headers = ['Sep.', 'BU', 'รหัสสาขา', 'รหัส WMS', 'สาขา', 'ตำบล', 'อำเภอ', 'จังหวัด', 'Route',
+                            # 🆕 เขียน header ใหม่ที่มีคอลัมน์ ตำบล, อำเภอ, จังหวัด
+                            new_headers = ['Sep.', 'BU', 'รหัสสาขา', 'รหัส WMS', 'สาขา', 'ตำบล', 'อำเภอ', 'จังหวัด', 
                                           'Total Cube', 'Total Wgt', 'Original QTY', 'Trip', 'Trip no',
                                           'วันที่โหลด', 'เวลาโหลด', 'ประตู', 'WAVE', 'remark', 'lat', 'lon']
                             for col_idx, header_val in enumerate(new_headers, 1):
@@ -8891,31 +8891,30 @@ def main():
                                 
                                 for _, row in trip_data.iterrows():
                                     # เขียนข้อมูลตามโครงสร้างไฟล์ต้นฉบับ
-                                    # คอลัมน์: A=Sep, B=BU, C=รหัสสาขา, D=รหัส WMS, E=สาขา, F=ตำบล, G=อำเภอ, H=จังหวัด, I=Route, J=Cube, K=Weight, L=Original QTY, M=Trip, N=Trip no
+                                    # คอลัมน์: A=Sep, B=BU, C=รหัสสาขา, D=รหัส WMS, E=สาขา, F=ตำบล, G=อำเภอ, H=จังหวัด, I=Cube, J=Weight, K=Original QTY, L=Trip, M=Trip no
                                     branch_code = row.get('Code', '')
-                                    loc = location_map.get(branch_code, {}) or location_map.get(str(branch_code).upper(), {})
+                                    loc = location_map.get(branch_code, {})
                                     data = [
                                         sep_num,  # A: Sep (ลำดับแถว)
                                         row.get('BU', 211),  # B: BU (จากต้นฉบับ)
                                         branch_code,  # C: รหัสสาขา
                                         branch_code,  # D: รหัส WMS
                                         row.get('Name', ''),  # E: สาขา
-                                        loc.get('ตำบล', ''),  # F: ตำบล
-                                        loc.get('อำเภอ', ''),  # G: อำเภอ
-                                        loc.get('จังหวัด', ''),  # H: จังหวัด
-                                        loc.get('Route', ''),  # I: Route 🆕
-                                        round(row.get('Cube', 0), 2) if pd.notna(row.get('Cube')) else 0,  # J: Cube
-                                        round(row.get('Weight', 0), 2) if pd.notna(row.get('Weight')) else 0,  # K: Weight
-                                        row.get('OriginalQty', 0) if pd.notna(row.get('OriginalQty')) else 0,  # L: Original QTY
-                                        int(trip_num),  # M: Trip
-                                        trip_no,  # N: Trip no
-                                        '',  # O: วันที่โหลด
-                                        '',  # P: เวลาโหลด
-                                        '',  # Q: ประตู
-                                        '',  # R: WAVE
-                                        '',  # S: remark
-                                        '',  # T: lat (เว้นว่าง)
-                                        '',  # U: lon (เว้นว่าง)
+                                        loc.get('ตำบล', ''),  # F: ตำบล 🆕
+                                        loc.get('อำเภอ', ''),  # G: อำเภอ 🆕
+                                        loc.get('จังหวัด', ''),  # H: จังหวัด 🆕
+                                        round(row.get('Cube', 0), 2) if pd.notna(row.get('Cube')) else 0,  # I: Cube
+                                        round(row.get('Weight', 0), 2) if pd.notna(row.get('Weight')) else 0,  # J: Weight
+                                        row.get('OriginalQty', 0) if pd.notna(row.get('OriginalQty')) else 0,  # K: Original QTY (จากต้นฉบับ)
+                                        int(trip_num),  # L: Trip
+                                        trip_no,  # M: Trip no
+                                        '',  # N: วันที่โหลด
+                                        '',  # O: เวลาโหลด
+                                        '',  # P: ประตู
+                                        '',  # Q: WAVE
+                                        '',  # R: remark
+                                        '',  # S: lat (เว้นว่าง)
+                                        '',  # T: lon (เว้นว่าง)
                                     ]
                                     
                                     for col_idx, value in enumerate(data, 1):
@@ -8936,22 +8935,21 @@ def main():
                                     'DC011',  # C: รหัสสาขา
                                     'DC011',  # D: รหัส WMS
                                     'บ.พีทีจี เอ็นเนอยี จำกัด (มหาชน) (DCวังน้อย)',  # E: สาขา
-                                    '',  # F: ตำบล
-                                    '',  # G: อำเภอ
-                                    'พระนครศรีอยุธยา',  # H: จังหวัด
-                                    '',  # I: Route 🆕
-                                    0,  # J: Cube
-                                    0,  # K: Weight
-                                    0,  # L: Original QTY
-                                    int(trip_num),  # M: Trip
-                                    trip_no,  # N: Trip no
-                                    '',  # O: วันที่โหลด
-                                    '',  # P: เวลาโหลด
-                                    '',  # Q: ประตู
-                                    '',  # R: WAVE
-                                    '',  # S: remark
-                                    '',  # T: lat (เว้นว่าง)
-                                    '',  # U: lon (เว้นว่าง)
+                                    '',  # F: ตำบล 🆕
+                                    '',  # G: อำเภอ 🆕
+                                    'พระนครศรีอยุธยา',  # H: จังหวัด 🆕
+                                    0,  # I: Cube
+                                    0,  # J: Weight
+                                    0,  # K: Original QTY
+                                    int(trip_num),  # L: Trip
+                                    trip_no,  # M: Trip no
+                                    '',  # N: วันที่โหลด
+                                    '',  # O: เวลาโหลด
+                                    '',  # P: ประตู
+                                    '',  # Q: WAVE
+                                    '',  # R: remark
+                                    '',  # S: lat (เว้นว่าง)
+                                    '',  # T: lon (เว้นว่าง)
                                 ]
                                 
                                 for col_idx, value in enumerate(dc_data, 1):
@@ -8978,7 +8976,7 @@ def main():
                             ws.title = '2.Punthai'
                             
                             # เขียน header
-                            headers = ['Sep.', 'BU', 'รหัสสาขา', 'รหัส WMS', 'สาขา', 'ตำบล', 'อำเภอ', 'จังหวัด', 'Route', 'Total Cube', 'Total Wgt', 'Original QTY', 'Trip', 'Trip no']
+                            headers = ['Sep.', 'BU', 'รหัสสาขา', 'รหัส WMS', 'สาขา', 'ตำบล', 'อำเภอ', 'จังหวัด', 'Total Cube', 'Total Wgt', 'Original QTY', 'Trip', 'Trip no']
                             for col_num, header in enumerate(headers, 1):
                                 ws.cell(row=1, column=col_num, value=header)
                             
@@ -9040,9 +9038,9 @@ def main():
                                 for _, row in trip_data.iterrows():
                                     original_qty = row.get('OriginalQty', 0) if pd.notna(row.get('OriginalQty')) else 0
                                     branch_code = row.get('Code', '')
-                                    loc = location_map.get(branch_code, {}) or location_map.get(str(branch_code).upper(), {})
+                                    loc = location_map.get(branch_code, {})
                                     data = [sep_num, row.get('BU', 211), branch_code, branch_code, row.get('Name', ''),
-                                            loc.get('ตำบล', ''), loc.get('อำเภอ', ''), loc.get('จังหวัด', ''), loc.get('Route', ''),
+                                            loc.get('ตำบล', ''), loc.get('อำเภอ', ''), loc.get('จังหวัด', ''),
                                             round(row.get('Cube', 0), 2), round(row.get('Weight', 0), 2), original_qty, int(trip_num), trip_no]
                                     for col_idx, value in enumerate(data, 1):
                                         cell = ws.cell(row=row_num, column=col_idx, value=value)
@@ -9055,7 +9053,7 @@ def main():
                                 
                                 # 🚛 เพิ่ม DC011 ปิดท้ายทุกทริป
                                 dc_data = [sep_num, 'PROJECT', 'DC011', 'DC011', 'บ.พีทีจี เอ็นเนอยี จำกัด (มหาชน) (DCวังน้อย)',
-                                           '', '', 'พระนครศรีอยุธยา', '', 0, 0, 0, int(trip_num), trip_no]
+                                           '', '', 'พระนครศรีอยุธยา', 0, 0, 0, int(trip_num), trip_no]
                                 for col_idx, value in enumerate(dc_data, 1):
                                     cell = ws.cell(row=row_num, column=col_idx, value=value)
                                     cell.fill = fill
