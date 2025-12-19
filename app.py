@@ -866,6 +866,10 @@ def is_punthai_only(trip_data):
     """
     ตรวจสอบว่าทริปนี้เป็น Punthai ล้วนหรือไม่
     
+    รับได้ทั้ง:
+    - DataFrame ที่มีคอลัมน์ BU, Name
+    - List ของ branch codes
+    
     Returns:
         'punthai_only': ถ้าทั้งหมดเป็น Punthai (BU = 211 หรือชื่อมี PUNTHAI)
         'has_maxmart': 🆕 ถ้ามี Maxmart รวมด้วย (BU != 211 และไม่ใช่ PUNTHAI)
@@ -876,24 +880,48 @@ def is_punthai_only(trip_data):
         return 'other'
     
     punthai_count = 0
-    maxmart_count = 0  # 🆕 นับ Maxmart
-    total_count = len(trip_data)
+    maxmart_count = 0
+    total_count = 0
     
-    for _, row in trip_data.iterrows():
-        bu = row.get('BU', None)
-        name = str(row.get('Name', '')).upper()
-        
-        # เช็ค BU = 211 หรือชื่อมี PUNTHAI
-        if bu == 211 or bu == '211' or 'PUNTHAI' in name:
-            punthai_count += 1
-        elif 'MAXMART' in name or (bu and bu != 211 and bu != '211'):
-            # 🆕 เช็ค Maxmart
-            maxmart_count += 1
+    # 🆕 รองรับทั้ง DataFrame และ list ของ codes
+    if isinstance(trip_data, list):
+        # trip_data เป็น list ของ codes
+        for code in trip_data:
+            code_upper = str(code).strip().upper()
+            total_count += 1
+            
+            # ดึงข้อมูลจาก LOCATION_INFO (ไฟล์ สถานที่ส่ง.xlsx)
+            name = ''
+            if code_upper in LOCATION_INFO:
+                # ไม่มี BU ใน LOCATION_INFO แต่มีชื่อ
+                pass
+            
+            # ลองดึงชื่อจาก LOCATION_CODE_TO_REF หรือตรวจชื่อใน code
+            # 🆕 ใช้ชื่อจาก code เอง (ถ้ามี pattern)
+            if 'PUNTHAI' in code_upper or code_upper.startswith('N'):
+                punthai_count += 1
+            elif 'MAXMART' in code_upper or code_upper.startswith('MM'):
+                maxmart_count += 1
+    else:
+        # trip_data เป็น DataFrame
+        total_count = len(trip_data)
+        for _, row in trip_data.iterrows():
+            bu = row.get('BU', None)
+            name = str(row.get('Name', '')).upper()
+            
+            # เช็ค BU = 211 หรือชื่อมี PUNTHAI
+            if bu == 211 or bu == '211' or 'PUNTHAI' in name:
+                punthai_count += 1
+            elif 'MAXMART' in name or (bu and bu != 211 and bu != '211'):
+                maxmart_count += 1
+    
+    if total_count == 0:
+        return 'other'
     
     if punthai_count == total_count:
         return 'punthai_only'
     elif maxmart_count > 0:
-        return 'has_maxmart'  # 🆕 มี Maxmart → เกินได้ 10%
+        return 'has_maxmart'
     elif punthai_count > 0:
         return 'mixed'
     else:
@@ -3847,10 +3875,12 @@ def predict_trips(test_df, model_data):
         
         # 3. เช็ค capacity (new_weight_val, new_cube_val คำนวณไว้ด้านบนแล้ว)
         # 🆕 ใช้ buffer ที่ถูกต้อง (Maxmart vs Punthai)
-        punthai_type = is_punthai_only(current_trip_codes + [new_code])
+        all_codes = current_trip_codes + [new_code]
+        trip_data_for_check = test_df[test_df['Code'].isin(all_codes)]
+        punthai_type = is_punthai_only(trip_data_for_check)
         if punthai_type == 'has_maxmart':
             buffer = MAXMART_BUFFER
-        elif punthai_type:
+        elif punthai_type == 'punthai_only':
             buffer = PUNTHAI_BUFFER
         else:
             buffer = BUFFER
@@ -3865,7 +3895,7 @@ def predict_trips(test_df, model_data):
             return False, "เกิน capacity", None
         
         # 4. เช็คจำนวนสาขา (Punthai 4W สูงสุด 5 สาขา)
-        if punthai_type and trip_max_vehicle == '4W':
+        if punthai_type == 'punthai_only' and trip_max_vehicle == '4W':
             punthai_limits = get_punthai_vehicle_limits(trip_max_vehicle)
             if len(current_trip_codes) >= punthai_limits['max_drops']:
                 return False, "เกินจำนวนสาขา Punthai 4W", None
