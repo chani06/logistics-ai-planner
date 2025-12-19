@@ -40,17 +40,23 @@ LIMITS = {
     '6W': {'max_w': 6000, 'max_c': 20.0}   # ไม่จำกัดจุด, Cube ต้องเต็ม, Weight ≤ 6000
 }
 
-# 🔒 ขีดจำกัดสำหรับ Punthai ล้วน
-# - JB (Jumbo): ไม่เกิน 7 drop, Cube ≤ 7
-# - 4W: ถ้า Cube > 5 → ตัดเป็น JB
+# 🔒 ขีดจำกัดสำหรับ Punthai ล้วน (ห้ามเกิน 100%)
+# - 4W: สูงสุด 5 สาขา, Cube ≤ 5
+# - JB: ไม่เกิน 7 drop, Cube ≤ 7
 PUNTHAI_LIMITS = {
-    '4W': {'max_w': 2500, 'max_c': 5.0, 'max_drops': 12},  # Punthai ล้วน: ถ้าเกิน 5 cube → ใช้ JB
+    '4W': {'max_w': 2500, 'max_c': 5.0, 'max_drops': 5},   # 🆕 Punthai ล้วน 4W: สูงสุด 5 สาขา
     'JB': {'max_w': 3500, 'max_c': 7.0, 'max_drops': 7},   # Punthai ล้วน: ไม่เกิน 7 drop, Cube ≤ 7
     '6W': {'max_w': 6000, 'max_c': 20.0, 'max_drops': 999}
 }
 
-# 🚨 ห้ามเกิน 100% - ไม่มี Buffer
-BUFFER = 1.0
+# 🆕 ขีดจำกัดสำหรับ Maxmart (เกินได้ 10% = 110%)
+MAXMART_BUFFER = 1.10  # Maxmart เกินได้ 10%
+
+# 🚨 Punthai ล้วน: ห้ามเกิน 100%
+PUNTHAI_BUFFER = 1.0  # ห้ามเกิน 100%
+
+# 🚨 Buffer ปกติ (ถ้ามี Maxmart รวม)
+BUFFER = 1.0  # Default
 
 # 🚨 จำกัดระยะห่างสาขาในทริปเดียวกัน (consecutive distance)
 MAX_DISTANCE_IN_TRIP = 50  # km - สาขาในทริปเดียวกันห้ามห่างกันเกิน 50km (สำหรับกรุงเทพ/ปริมณฑล)
@@ -821,6 +827,7 @@ def is_punthai_only(trip_data):
     
     Returns:
         'punthai_only': ถ้าทั้งหมดเป็น Punthai (BU = 211 หรือชื่อมี PUNTHAI)
+        'has_maxmart': 🆕 ถ้ามี Maxmart รวมด้วย (BU != 211 และไม่ใช่ PUNTHAI)
         'mixed': ถ้ามีทั้ง Punthai และอื่น
         'other': ถ้าไม่มี Punthai เลย
     """
@@ -828,6 +835,7 @@ def is_punthai_only(trip_data):
         return 'other'
     
     punthai_count = 0
+    maxmart_count = 0  # 🆕 นับ Maxmart
     total_count = len(trip_data)
     
     for _, row in trip_data.iterrows():
@@ -837,56 +845,85 @@ def is_punthai_only(trip_data):
         # เช็ค BU = 211 หรือชื่อมี PUNTHAI
         if bu == 211 or bu == '211' or 'PUNTHAI' in name:
             punthai_count += 1
+        elif 'MAXMART' in name or (bu and bu != 211 and bu != '211'):
+            # 🆕 เช็ค Maxmart
+            maxmart_count += 1
     
     if punthai_count == total_count:
         return 'punthai_only'
+    elif maxmart_count > 0:
+        return 'has_maxmart'  # 🆕 มี Maxmart → เกินได้ 10%
     elif punthai_count > 0:
         return 'mixed'
     else:
         return 'other'
 
+def get_trip_buffer(trip_data):
+    """
+    🆕 ดึง Buffer ที่เหมาะสมสำหรับทริป
+    
+    กฎ:
+    - Punthai ล้วน: Buffer = 1.0 (ห้ามเกิน 100%)
+    - มี Maxmart: Buffer = 1.10 (เกินได้ 10%)
+    """
+    trip_type = is_punthai_only(trip_data)
+    
+    if trip_type == 'punthai_only':
+        return PUNTHAI_BUFFER  # 1.0 ห้ามเกิน 100%
+    elif trip_type == 'has_maxmart':
+        return MAXMART_BUFFER  # 1.10 เกินได้ 10%
+    else:
+        return BUFFER  # Default 1.0
+
 def get_punthai_vehicle_limits(trip_data, total_cube, branch_count):
     """
     ดึงข้อจำกัดรถสำหรับ Punthai
     
-    กฎ:
-    - Punthai ล้วน + JB: ไม่เกิน 7 drop
-    - Punthai ล้วน + 4W: ถ้า Cube > 5 → ตัดเป็น JB
-    - ผสม (Punthai + อื่น): ถ้า Cube 3-4 → 6W ได้, ถ้าเกิน → ตัดเป็น 4W เท่านั้น
+    🆕 กฎใหม่:
+    - Punthai ล้วน + 4W: สูงสุด 5 สาขา, Cube ≤ 5, ห้ามเกิน 100%
+    - Punthai ล้วน + JB: ไม่เกิน 7 drop, Cube ≤ 7, ห้ามเกิน 100%
+    - มี Maxmart: เกินได้ 10%
+    - น้ำหนักถึงก่อน → ตัดน้ำหนัก, Cube ถึงก่อน → ตัด Cube
     
     Returns:
-        dict: {'max_vehicle': '4W'/'JB'/'6W', 'max_drops': int, 'should_split': bool}
+        dict: {'max_vehicle': '4W'/'JB'/'6W', 'max_drops': int, 'should_split': bool, 'buffer': float}
     """
     punthai_type = is_punthai_only(trip_data)
     
     if punthai_type == 'punthai_only':
-        # Punthai ล้วน
-        if total_cube > 5.0:
-            # Cube เกิน 5 → ใช้ JB (ไม่ใช้ 4W)
+        # 🆕 Punthai ล้วน: ห้ามเกิน 100%
+        if total_cube > 5.0 or branch_count > 5:
+            # 🆕 Cube เกิน 5 หรือ สาขาเกิน 5 → ใช้ JB (ไม่ใช้ 4W)
             if branch_count > 7:
                 # เกิน 7 drop → ต้องแยก
-                return {'max_vehicle': 'JB', 'max_drops': 7, 'should_split': True}
+                return {'max_vehicle': 'JB', 'max_drops': 7, 'should_split': True, 'buffer': PUNTHAI_BUFFER}
             else:
-                return {'max_vehicle': 'JB', 'max_drops': 7, 'should_split': False}
+                return {'max_vehicle': 'JB', 'max_drops': 7, 'should_split': False, 'buffer': PUNTHAI_BUFFER}
         else:
-            # Cube ≤ 5 → ใช้ 4W ได้
-            return {'max_vehicle': '4W', 'max_drops': 12, 'should_split': False}
+            # 🆕 Cube ≤ 5 และ สาขา ≤ 5 → ใช้ 4W ได้
+            return {'max_vehicle': '4W', 'max_drops': 5, 'should_split': False, 'buffer': PUNTHAI_BUFFER}
+    
+    elif punthai_type == 'has_maxmart':
+        # 🆕 มี Maxmart: เกินได้ 10%
+        if total_cube <= 5.0:
+            return {'max_vehicle': '4W', 'max_drops': 12, 'should_split': False, 'buffer': MAXMART_BUFFER}
+        elif total_cube <= 7.0:
+            return {'max_vehicle': 'JB', 'max_drops': 12, 'should_split': False, 'buffer': MAXMART_BUFFER}
+        else:
+            return {'max_vehicle': '6W', 'max_drops': 999, 'should_split': False, 'buffer': MAXMART_BUFFER}
     
     elif punthai_type == 'mixed':
         # ผสม (Punthai + อื่น): 4W max_c = 4.0
         if total_cube <= 4.0:
-            # Cube ≤ 4 → ใช้ 4W ได้
-            return {'max_vehicle': '4W', 'max_drops': 12, 'should_split': False}
+            return {'max_vehicle': '4W', 'max_drops': 12, 'should_split': False, 'buffer': BUFFER}
         elif total_cube <= 7.0:
-            # Cube 4-7 → ใช้ JB
-            return {'max_vehicle': 'JB', 'max_drops': 12, 'should_split': False}
+            return {'max_vehicle': 'JB', 'max_drops': 12, 'should_split': False, 'buffer': BUFFER}
         else:
-            # Cube > 7 → ต้องแยก
-            return {'max_vehicle': 'JB', 'max_drops': 12, 'should_split': True}
+            return {'max_vehicle': 'JB', 'max_drops': 12, 'should_split': True, 'buffer': BUFFER}
     
     else:
         # ไม่มี Punthai → ไม่มีข้อจำกัดพิเศษ
-        return {'max_vehicle': '6W', 'max_drops': 999, 'should_split': False}
+        return {'max_vehicle': '6W', 'max_drops': 999, 'should_split': False, 'buffer': BUFFER}
 
 def get_max_vehicle_for_branch(branch_code):
     """ดึงรถใหญ่สุดที่สาขานี้รองรับ - ใช้จาก Auto Plan เท่านั้น!"""
@@ -3776,35 +3813,45 @@ def predict_trips(test_df, model_data):
     # รวม cluster ตามประวัติ
     history_clusters = merge_clusters_by_history(district_clusters, trip_pairs)
     
-    # 🗺️ เรียง cluster ตามจังหวัด → เงื่อนไขรถ → อำเภอ → ระยะทาง
+    # 🗺️ เรียง cluster ตาม ตำบล → อำเภอ → จังหวัด → ภาค → เงื่อนไขรถ → ระยะทาง
     def get_cluster_sort_key(cluster):
-        """คืน sort key สำหรับ cluster: (province, vehicle_order, district, -max_distance)
+        """คืน sort key สำหรับ cluster:
         
-        🆕 เรียงลำดับใหม่:
-        1. จังหวัด (ตามตัวอักษร)
-        2. เงื่อนไขรถ (6W → JB → 4W) - รถใหญ่ก่อน
-        3. อำเภอ (ตามตัวอักษร)
-        4. ระยะทาง (ไกลมาใกล้)
+        🆕 เรียงลำดับใหม่ (จากเล็กไปใหญ่):
+        1. ตำบล (ตามตัวอักษร) - สาขาตำบลเดียวกันอยู่ติดกัน
+        2. อำเภอ (ตามตัวอักษร) - สาขาอำเภอเดียวกันอยู่ติดกัน
+        3. จังหวัด (ตามตัวอักษร)
+        4. ภาค (ใต้ → เหนือ → อีสาน → กลาง)
+        5. เงื่อนไขรถ (6W → JB → 4W) - รถใหญ่ก่อน
+        6. ระยะทาง (ไกลมาใกล้)
         """
+        region_order_map = {'south': 0, 'north': 1, 'far': 2, 'nearby': 3, 'unknown': 4}
         vehicle_order_map = {'6W': 0, 'JB': 1, '4W': 2}  # 6W ก่อน JB ก่อน 4W
         
-        # หา province, district, vehicle_type ของ cluster
-        provinces = []
+        # หา subdistrict, district, province, region, vehicle_type ของ cluster
+        subdistricts = []
         districts = []
+        provinces = []
+        regions = []
         vehicle_types = []
         max_dist = 0
         
         for code in cluster:
-            prov = province_cache.get(code, '')
+            subdist = subdistrict_cache.get(code, '')
             dist = district_cache.get(code, '')
+            prov = province_cache.get(code, '')
+            region = get_region_type(prov) if prov else 'unknown'
             
             # 🆕 ดึงเงื่อนไขรถของสาขา
             vehicle_type = get_max_vehicle_for_branch(code)  # '4W', 'JB', or '6W'
             
-            if prov:
-                provinces.append(prov)
+            if subdist:
+                subdistricts.append(subdist)
             if dist:
                 districts.append(dist)
+            if prov:
+                provinces.append(prov)
+            regions.append(region)
             vehicle_types.append(vehicle_type)
             
             # คำนวณระยะทางจาก DC
@@ -3813,12 +3860,13 @@ def predict_trips(test_df, model_data):
                 d = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
                 max_dist = max(max_dist, d)
         
-        # 🆕 ใช้จังหวัดที่พบบ่อยที่สุด
-        main_province = max(set(provinces), key=provinces.count) if provinces else ''
+        # 🆕 ใช้ค่าที่พบบ่อยที่สุด
+        main_subdistrict = max(set(subdistricts), key=subdistricts.count) if subdistricts else ''
         main_district = max(set(districts), key=districts.count) if districts else ''
+        main_province = max(set(provinces), key=provinces.count) if provinces else ''
+        main_region = max(set(regions), key=regions.count) if regions else 'unknown'
         
         # 🆕 ใช้เงื่อนไขรถที่ จำกัดที่สุด (4W < JB < 6W)
-        # ถ้ามี 4W ใน cluster → ทั้ง cluster ต้องใช้ 4W
         if '4W' in vehicle_types:
             main_vehicle = '4W'
         elif 'JB' in vehicle_types:
@@ -3826,9 +3874,17 @@ def predict_trips(test_df, model_data):
         else:
             main_vehicle = '6W'
         
-        return (main_province, vehicle_order_map.get(main_vehicle, 2), main_district, -max_dist)
+        # 🆕 Sort key: ตำบล → อำเภอ → จังหวัด → ภาค → เงื่อนไขรถ → ระยะทาง (ไกลก่อน)
+        return (
+            main_subdistrict,  # 1. ตำบล
+            main_district,      # 2. อำเภอ
+            main_province,      # 3. จังหวัด
+            region_order_map.get(main_region, 4),  # 4. ภาค
+            vehicle_order_map.get(main_vehicle, 2),  # 5. เงื่อนไขรถ
+            -max_dist           # 6. ระยะทาง (ไกลก่อน)
+        )
     
-    # 🆕 เรียง clusters ตามจังหวัด → เงื่อนไขรถ → อำเภอ → ระยะทาง
+    # 🆕 เรียง clusters ตาม ตำบล → อำเภอ → จังหวัด → ภาค → เงื่อนไขรถ → ระยะทาง
     history_clusters.sort(key=get_cluster_sort_key)
     
     # เรียงสาขาภายใน cluster ตามระยะทาง (ไกล → ใกล้)
