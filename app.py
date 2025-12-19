@@ -5390,8 +5390,8 @@ def predict_trips(test_df, model_data):
                 if prov and prov != 'UNKNOWN':
                     provinces.add(prov)
             
-            # เช็คว่าทุกจังหวัดเป็นพื้นที่ใกล้หรือไม่
-            all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
+            # 🔒 เช็คว่ามีสาขาใดอยู่ในพื้นที่ nearby หรือไม่ → ถ้ามีแม้สาขาเดียว ห้าม 6W
+            all_nearby = any(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
             has_north = any(get_region_type(p) == 'north' for p in provinces) if provinces else False
             has_south = any(get_region_type(p) == 'south' for p in provinces) if provinces else False
             
@@ -5617,7 +5617,8 @@ def predict_trips(test_df, model_data):
             if prov != 'UNKNOWN':
                 provinces.add(prov)
         
-        all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
+        # 🔒 ถ้ามีสาขาใดอยู่ nearby แม้สาขาเดียว → ห้าม 6W
+        all_nearby = any(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
         current_vehicle = trip_recommended_vehicles.get(trip_num, '4W')  # Start with 4W
         
         if all_nearby and current_vehicle == '6W':
@@ -5699,7 +5700,8 @@ def predict_trips(test_df, model_data):
             prov = get_province(code)
             if prov and prov != 'UNKNOWN':
                 provinces.add(prov)
-        all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
+        # 🔒 ถ้ามีสาขาใดอยู่ nearby แม้สาขาเดียว → ห้าม 6W
+        all_nearby = any(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
         
         # 🔒 ปริมณฑล = บังคับ JB หรือ 4W (ห้าม 6W)
         if all_nearby and max_allowed == '6W':
@@ -6253,7 +6255,8 @@ def predict_trips(test_df, model_data):
             if prov != 'UNKNOWN':
                 provinces.add(prov)
         
-        all_nearby = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
+        # 🔒 ถ้ามีสาขาใดอยู่ nearby แม้สาขาเดียว → ห้าม 6W
+        all_nearby = any(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
         
         # ถ้าใช้ 6W และเป็น nearby → บังคับเปลี่ยนเป็น JB
         if current_vehicle == '6W' and all_nearby:
