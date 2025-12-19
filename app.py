@@ -532,7 +532,24 @@ MASTER_DATA = load_master_data()
 def load_location_reference():
     """โหลดไฟล์ สถานที่ส่ง.xlsx และสร้าง Reference mapping"""
     try:
-        df = pd.read_excel('Dc/สถานที่ส่ง.xlsx')
+        # 🆕 ลองหลาย path
+        possible_paths = [
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Dc', 'สถานที่ส่ง.xlsx'),
+            'Dc/สถานที่ส่ง.xlsx',
+            'c:/Users/chani/app/Dc/สถานที่ส่ง.xlsx',
+            os.path.join(os.getcwd(), 'Dc', 'สถานที่ส่ง.xlsx'),
+        ]
+        
+        file_path = None
+        for path in possible_paths:
+            if os.path.exists(path):
+                file_path = path
+                break
+        
+        if not file_path:
+            return {}, {}
+        
+        df = pd.read_excel(file_path)
         if 'Reference' in df.columns and 'Plan Code' in df.columns:
             # สร้าง mapping: branch_code -> reference
             code_to_ref = {}
@@ -8820,15 +8837,21 @@ def main():
                         location_map = {}
                         try:
                             import os
-                            # ใช้ absolute path จาก directory ของไฟล์ app.py
-                            app_dir = os.path.dirname(os.path.abspath(__file__))
-                            location_file = os.path.join(app_dir, 'Dc', 'สถานที่ส่ง.xlsx')
+                            # 🆕 ลองหลาย path
+                            possible_paths = [
+                                os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Dc', 'สถานที่ส่ง.xlsx'),
+                                'Dc/สถานที่ส่ง.xlsx',
+                                'c:/Users/chani/app/Dc/สถานที่ส่ง.xlsx',
+                                os.path.join(os.getcwd(), 'Dc', 'สถานที่ส่ง.xlsx'),
+                            ]
                             
-                            # Fallback ถ้าใช้ relative path
-                            if not os.path.exists(location_file):
-                                location_file = 'Dc/สถานที่ส่ง.xlsx'
+                            location_file = None
+                            for path in possible_paths:
+                                if os.path.exists(path):
+                                    location_file = path
+                                    break
                             
-                            if os.path.exists(location_file):
+                            if location_file:
                                 df_location = pd.read_excel(location_file)
                                 for _, loc_row in df_location.iterrows():
                                     code = str(loc_row.get('Plan Code', '')).strip().upper()
@@ -8841,8 +8864,9 @@ def main():
                                             'lat': loc_row.get('ละติจูด', 0),
                                             'lon': loc_row.get('ลองติจูด', 0)
                                         }
+                                st.success(f"✅ โหลด location_map สำเร็จ: {len(location_map)} รายการ")
                             else:
-                                st.warning(f"⚠️ ไม่พบไฟล์สถานที่ส่ง (ลอง: {location_file})")
+                                st.warning(f"⚠️ ไม่พบไฟล์สถานที่ส่ง.xlsx")
                         except Exception as e:
                             st.warning(f"⚠️ ไม่สามารถโหลดไฟล์สถานที่ส่ง: {e}")
                         
