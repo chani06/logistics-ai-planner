@@ -7824,7 +7824,8 @@ def predict_trips(test_df, model_data):
             prov = get_province(code)
             if prov and prov != 'UNKNOWN':
                 provinces.add(prov)
-        is_nearby_trip = all(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
+        # 🔒 ถ้ามีแม้สาขาเดียวใน nearby → ห้าม 6W
+        is_nearby_trip = any(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
         
         # ตรวจสอบว่ารถที่เลือกใส่ของได้จริงหรือไม่ (ห้ามเกิน 100%)
         if suggested in LIMITS:
@@ -8238,34 +8239,77 @@ def predict_trips(test_df, model_data):
     test_df['BranchCount'] = test_df.apply(check_branch_count, axis=1)
     
     # ===============================================
-    # 🎯 Renumber trips: เรียงตามภูมิภาค → ระยะทาง (ทริป 1 = ไกลสุด)
-    # ลำดับภาค: ใต้ → เหนือ → อีสาน/ตะวันออก/ตะวันตก → ปริมณฑล/กทม
+    # 🎯 Renumber trips: เรียงตาม ภาค → จังหวัด → อำเภอ → ตำบล → Route → ระยะทาง
     # ===============================================
     
-    # คำนวณ region และ ระยะทาง centroid ของแต่ละทริปจาก DC
-    trip_info = {}  # {trip_num: (region_order, distance)}
-    region_order_map = {'south': 0, 'north': 1, 'far': 2, 'nearby': 3, 'unknown': 4}
+    # ลำดับความสำคัญของภาค
+    region_order_map = {
+        'กทม/ปริมณฑล': 1,
+        'ภาคกลาง': 2,
+        'ภาคตะวันออก': 3,
+        'ภาคตะวันตก': 4,
+        'ภาคเหนือตอนล่าง': 5,
+        'ภาคเหนือตอนบน': 6,
+        'ภาคอีสานตอนบน': 7,
+        'ภาคอีสานตอนล่าง': 8,
+        'ภาคใต้ตอนบน': 9,
+        'ภาคใต้ตอนล่าง': 10,
+    }
     
     # หาชื่อคอลัมน์ Lat/Lon ที่ถูกต้อง
     lat_col = 'Lat' if 'Lat' in test_df.columns else ('Latitude' if 'Latitude' in test_df.columns else None)
     lon_col = 'Lon' if 'Lon' in test_df.columns else ('Longitude' if 'Longitude' in test_df.columns else None)
     
+    # คำนวณ info ของแต่ละทริป
+    trip_info = {}  # {trip_num: (region_order, province, district, subdistrict, route, -distance)}
+    
     for trip_num in test_df['Trip'].dropna().unique():
         trip_data = test_df[test_df['Trip'] == trip_num]
+        trip_codes = trip_data['Code'].tolist()
         
-        # หา region หลักของทริป (ใช้จังหวัดที่พบบ่อยที่สุด)
-        if 'Province' in trip_data.columns:
-            provinces = trip_data['Province'].dropna().tolist()
-            if provinces:
-                # หา region ของแต่ละจังหวัด
-                regions = [get_region_type(p) for p in provinces]
-                main_region = max(set(regions), key=regions.count) if regions else 'unknown'
-            else:
-                main_region = 'unknown'
-        else:
-            main_region = 'unknown'
+        # หา ภาค/จังหวัด/อำเภอ/ตำบล/Route หลักของทริป
+        region_counts = {}
+        province_counts = {}
+        district_counts = {}
+        subdistrict_counts = {}
+        route_counts = {}
         
-        region_order = region_order_map.get(main_region, 4)
+        for code in trip_codes:
+            code_upper = str(code).strip().upper()
+            
+            # Region
+            if 'Region' in trip_data.columns:
+                region = trip_data[trip_data['Code'] == code]['Region'].iloc[0] if len(trip_data[trip_data['Code'] == code]) > 0 else ''
+                if region:
+                    region_counts[region] = region_counts.get(region, 0) + 1
+            
+            # Province
+            if 'Province' in trip_data.columns:
+                prov = trip_data[trip_data['Code'] == code]['Province'].iloc[0] if len(trip_data[trip_data['Code'] == code]) > 0 else ''
+                if prov:
+                    province_counts[prov] = province_counts.get(prov, 0) + 1
+            
+            # District/Subdistrict/Route จาก LOCATION_INFO
+            if code_upper in LOCATION_INFO:
+                loc_info = LOCATION_INFO[code_upper]
+                district = loc_info.get('อำเภอ', '')
+                subdistrict = loc_info.get('ตำบล', '')
+                if district:
+                    district_counts[district] = district_counts.get(district, 0) + 1
+                if subdistrict:
+                    subdistrict_counts[subdistrict] = subdistrict_counts.get(subdistrict, 0) + 1
+            
+            # Route
+            route = LOCATION_CODE_TO_REF.get(code_upper, '')
+            if route:
+                route_counts[route] = route_counts.get(route, 0) + 1
+        
+        # หาค่าหลักของแต่ละมิติ
+        main_region = max(region_counts.keys(), key=lambda k: region_counts[k]) if region_counts else ''
+        main_province = max(province_counts.keys(), key=lambda k: province_counts[k]) if province_counts else ''
+        main_district = max(district_counts.keys(), key=lambda k: district_counts[k]) if district_counts else ''
+        main_subdistrict = max(subdistrict_counts.keys(), key=lambda k: subdistrict_counts[k]) if subdistrict_counts else ''
+        main_route = max(route_counts.keys(), key=lambda k: route_counts[k]) if route_counts else ''
         
         # คำนวณระยะทาง
         if lat_col and lon_col:
@@ -8280,9 +8324,18 @@ def predict_trips(test_df, model_data):
         else:
             dist = 0
         
-        trip_info[trip_num] = (region_order, -dist)  # -dist เพราะต้องการไกลก่อน
+        region_order = region_order_map.get(main_region, 99)
+        
+        trip_info[trip_num] = (
+            region_order,
+            main_province,
+            main_district,
+            main_subdistrict,
+            main_route,
+            -dist  # -dist เพราะต้องการไกลก่อน
+        )
     
-    # เรียงทริปตาม: ภูมิภาค → ระยะทาง (ไกลก่อน)
+    # เรียงทริปตาม: ภาค → จังหวัด → อำเภอ → ตำบล → Route → ระยะทาง (ไกลก่อน)
     sorted_trips = sorted(trip_info.keys(), key=lambda x: trip_info[x])
     trip_renumber_map = {old: new for new, old in enumerate(sorted_trips, start=1)}
     test_df['Trip'] = test_df['Trip'].map(trip_renumber_map)
