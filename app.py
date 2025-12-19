@@ -2734,7 +2734,8 @@ def predict_trips(test_df, model_data):
             codes_far = []  # ต่างจังหวัด
             
             for code in trip_codes:
-                prov = get_province(code)
+                # 🔧 ใช้ get_province_from_df แทน get_province (เพราะ province_cache ยังไม่มี)
+                prov = get_province_from_df(df, code)
                 if prov and get_region_type(str(prov)) == 'nearby':
                     codes_nearby.append(code)
                 else:
@@ -5182,7 +5183,8 @@ def predict_trips(test_df, model_data):
         codes_far = []  # ต่างจังหวัด (ใช้ 6W ได้)
         
         for code in trip_codes:
-            prov = get_province(code)
+            # 🔧 ใช้ province_cache ที่สร้างไว้แล้ว
+            prov = province_cache.get(code, '')
             if prov and get_region_type(str(prov)) == 'nearby':
                 codes_nearby.append(code)
             else:
