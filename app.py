@@ -3776,27 +3776,36 @@ def predict_trips(test_df, model_data):
     # รวม cluster ตามประวัติ
     history_clusters = merge_clusters_by_history(district_clusters, trip_pairs)
     
-    # 🗺️ เรียง cluster ตามภูมิภาค (ไกล → ใกล้)
+    # 🗺️ เรียง cluster ตามจังหวัด → เงื่อนไขรถ → อำเภอ → ระยะทาง
     def get_cluster_sort_key(cluster):
-        """คืน sort key สำหรับ cluster: (region_order, province, district, -max_distance)"""
-        region_order_map = {'south': 0, 'north': 1, 'far': 2, 'nearby': 3, 'unknown': 4}
+        """คืน sort key สำหรับ cluster: (province, vehicle_order, district, -max_distance)
         
-        # หา region, province, district ของ cluster (ใช้สาขาแรก)
+        🆕 เรียงลำดับใหม่:
+        1. จังหวัด (ตามตัวอักษร)
+        2. เงื่อนไขรถ (6W → JB → 4W) - รถใหญ่ก่อน
+        3. อำเภอ (ตามตัวอักษร)
+        4. ระยะทาง (ไกลมาใกล้)
+        """
+        vehicle_order_map = {'6W': 0, 'JB': 1, '4W': 2}  # 6W ก่อน JB ก่อน 4W
+        
+        # หา province, district, vehicle_type ของ cluster
         provinces = []
         districts = []
-        regions = []
+        vehicle_types = []
         max_dist = 0
         
         for code in cluster:
             prov = province_cache.get(code, '')
             dist = district_cache.get(code, '')
-            region = get_region_type(prov) if prov else 'unknown'
+            
+            # 🆕 ดึงเงื่อนไขรถของสาขา
+            vehicle_type = get_max_vehicle_for_branch(code)  # '4W', 'JB', or '6W'
             
             if prov:
                 provinces.append(prov)
             if dist:
                 districts.append(dist)
-            regions.append(region)
+            vehicle_types.append(vehicle_type)
             
             # คำนวณระยะทางจาก DC
             lat, lon = coord_cache.get(code, (None, None))
@@ -3804,14 +3813,22 @@ def predict_trips(test_df, model_data):
                 d = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
                 max_dist = max(max_dist, d)
         
-        # ใช้ region ที่พบบ่อยที่สุด
-        main_region = max(set(regions), key=regions.count) if regions else 'unknown'
-        main_province = provinces[0] if provinces else ''
-        main_district = districts[0] if districts else ''
+        # 🆕 ใช้จังหวัดที่พบบ่อยที่สุด
+        main_province = max(set(provinces), key=provinces.count) if provinces else ''
+        main_district = max(set(districts), key=districts.count) if districts else ''
         
-        return (region_order_map.get(main_region, 4), main_province, main_district, -max_dist)
+        # 🆕 ใช้เงื่อนไขรถที่ จำกัดที่สุด (4W < JB < 6W)
+        # ถ้ามี 4W ใน cluster → ทั้ง cluster ต้องใช้ 4W
+        if '4W' in vehicle_types:
+            main_vehicle = '4W'
+        elif 'JB' in vehicle_types:
+            main_vehicle = 'JB'
+        else:
+            main_vehicle = '6W'
+        
+        return (main_province, vehicle_order_map.get(main_vehicle, 2), main_district, -max_dist)
     
-    # เรียง clusters ตามภูมิภาค
+    # 🆕 เรียง clusters ตามจังหวัด → เงื่อนไขรถ → อำเภอ → ระยะทาง
     history_clusters.sort(key=get_cluster_sort_key)
     
     # เรียงสาขาภายใน cluster ตามระยะทาง (ไกล → ใกล้)
