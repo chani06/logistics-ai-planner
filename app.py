@@ -3608,11 +3608,13 @@ def predict_trips(test_df, model_data):
             region = get_region_type(province) if province else 'unknown'
             region_groups[region].append(code)
         
-        # 🔥 ฟังก์ชันเรียงสาขาในแต่ละภาคตาม: จังหวัด → อำเภอ → ตำบล → ระยะทาง (ไกล→ใกล้)
+        # 🔥 ฟังก์ชันเรียงสาขาในแต่ละภาคตาม: ตำบล → อำเภอ → จังหวัด → เงื่อนไขรถ → ระยะทาง
         def sort_region_codes(region_codes):
-            """เรียงสาขาในภาคตาม: จังหวัด → อำเภอ → ตำบล → ระยะทาง (ไกล→ใกล้)"""
+            """เรียงสาขาในภาคตาม: ตำบล → อำเภอ → จังหวัด → เงื่อนไขรถ → ระยะทาง (ไกล→ใกล้)"""
             if not region_codes:
                 return []
+            
+            vehicle_order_map = {'6W': 0, 'JB': 1, '4W': 2}  # 6W ก่อน
             
             # สร้างข้อมูลสำหรับเรียง
             code_info = []
@@ -3620,6 +3622,7 @@ def predict_trips(test_df, model_data):
                 province = province_cache.get(code, '')
                 district = district_cache.get(code, '')
                 subdistrict = subdistrict_cache.get(code, '')
+                vehicle_type = get_max_vehicle_for_branch(code)  # เงื่อนไขรถ
                 lat, lon = coord_cache.get(code, (None, None))
                 
                 # คำนวณระยะทางจาก DC (ไกล = ค่ามาก)
@@ -3630,19 +3633,20 @@ def predict_trips(test_df, model_data):
                 
                 code_info.append({
                     'code': code,
-                    'province': province,
-                    'district': district,
                     'subdistrict': subdistrict,
+                    'district': district,
+                    'province': province,
+                    'vehicle_order': vehicle_order_map.get(vehicle_type, 2),
                     'distance': dist
                 })
             
-            # เรียงตาม: จังหวัด → อำเภอ → ตำบล → ระยะทาง (ไกล→ใกล้)
-            # ใช้ -distance เพราะต้องการไกลก่อน
+            # 🆕 เรียงตาม: ตำบล → อำเภอ → จังหวัด → เงื่อนไขรถ → ระยะทาง (ไกล→ใกล้)
             code_info.sort(key=lambda x: (
-                x['province'],
-                x['district'],
-                x['subdistrict'],
-                -x['distance']  # ไกลมาก่อน
+                x['subdistrict'],   # 1. ตำบล
+                x['district'],       # 2. อำเภอ
+                x['province'],       # 3. จังหวัด
+                x['vehicle_order'],  # 4. เงื่อนไขรถ (6W→JB→4W)
+                -x['distance']       # 5. ระยะทาง (ไกลก่อน)
             ))
             
             return [c['code'] for c in code_info]
@@ -3713,26 +3717,27 @@ def predict_trips(test_df, model_data):
     # 🚀 **NEW ALGORITHM: จัดกลุ่มอำเภอ + ประวัติก่อน → เรียงภูมิภาค → จัดทริป**
     # 
     # ขั้นตอน:
-    # 1. 🏘️ จัดกลุ่มสาขาตามอำเภอก่อน - สาขาในอำเภอเดียวกันต้องอยู่ติดกัน
+    # 1. 🏘️ จัดกลุ่มสาขาตามตำบล → อำเภอ → จังหวัด - สาขาในพื้นที่เดียวกันต้องอยู่ติดกัน
     # 2. 📜 รวม cluster ตามประวัติ (trip_pairs) - สาขาที่เคยไปด้วยกันต้องอยู่ติดกัน
-    # 3. 🗺️ เรียงกลุ่มตามภูมิภาค (ใต้ → เหนือ → อีสาน → กทม/ปริมณฑล)
+    # 3. 🗺️ เรียงกลุ่มตาม ตำบล → อำเภอ → จังหวัด → ภาค → เงื่อนไขรถ → ระยะทาง
     # 4. 🚛 จัดทริปตามลำดับที่เรียงแล้ว
     
     all_codes_original = test_df['Code'].unique().tolist()
     
-    # 🏘️ Phase 0.1: จัดกลุ่มสาขาตามอำเภอก่อน
+    # 🏘️ Phase 0.1: จัดกลุ่มสาขาตาม ตำบล + อำเภอ + จังหวัด
     def cluster_by_district(codes):
-        """จัดกลุ่มสาขาตามอำเภอ - สาขาในอำเภอเดียวกันต้องอยู่ติดกัน"""
-        district_groups = {}
+        """จัดกลุ่มสาขาตาม ตำบล + อำเภอ + จังหวัด - สาขาในพื้นที่เดียวกันต้องอยู่ติดกัน"""
+        location_groups = {}
         for code in codes:
+            subdistrict = subdistrict_cache.get(code, '')
             district = district_cache.get(code, '')
             province = province_cache.get(code, '')
-            # ใช้ province + district เป็น key เพราะอำเภอชื่อซ้ำข้ามจังหวัดได้
-            key = f"{province}|{district}" if district else f"no_district|{code}"
-            if key not in district_groups:
-                district_groups[key] = []
-            district_groups[key].append(code)
-        return list(district_groups.values())
+            # 🆕 ใช้ ตำบล + อำเภอ + จังหวัด เป็น key
+            key = f"{subdistrict}|{district}|{province}" if subdistrict else f"{district}|{province}" if district else f"no_location|{code}"
+            if key not in location_groups:
+                location_groups[key] = []
+            location_groups[key].append(code)
+        return list(location_groups.values())
     
     # 📜 Phase 0.2: จัดกลุ่มสาขาตามประวัติ (trip_pairs clustering)
     # สาขาที่เคยไปด้วยกันจะอยู่ใน cluster เดียวกัน
@@ -3904,15 +3909,28 @@ def predict_trips(test_df, model_data):
     # 🆕 เรียง clusters ตาม ตำบล → อำเภอ → จังหวัด → ภาค → เงื่อนไขรถ → ระยะทาง
     history_clusters.sort(key=get_cluster_sort_key)
     
-    # เรียงสาขาภายใน cluster ตามระยะทาง (ไกล → ใกล้)
+    # 🆕 เรียงสาขาภายใน cluster ตาม ตำบล → อำเภอ → จังหวัด → เงื่อนไขรถ → ระยะทาง
     def sort_cluster_codes(cluster):
-        """เรียงสาขาใน cluster ตามระยะทางจาก DC (ไกลมาก่อน)"""
-        def get_dist(code):
+        """เรียงสาขาใน cluster ตาม: ตำบล → อำเภอ → จังหวัด → เงื่อนไขรถ → ระยะทาง (ไกลก่อน)"""
+        vehicle_order_map = {'6W': 0, 'JB': 1, '4W': 2}
+        
+        def get_sort_key(code):
+            subdistrict = subdistrict_cache.get(code, '')
+            district = district_cache.get(code, '')
+            province = province_cache.get(code, '')
+            vehicle_type = get_max_vehicle_for_branch(code)
             lat, lon = coord_cache.get(code, (None, None))
-            if lat and lon:
-                return haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
-            return 0
-        return sorted(cluster, key=lambda c: -get_dist(c))  # ไกลมาก่อน
+            dist = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon) if lat and lon else 0
+            
+            return (
+                subdistrict,    # 1. ตำบล
+                district,        # 2. อำเภอ
+                province,        # 3. จังหวัด
+                vehicle_order_map.get(vehicle_type, 2),  # 4. เงื่อนไขรถ
+                -dist            # 5. ระยะทาง (ไกลก่อน)
+            )
+        
+        return sorted(cluster, key=get_sort_key)
     
     # รวม clusters เป็น list เดียว (เรียงตามภูมิภาค + ประวัติอยู่ติดกัน)
     all_codes_ordered = []
@@ -9091,15 +9109,21 @@ def main():
                                     continue
                                 trip_data = result_df[result_df['Trip'] == trip_num].copy()
                                 
-                                # 🆕 เพิ่มคอลัมน์จังหวัดจาก location_map เพื่อใช้ sort
-                                trip_data['_province'] = trip_data['Code'].apply(
-                                    lambda c: location_map.get(str(c).upper(), {}).get('จังหวัด', '')
+                                # 🆕 เพิ่มคอลัมน์จาก location_map เพื่อใช้ sort
+                                trip_data['_subdistrict'] = trip_data['Code'].apply(
+                                    lambda c: location_map.get(str(c).upper(), {}).get('ตำบล', '')
                                 )
                                 trip_data['_district'] = trip_data['Code'].apply(
                                     lambda c: location_map.get(str(c).upper(), {}).get('อำเภอ', '')
                                 )
-                                # 🆕 Sort สาขาภายในทริปตามจังหวัด → อำเภอ
-                                trip_data = trip_data.sort_values(['_province', '_district', 'Code'], ascending=[True, True, True])
+                                trip_data['_province'] = trip_data['Code'].apply(
+                                    lambda c: location_map.get(str(c).upper(), {}).get('จังหวัด', '')
+                                )
+                                trip_data['_route'] = trip_data['Code'].apply(
+                                    lambda c: location_map.get(str(c).upper(), {}).get('Route', '')
+                                )
+                                # 🆕 Sort สาขาภายในทริปตาม ตำบล → อำเภอ → จังหวัด → Route
+                                trip_data = trip_data.sort_values(['_subdistrict', '_district', '_province', '_route', 'Code'], ascending=[True, True, True, True, True])
                                 
                                 trip_no = trip_no_map.get(trip_num, '')
                                 
@@ -9218,15 +9242,21 @@ def main():
                                     continue
                                 trip_data = result_df[result_df['Trip'] == trip_num].copy()
                                 
-                                # 🆕 เพิ่มคอลัมน์จังหวัดจาก location_map เพื่อใช้ sort
-                                trip_data['_province'] = trip_data['Code'].apply(
-                                    lambda c: location_map.get(str(c).upper(), {}).get('จังหวัด', '')
+                                # 🆕 เพิ่มคอลัมน์จาก location_map เพื่อใช้ sort
+                                trip_data['_subdistrict'] = trip_data['Code'].apply(
+                                    lambda c: location_map.get(str(c).upper(), {}).get('ตำบล', '')
                                 )
                                 trip_data['_district'] = trip_data['Code'].apply(
                                     lambda c: location_map.get(str(c).upper(), {}).get('อำเภอ', '')
                                 )
-                                # 🆕 Sort สาขาภายในทริปตามจังหวัด → อำเภอ
-                                trip_data = trip_data.sort_values(['_province', '_district', 'Code'], ascending=[True, True, True])
+                                trip_data['_province'] = trip_data['Code'].apply(
+                                    lambda c: location_map.get(str(c).upper(), {}).get('จังหวัด', '')
+                                )
+                                trip_data['_route'] = trip_data['Code'].apply(
+                                    lambda c: location_map.get(str(c).upper(), {}).get('Route', '')
+                                )
+                                # 🆕 Sort สาขาภายในทริปตาม ตำบล → อำเภอ → จังหวัด → Route
+                                trip_data = trip_data.sort_values(['_subdistrict', '_district', '_province', '_route', 'Code'], ascending=[True, True, True, True, True])
                                 
                                 trip_no = trip_no_map.get(trip_num, '')
                                 
