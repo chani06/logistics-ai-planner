@@ -8343,30 +8343,40 @@ def predict_trips(test_df, model_data):
     trip_renumber_map = {old: new for new, old in enumerate(sorted_trips, start=1)}
     test_df['Trip'] = test_df['Trip'].map(trip_renumber_map)
     
-    # 🔄 เรียงสาขาในแต่ละทริปจากไกลมาใกล้ด้วย
-    if lat_col and lon_col:
-        for trip_num in test_df['Trip'].dropna().unique():
-            trip_mask = test_df['Trip'] == trip_num
-            trip_data = test_df[trip_mask].copy()
+    # 🔄 เรียงสาขาในแต่ละทริปตาม อำเภอ → ตำบล → Route → ระยะทาง (ไกลก่อน) ป้องกันกระโดด
+    for trip_num in test_df['Trip'].dropna().unique():
+        trip_mask = test_df['Trip'] == trip_num
+        trip_data = test_df[trip_mask].copy()
+        
+        if len(trip_data) > 1:
+            # คำนวณ sort key สำหรับแต่ละสาขา
+            branch_sort = []
+            for idx, row in trip_data.iterrows():
+                code = str(row.get('Code', '')).strip().upper()
+                
+                # ดึง district, subdistrict, route จาก LOCATION_INFO
+                loc_info = LOCATION_INFO.get(code, {})
+                district = loc_info.get('อำเภอ', '') or ''
+                subdistrict = loc_info.get('ตำบล', '') or ''
+                route = LOCATION_CODE_TO_REF.get(code, '') or ''
+                
+                # คำนวณระยะทาง
+                lat_val = row.get(lat_col) if lat_col else None
+                lon_val = row.get(lon_col) if lon_col else None
+                if pd.notna(lat_val) and pd.notna(lon_val):
+                    dist = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat_val, lon_val)
+                else:
+                    dist = 0
+                
+                # Sort key: อำเภอ → ตำบล → Route → ระยะทาง (ไกลก่อน)
+                branch_sort.append((idx, district, subdistrict, route, -dist))
             
-            if len(trip_data) > 1:
-                # คำนวณระยะทางของแต่ละสาขาจาก DC
-                branch_dists = []
-                for idx, row in trip_data.iterrows():
-                    lat_val = row.get(lat_col)
-                    lon_val = row.get(lon_col)
-                    if pd.notna(lat_val) and pd.notna(lon_val):
-                        dist = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat_val, lon_val)
-                    else:
-                        dist = 0
-                    branch_dists.append((idx, dist))
-                
-                # เรียงจากไกลมาใกล้
-                branch_dists.sort(key=lambda x: -x[1])
-                
-                # กำหนด Sequence ใหม่
-                for seq, (idx, _) in enumerate(branch_dists, start=1):
-                    test_df.loc[idx, 'Sequence'] = seq
+            # เรียงตาม อำเภอ → ตำบล → Route → ระยะทาง
+            branch_sort.sort(key=lambda x: (x[1], x[2], x[3], x[4]))
+            
+            # กำหนด Sequence ใหม่
+            for seq, (idx, _, _, _, _) in enumerate(branch_sort, start=1):
+                test_df.loc[idx, 'Sequence'] = seq
     
     # อัปเดต summary_df ด้วย
     if 'Trip' in summary_df.columns:
