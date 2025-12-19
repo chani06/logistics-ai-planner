@@ -8550,42 +8550,54 @@ def main():
                         # ดาวน์โหลด - เขียนทับชีต 2.Punthai ในไฟล์ต้นฉบับ พร้อมสลับสีเหลืองโทนส้ม-ขาว
                         output = io.BytesIO()
                         
-                        # 🆕 โหลด location_map พร้อมพิกัดจากไฟล์ สถานที่ส่ง.xlsx ก่อน
+                        # 🆕 ใช้ LOCATION_INFO และ LOCATION_COORDS ที่โหลดไว้แล้วจาก global
                         location_map = {}
-                        try:
-                            import os
-                            # 🆕 ลองหลาย path
-                            possible_paths = [
-                                os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Dc', 'สถานที่ส่ง.xlsx'),
-                                'Dc/สถานที่ส่ง.xlsx',
-                                'c:/Users/chani/app/Dc/สถานที่ส่ง.xlsx',
-                                os.path.join(os.getcwd(), 'Dc', 'สถานที่ส่ง.xlsx'),
-                            ]
-                            
-                            location_file = None
-                            for path in possible_paths:
-                                if os.path.exists(path):
-                                    location_file = path
-                                    break
-                            
-                            if location_file:
-                                df_location = pd.read_excel(location_file)
-                                for _, loc_row in df_location.iterrows():
-                                    code = str(loc_row.get('Plan Code', '')).strip().upper()
-                                    if code and code != 'NAN':
-                                        location_map[code] = {
-                                            'ตำบล': str(loc_row.get('ตำบล', '')).strip() if pd.notna(loc_row.get('ตำบล')) else '',
-                                            'อำเภอ': str(loc_row.get('อำเภอ', '')).strip() if pd.notna(loc_row.get('อำเภอ')) else '',
-                                            'จังหวัด': str(loc_row.get('จังหวัด', '')).strip() if pd.notna(loc_row.get('จังหวัด')) else '',
-                                            'Route': str(loc_row.get('Reference', '')).strip() if pd.notna(loc_row.get('Reference')) else '',
-                                            'lat': loc_row.get('ละติจูด', 0),
-                                            'lon': loc_row.get('ลองติจูด', 0)
-                                        }
-                                st.success(f"✅ โหลด location_map สำเร็จ: {len(location_map)} รายการ")
-                            else:
-                                st.warning(f"⚠️ ไม่พบไฟล์สถานที่ส่ง.xlsx")
-                        except Exception as e:
-                            st.warning(f"⚠️ ไม่สามารถโหลดไฟล์สถานที่ส่ง: {e}")
+                        # สร้าง location_map จาก LOCATION_INFO และ LOCATION_COORDS
+                        for code in LOCATION_INFO.keys():
+                            loc_info = LOCATION_INFO.get(code, {})
+                            coords = LOCATION_COORDS.get(code, (0, 0))
+                            route = LOCATION_CODE_TO_REF.get(code, '')
+                            location_map[code] = {
+                                'ตำบล': loc_info.get('ตำบล', ''),
+                                'อำเภอ': loc_info.get('อำเภอ', ''),
+                                'จังหวัด': loc_info.get('จังหวัด', ''),
+                                'Route': route,
+                                'lat': coords[0] if coords else 0,
+                                'lon': coords[1] if coords else 0
+                            }
+                        
+                        # Fallback: ถ้า LOCATION_INFO ว่าง ลองโหลดจากไฟล์อีกครั้ง
+                        if len(location_map) == 0:
+                            try:
+                                import os
+                                possible_paths = [
+                                    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Dc', 'สถานที่ส่ง.xlsx'),
+                                    'Dc/สถานที่ส่ง.xlsx',
+                                    'c:/Users/chani/app/Dc/สถานที่ส่ง.xlsx',
+                                    os.path.join(os.getcwd(), 'Dc', 'สถานที่ส่ง.xlsx'),
+                                ]
+                                
+                                location_file = None
+                                for path in possible_paths:
+                                    if os.path.exists(path):
+                                        location_file = path
+                                        break
+                                
+                                if location_file:
+                                    df_location = pd.read_excel(location_file)
+                                    for _, loc_row in df_location.iterrows():
+                                        code = str(loc_row.get('Plan Code', '')).strip().upper()
+                                        if code and code != 'NAN':
+                                            location_map[code] = {
+                                                'ตำบล': str(loc_row.get('ตำบล', '')).strip() if pd.notna(loc_row.get('ตำบล')) else '',
+                                                'อำเภอ': str(loc_row.get('อำเภอ', '')).strip() if pd.notna(loc_row.get('อำเภอ')) else '',
+                                                'จังหวัด': str(loc_row.get('จังหวัด', '')).strip() if pd.notna(loc_row.get('จังหวัด')) else '',
+                                                'Route': str(loc_row.get('Reference', '')).strip() if pd.notna(loc_row.get('Reference')) else '',
+                                                'lat': loc_row.get('ละติจูด', 0),
+                                                'lon': loc_row.get('ลองติจูด', 0)
+                                            }
+                            except Exception as e:
+                                st.warning(f"⚠️ ไม่สามารถโหลดไฟล์สถานที่ส่ง: {e}")
                         
                         # 🆕 คำนวณระยะทางไกลสุดของแต่ละทริป และเรียงจากไกลมาใกล้
                         def get_trip_max_distance(trip_num, df):
