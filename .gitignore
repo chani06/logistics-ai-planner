@@ -1,4 +1,6 @@
 *.xlsx
 !Dc/Master*.xlsx
+!Dc/สถานที่ส่ง.xlsx
 *.csv
-__pycache__/.history/
+__pycache__/
+.history/
