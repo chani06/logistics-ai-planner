@@ -526,11 +526,11 @@ def load_master_data():
 MASTER_DATA = load_master_data()
 
 # ==========================================
-# 🆕 โหลดไฟล์ สถานที่ส่ง.xlsx สำหรับจับกลุ่มสาขาที่อยู่ที่เดียวกัน (Reference)
+# 🆕 โหลดไฟล์ สถานที่ส่ง.xlsx สำหรับจับกลุ่มสาขาที่อยู่ที่เดียวกัน (Reference) + พิกัด
 # ==========================================
 @st.cache_data(ttl=7200)
 def load_location_reference():
-    """โหลดไฟล์ สถานที่ส่ง.xlsx และสร้าง Reference mapping"""
+    """โหลดไฟล์ สถานที่ส่ง.xlsx และสร้าง Reference mapping + พิกัด + ข้อมูลตำบล/อำเภอ/จังหวัด"""
     try:
         # 🆕 ลองหลาย path
         possible_paths = [
@@ -547,32 +547,56 @@ def load_location_reference():
                 break
         
         if not file_path:
-            return {}, {}
+            return {}, {}, {}, {}
         
         df = pd.read_excel(file_path)
-        if 'Reference' in df.columns and 'Plan Code' in df.columns:
-            # สร้าง mapping: branch_code -> reference
-            code_to_ref = {}
-            # สร้าง reverse mapping: reference -> [branch_codes]
-            ref_to_codes = {}
+        
+        # สร้าง mapping: branch_code -> reference
+        code_to_ref = {}
+        # สร้าง reverse mapping: reference -> [branch_codes]
+        ref_to_codes = {}
+        # 🆕 สร้าง mapping: branch_code -> (lat, lon)
+        code_to_coords = {}
+        # 🆕 สร้าง mapping: branch_code -> {ตำบล, อำเภอ, จังหวัด}
+        code_to_location = {}
+        
+        for _, row in df.iterrows():
+            code = str(row.get('Plan Code', '')).strip().upper()
+            if not code or code == 'NAN':
+                continue
             
-            for _, row in df.iterrows():
-                code = str(row['Plan Code']).strip().upper()
-                ref = str(row['Reference']).strip()
-                
-                if code and ref and code != 'NAN' and ref != 'NAN':
-                    code_to_ref[code] = ref
-                    if ref not in ref_to_codes:
-                        ref_to_codes[ref] = []
-                    ref_to_codes[ref].append(code)
+            # Reference mapping
+            ref = str(row.get('Reference', '')).strip()
+            if ref and ref != 'NAN':
+                code_to_ref[code] = ref
+                if ref not in ref_to_codes:
+                    ref_to_codes[ref] = []
+                ref_to_codes[ref].append(code)
             
-            return code_to_ref, ref_to_codes
-        return {}, {}
+            # 🆕 พิกัด
+            lat = row.get('ละติจูด', None)
+            lon = row.get('ลองติจูด', None)
+            if pd.notna(lat) and pd.notna(lon) and lat != 0 and lon != 0:
+                try:
+                    code_to_coords[code] = (float(lat), float(lon))
+                except:
+                    pass
+            
+            # 🆕 ตำบล/อำเภอ/จังหวัด
+            location_info = {}
+            for col in ['ตำบล', 'อำเภอ', 'จังหวัด']:
+                val = row.get(col, '')
+                if pd.notna(val):
+                    location_info[col] = str(val).strip()
+            if location_info:
+                code_to_location[code] = location_info
+        
+        return code_to_ref, ref_to_codes, code_to_coords, code_to_location
     except Exception as e:
-        return {}, {}
+        return {}, {}, {}, {}
 
-# โหลด Reference mapping
-LOCATION_CODE_TO_REF, LOCATION_REF_TO_CODES = load_location_reference()
+# โหลด Reference mapping + พิกัด + ข้อมูลตำบล/อำเภอ/จังหวัด
+LOCATION_CODE_TO_REF, LOCATION_REF_TO_CODES, LOCATION_COORDS, LOCATION_INFO = load_location_reference()
 
 @st.cache_data(ttl=3600)  # Cache 1 ชั่วโมง
 def load_booking_history_restrictions():
@@ -997,7 +1021,17 @@ def get_max_vehicle_for_trip(trip_codes):
 
 def get_required_vehicle_by_distance(branch_code):
     """ตรวจสอบว่าสาขาต้องใช้รถอะไรตามระยะทางจาก DC"""
-    # ดึงพิกัดจาก Master
+    code_upper = str(branch_code).strip().upper()
+    
+    # 🆕 ดึงพิกัดจาก LOCATION_COORDS ก่อน (ไฟล์ สถานที่ส่ง.xlsx)
+    if code_upper in LOCATION_COORDS:
+        lat, lon = LOCATION_COORDS[code_upper]
+        distance = calculate_distance_from_dc(lat, lon)
+        if distance > DISTANCE_REQUIRE_6W:
+            return '6W', distance
+        return None, distance
+    
+    # Fallback ไป MASTER_DATA
     if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
         master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == branch_code]
         if len(master_row) > 0:
@@ -1049,15 +1083,30 @@ def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None, p
         # 🆕 คำนวณระยะเฉลี่ยจาก DC และเช็คพื้นที่
         total_dist = 0
         dist_count = 0
-        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
-            for code in trip_codes:
+        for code in trip_codes:
+            code_upper = str(code).strip().upper()
+            
+            # ดึงจังหวัดจาก LOCATION_INFO ก่อน
+            if code_upper in LOCATION_INFO:
+                prov = LOCATION_INFO[code_upper].get('จังหวัด', '')
+                if pd.notna(prov) and get_region_type(prov) == 'nearby':
+                    is_nearby_area = True
+            
+            # ดึงพิกัดจาก LOCATION_COORDS ก่อน
+            if code_upper in LOCATION_COORDS:
+                lat, lon = LOCATION_COORDS[code_upper]
+                dist = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, float(lat), float(lon))
+                total_dist += dist
+                dist_count += 1
+            # Fallback ไป MASTER_DATA
+            elif not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
                 master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
                 if len(master_row) > 0:
-                    prov = master_row.iloc[0].get('จังหวัด', '')
-                    if pd.notna(prov) and get_region_type(prov) == 'nearby':
-                        is_nearby_area = True
+                    if code_upper not in LOCATION_INFO:
+                        prov = master_row.iloc[0].get('จังหวัด', '')
+                        if pd.notna(prov) and get_region_type(prov) == 'nearby':
+                            is_nearby_area = True
                     
-                    # คำนวณระยะจาก DC
                     lat = master_row.iloc[0].get('ละติจูด', None)
                     lon = master_row.iloc[0].get('ลองติจูด', None)
                     if lat and lon and pd.notna(lat) and pd.notna(lon):
@@ -3029,9 +3078,12 @@ def predict_trips(test_df, model_data):
             
             # เช็ค 4: ระยะทางใกล้กันพอ?
             close_distance = False
-            # ดึงพิกัดจาก MASTER_DATA
+            # 🆕 ดึงพิกัดจาก LOCATION_COORDS ก่อน
+            code_upper = str(code).strip().upper()
             code_lat, code_lon = None, None
-            if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+            if code_upper in LOCATION_COORDS:
+                code_lat, code_lon = LOCATION_COORDS[code_upper]
+            elif not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
                 master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
                 if len(master_row) > 0:
                     code_lat = master_row.iloc[0].get('ละติจูด', None)
@@ -3039,8 +3091,11 @@ def predict_trips(test_df, model_data):
             
             if code_lat and code_lon and pd.notna(code_lat) and pd.notna(code_lon):
                 for other_code in trip_codes:
+                    other_upper = str(other_code).strip().upper()
                     other_lat, other_lon = None, None
-                    if not MASTER_DATA.empty:
+                    if other_upper in LOCATION_COORDS:
+                        other_lat, other_lon = LOCATION_COORDS[other_upper]
+                    elif not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
                         other_row = MASTER_DATA[MASTER_DATA['Plan Code'] == other_code]
                         if len(other_row) > 0:
                             other_lat = other_row.iloc[0].get('ละติจูด', None)
@@ -3245,7 +3300,14 @@ def predict_trips(test_df, model_data):
         return all_clusters
     
     def get_lat_lon_from_master(code):
-        """ดึงพิกัดจาก Master Data"""
+        """ดึงพิกัดจากไฟล์ สถานที่ส่ง.xlsx ก่อน แล้ว fallback ไป Master Data"""
+        code_upper = str(code).strip().upper()
+        
+        # 🆕 ลองจาก LOCATION_COORDS ก่อน (ไฟล์ สถานที่ส่ง.xlsx)
+        if code_upper in LOCATION_COORDS:
+            return LOCATION_COORDS[code_upper]
+        
+        # Fallback ไป MASTER_DATA
         if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
             master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
             if len(master_row) > 0:
@@ -7782,10 +7844,14 @@ def predict_trips(test_df, model_data):
         # คำนวณระยะทางรวมของทริป (เส้นทาง: DC → สาขา1 → สาขา2 → ... → DC)
         total_distance = 0
         if trip_codes is not None and len(trip_codes) > 0:
-            # ดึงพิกัดของแต่ละสาขาจาก Master
+            # 🆕 ดึงพิกัดของแต่ละสาขาจาก LOCATION_COORDS ก่อน
             branch_coords = []
             for code in trip_codes:
-                if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                code_upper = str(code).strip().upper()
+                if code_upper in LOCATION_COORDS:
+                    lat, lon = LOCATION_COORDS[code_upper]
+                    branch_coords.append((lat, lon))
+                elif not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
                     master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
                     if len(master_row) > 0:
                         lat = master_row.iloc[0].get('ละติจูด', 0)
@@ -8034,16 +8100,20 @@ def predict_trips(test_df, model_data):
             
             for i, code in enumerate(codes):
                 # หาพิกัดสาขานี้
+                code_upper = str(code).strip().upper()
                 lat, lon = None, None
                 
-                # ลองหาจาก MASTER_DATA ก่อน
-                if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                # 🆕 ลองหาจาก LOCATION_COORDS ก่อน (ไฟล์ สถานที่ส่ง.xlsx)
+                if code_upper in LOCATION_COORDS:
+                    lat, lon = LOCATION_COORDS[code_upper]
+                # Fallback ไป MASTER_DATA
+                elif not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
                     m = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
                     if len(m) > 0:
                         lat = m.iloc[0].get('ละติจูด', 0)
                         lon = m.iloc[0].get('ลองติจูด', 0)
                 
-                # ถ้าไม่มีใน MASTER_DATA ลองหาจาก coord_cache
+                # ถ้าไม่มีใน LOCATION_COORDS หรือ MASTER_DATA ลองหาจาก coord_cache
                 if not lat or not lon:
                     lat, lon = coord_cache.get(code, (None, None)) if 'coord_cache' in dir() else (None, None)
                 
