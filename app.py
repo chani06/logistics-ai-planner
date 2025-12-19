@@ -7984,25 +7984,33 @@ def predict_trips(test_df, model_data):
     
     test_df['Region'] = test_df['Code'].apply(get_region_name)
     
-    # 🆕 เพิ่มคอลัมน์ตำบลและอำเภอจาก Master Data
+    # 🆕 เพิ่มคอลัมน์ตำบลและอำเภอจาก LOCATION_INFO (ไฟล์ สถานที่ส่ง.xlsx)
     def get_subdistrict(code):
-        """ดึงตำบลจาก Master Data"""
-        if MASTER_DATA.empty or 'Plan Code' not in MASTER_DATA.columns:
-            return ''
-        master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
-        if len(master_row) > 0:
-            sub = master_row.iloc[0].get('ตำบล', '')
-            return str(sub).strip() if pd.notna(sub) else ''
+        """ดึงตำบลจาก LOCATION_INFO"""
+        code_upper = str(code).strip().upper()
+        if code_upper in LOCATION_INFO:
+            sub = LOCATION_INFO[code_upper].get('ตำบล', '')
+            return str(sub).strip() if sub else ''
+        # Fallback ไป MASTER_DATA
+        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+            master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+            if len(master_row) > 0:
+                sub = master_row.iloc[0].get('ตำบล', '')
+                return str(sub).strip() if pd.notna(sub) else ''
         return ''
     
     def get_district(code):
-        """ดึงอำเภอจาก Master Data"""
-        if MASTER_DATA.empty or 'Plan Code' not in MASTER_DATA.columns:
-            return ''
-        master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
-        if len(master_row) > 0:
-            dist = master_row.iloc[0].get('อำเภอ', '')
-            return str(dist).strip() if pd.notna(dist) else ''
+        """ดึงอำเภอจาก LOCATION_INFO"""
+        code_upper = str(code).strip().upper()
+        if code_upper in LOCATION_INFO:
+            dist = LOCATION_INFO[code_upper].get('อำเภอ', '')
+            return str(dist).strip() if dist else ''
+        # Fallback ไป MASTER_DATA
+        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+            master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+            if len(master_row) > 0:
+                dist = master_row.iloc[0].get('อำเภอ', '')
+                return str(dist).strip() if pd.notna(dist) else ''
         return ''
     
     test_df['Subdistrict'] = test_df['Code'].apply(get_subdistrict)
