@@ -8670,6 +8670,7 @@ def main():
                         trip_provinces = {}
                         trip_districts = {}
                         trip_routes = {}
+                        trip_vehicles = {}  # 🆕 เก็บประเภทรถของแต่ละทริป
                         for trip_num in result_df['Trip'].unique():
                             if trip_num == 0:
                                 continue
@@ -8677,17 +8678,29 @@ def main():
                             trip_provinces[trip_num] = get_trip_main_province(trip_num, result_df)
                             trip_districts[trip_num] = get_trip_main_district(trip_num, result_df)
                             trip_routes[trip_num] = get_trip_main_route(trip_num, result_df)
+                            # 🆕 ดึงประเภทรถ
+                            trip_summary = summary[summary['Trip'] == trip_num]
+                            if len(trip_summary) > 0:
+                                truck_info = trip_summary.iloc[0]['Truck']
+                                vehicle_type = truck_info.split()[0] if truck_info else '6W'
+                                trip_vehicles[trip_num] = vehicle_type
+                            else:
+                                trip_vehicles[trip_num] = '6W'
                         
-                        # 🆕 เรียงลำดับทริป: จังหวัด → อำเภอ → Route → ระยะทาง (ไกลมาใกล้)
+                        # 🆕 ลำดับความสำคัญของรถ: 4W → JB → 6W (เล็กไปใหญ่)
+                        vehicle_order = {'4W': 1, 'JB': 2, '6W': 3}
+                        
+                        # 🆕 เรียงลำดับทริป: ประเภทรถ → จังหวัด → อำเภอ → Route → ระยะทาง (ไกลมาใกล้)
                         sorted_trips = sorted(trip_distances.keys(), 
                                              key=lambda t: (
+                                                 vehicle_order.get(trip_vehicles.get(t, '6W'), 3),
                                                  trip_provinces.get(t, ''),
                                                  trip_districts.get(t, ''),
                                                  trip_routes.get(t, ''),
                                                  -trip_distances.get(t, 0)
                                              ))
                         
-                        # สร้าง Trip_No map (เรียงตาม จังหวัด → อำเภอ → Route → ระยะทาง)
+                        # สร้าง Trip_No map (เรียงตาม ประเภทรถ → จังหวัด → อำเภอ → Route → ระยะทาง)
                         trip_no_map = {}
                         vehicle_counts = {'4W': 0, '4WJ': 0, '6W': 0}
                         
