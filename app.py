@@ -8673,11 +8673,41 @@ def main():
                                 return max(route_counts.keys(), key=lambda r: route_counts[r])
                             return ''
                         
-                        # เรียงทริปตาม จังหวัด → อำเภอ → Route → ระยะทาง (ไกลมาใกล้)
+                        # 🆕 ดึงภาคหลักของแต่ละทริป
+                        def get_trip_main_region(trip_num, df):
+                            """ดึงภาคหลักของทริป"""
+                            trip_data = df[df['Trip'] == trip_num]
+                            region_counts = {}
+                            for _, row in trip_data.iterrows():
+                                region = row.get('Region', '')
+                                if region:
+                                    region_counts[region] = region_counts.get(region, 0) + 1
+                            if region_counts:
+                                return max(region_counts.keys(), key=lambda r: region_counts[r])
+                            return ''
+                        
+                        # 🆕 ดึงตำบลหลักของแต่ละทริป
+                        def get_trip_main_subdistrict(trip_num, df):
+                            """ดึงตำบลหลักของทริป"""
+                            trip_data = df[df['Trip'] == trip_num]
+                            subdistrict_counts = {}
+                            for _, row in trip_data.iterrows():
+                                branch_code = str(row.get('Code', '')).upper()
+                                loc = location_map.get(branch_code, {})
+                                subdistrict = loc.get('ตำบล', '')
+                                if subdistrict:
+                                    subdistrict_counts[subdistrict] = subdistrict_counts.get(subdistrict, 0) + 1
+                            if subdistrict_counts:
+                                return max(subdistrict_counts.keys(), key=lambda s: subdistrict_counts[s])
+                            return ''
+                        
+                        # เรียงทริปตาม ภาค → จังหวัด → อำเภอ → ตำบล → Route → ระยะทาง (ไกลมาใกล้)
                         trip_distances = {}
                         trip_provinces = {}
                         trip_districts = {}
+                        trip_subdistricts = {}  # 🆕 เพิ่มตำบล
                         trip_routes = {}
+                        trip_regions = {}  # 🆕 เพิ่มภาค
                         trip_vehicles = {}  # 🆕 เก็บประเภทรถของแต่ละทริป
                         for trip_num in result_df['Trip'].unique():
                             if trip_num == 0:
@@ -8685,7 +8715,9 @@ def main():
                             trip_distances[trip_num] = get_trip_max_distance(trip_num, result_df)
                             trip_provinces[trip_num] = get_trip_main_province(trip_num, result_df)
                             trip_districts[trip_num] = get_trip_main_district(trip_num, result_df)
+                            trip_subdistricts[trip_num] = get_trip_main_subdistrict(trip_num, result_df)  # 🆕 ตำบล
                             trip_routes[trip_num] = get_trip_main_route(trip_num, result_df)
+                            trip_regions[trip_num] = get_trip_main_region(trip_num, result_df)  # 🆕 ภาค
                             # 🆕 ดึงประเภทรถ
                             trip_summary = summary[summary['Trip'] == trip_num]
                             if len(trip_summary) > 0:
@@ -8695,14 +8727,27 @@ def main():
                             else:
                                 trip_vehicles[trip_num] = '6W'
                         
-                        # 🆕 ลำดับความสำคัญของรถ: 4W → JB → 6W (เล็กไปใหญ่)
-                        vehicle_order = {'4W': 1, 'JB': 2, '6W': 3}
+                        # 🆕 ลำดับความสำคัญของภาค
+                        region_order = {
+                            'กทม/ปริมณฑล': 1,
+                            'ภาคกลาง': 2,
+                            'ภาคตะวันออก': 3,
+                            'ภาคตะวันตก': 4,
+                            'ภาคเหนือตอนล่าง': 5,
+                            'ภาคเหนือตอนบน': 6,
+                            'ภาคอีสานตอนบน': 7,
+                            'ภาคอีสานตอนล่าง': 8,
+                            'ภาคใต้ตอนบน': 9,
+                            'ภาคใต้ตอนล่าง': 10,
+                        }
                         
-                        # 🆕 เรียงลำดับทริป: จังหวัด → อำเภอ → Route → ระยะทาง (ไกลมาใกล้)
+                        # 🆕 เรียงลำดับทริป: ภาค → จังหวัด → อำเภอ → ตำบล → Route → ระยะทาง (ไกลมาใกล้)
                         sorted_trips = sorted(trip_distances.keys(), 
                                              key=lambda t: (
+                                                 region_order.get(trip_regions.get(t, ''), 99),
                                                  trip_provinces.get(t, ''),
                                                  trip_districts.get(t, ''),
+                                                 trip_subdistricts.get(t, ''),
                                                  trip_routes.get(t, ''),
                                                  -trip_distances.get(t, 0)
                                              ))
