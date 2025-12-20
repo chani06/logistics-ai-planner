@@ -724,6 +724,108 @@ def load_master_data():
 MASTER_DATA = load_master_data()
 
 # ==========================================
+# 🆕 โหลดข้อมูลสาขาตามวันส่งจาก Sheet Master ของไฟล์แผนงาน
+# ==========================================
+@st.cache_data(ttl=7200)
+def load_delivery_schedule():
+    """
+    โหลดข้อมูลสาขาตามวันส่งจากไฟล์แผนงาน Sheet 'Master'
+    
+    โครงสร้างไฟล์:
+    - แถวที่ 0: หัวข้อวันส่ง (สั่งพฤ__ส่งเสาร์, สั่งศุกร์__ส่งจันทร์, ...)
+    - แถวที่ 1: Header (Seq., BU, รหัสสาขา, รหัส WMS, สาขา) × 6 กลุ่ม
+    - แถวที่ 2+: ข้อมูลสาขา
+    
+    Returns:
+        dict: {วันส่ง: [รายชื่อรหัสสาขา]}
+        เช่น {'ส่งเสาร์': ['NY85', 'NX31', ...], 'ส่งจันทร์': [...], ...}
+    """
+    delivery_schedule = {}
+    branch_to_delivery_day = {}  # {รหัสสาขา: วันส่ง}
+    
+    try:
+        # หาไฟล์แผนงาน
+        import glob
+        plan_files = glob.glob('Dc/*แผนงาน*.xlsx') + glob.glob('Dc/*plan*.xlsx')
+        
+        if not plan_files:
+            return delivery_schedule, branch_to_delivery_day
+        
+        plan_file = plan_files[0]  # ใช้ไฟล์แรกที่เจอ
+        
+        # ตรวจสอบว่ามี Sheet 'Master' หรือไม่
+        xl = pd.ExcelFile(plan_file)
+        if 'Master' not in xl.sheet_names:
+            return delivery_schedule, branch_to_delivery_day
+        
+        # โหลด Sheet Master (ไม่มี header)
+        df = pd.read_excel(plan_file, sheet_name='Master', header=None)
+        
+        if df.empty or len(df) < 3:
+            return delivery_schedule, branch_to_delivery_day
+        
+        # อ่านแถวที่ 0 เพื่อหาวันส่ง
+        row0 = df.iloc[0].tolist()
+        
+        # หา column index ของแต่ละวันส่ง
+        delivery_days = []
+        for i, val in enumerate(row0):
+            if pd.notna(val) and '__ส่ง' in str(val):
+                # แยกวันส่งจากชื่อ เช่น "สั่งพฤ__ส่งเสาร์" → "ส่งเสาร์"
+                parts = str(val).split('__')
+                if len(parts) == 2:
+                    delivery_day = parts[1].strip()  # "ส่งเสาร์"
+                    delivery_days.append((i, delivery_day))
+        
+        # โครงสร้าง: แต่ละกลุ่มมี 5 คอลัมน์ (Seq., BU, รหัสสาขา, รหัส WMS, สาขา)
+        # คอลัมน์ "รหัสสาขา" อยู่ที่ตำแหน่ง +2 จาก header วันส่ง
+        
+        for start_col, delivery_day in delivery_days:
+            code_col = start_col + 2  # คอลัมน์ "รหัสสาขา"
+            
+            if code_col >= len(df.columns):
+                continue
+            
+            # ดึงรหัสสาขาจากแถวที่ 2 เป็นต้นไป
+            codes = []
+            for row_idx in range(2, len(df)):
+                code = df.iloc[row_idx, code_col]
+                if pd.notna(code) and str(code).strip():
+                    code_clean = str(code).strip().upper()
+                    if code_clean and code_clean != 'NAN':
+                        codes.append(code_clean)
+                        branch_to_delivery_day[code_clean] = delivery_day
+            
+            if codes:
+                if delivery_day not in delivery_schedule:
+                    delivery_schedule[delivery_day] = []
+                delivery_schedule[delivery_day].extend(codes)
+        
+        # ลบ duplicate
+        for day in delivery_schedule:
+            delivery_schedule[day] = list(set(delivery_schedule[day]))
+        
+        return delivery_schedule, branch_to_delivery_day
+        
+    except Exception as e:
+        print(f"⚠️ ไม่สามารถโหลดข้อมูลวันส่ง: {e}")
+        return {}, {}
+
+# โหลดข้อมูลวันส่ง
+DELIVERY_SCHEDULE, BRANCH_DELIVERY_DAY = load_delivery_schedule()
+
+def get_delivery_day(branch_code):
+    """ดึงวันส่งของสาขา"""
+    if not branch_code:
+        return None
+    code = str(branch_code).strip().upper()
+    return BRANCH_DELIVERY_DAY.get(code, None)
+
+def get_branches_for_delivery_day(delivery_day):
+    """ดึงรายชื่อสาขาที่ต้องส่งในวันที่กำหนด"""
+    return DELIVERY_SCHEDULE.get(delivery_day, [])
+
+# ==========================================
 # 🆕 โหลดไฟล์ สถานที่ส่ง.xlsx สำหรับจับกลุ่มสาขาที่อยู่ที่เดียวกัน (Reference) + พิกัด
 # ==========================================
 @st.cache_data(ttl=7200)
