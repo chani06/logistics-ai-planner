@@ -5658,6 +5658,83 @@ def predict_trips(test_df, model_data):
         if not fixed_any:
             break
     
+    # ===============================================
+    # 🆕 Phase 8: รวม Code เดียวกันให้ไปทริปเดียวกัน
+    # สาขาที่มี Code เดียวกัน (หลาย orders) ต้องส่งที่เดียวกัน
+    # แม้จะเกิน capacity ก็รวมก่อน แล้วค่อยแยกเป็นหลายคัน
+    # ===============================================
+    same_code_merged = 0
+    
+    # หา Code ที่มีหลายทริป
+    code_trips = test_df.groupby('Code')['Trip'].apply(lambda x: x.unique().tolist()).to_dict()
+    codes_with_multiple_trips = {code: trips for code, trips in code_trips.items() if len(trips) > 1}
+    
+    trips_to_recheck = set()  # ทริปที่ต้องเช็ค capacity ใหม่
+    
+    for code, trips in codes_with_multiple_trips.items():
+        if len(trips) <= 1:
+            continue
+        
+        # 🆕 รวมทุกกรณี - ย้ายทุก row ไปทริปแรก
+        target_trip = min(trips)
+        for t in trips:
+            if t != target_trip:
+                test_df.loc[(test_df['Code'] == code) & (test_df['Trip'] == t), 'Trip'] = target_trip
+        same_code_merged += 1
+        trips_to_recheck.add(target_trip)
+    
+    # 🆕 Phase 8.5: Re-split ทริปที่เกิน capacity หลังรวม
+    for trip_num in trips_to_recheck:
+        trip_data = test_df[test_df['Trip'] == trip_num]
+        if len(trip_data) == 0:
+            continue
+        
+        trip_codes = list(trip_data['Code'].values)
+        trip_w = trip_data['Weight'].sum()
+        trip_c = trip_data['Cube'].sum()
+        
+        # หารถที่ใหญ่ที่สุดที่ใช้ได้
+        max_allowed = get_max_vehicle_for_trip(trip_codes)
+        
+        # เช็ค nearby
+        provinces = set()
+        for c in trip_codes:
+            prov = get_province(c)
+            if prov and prov != 'UNKNOWN':
+                provinces.add(prov)
+        is_nearby = any(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
+        
+        if is_nearby and max_allowed == '6W':
+            max_allowed = 'JB'
+        
+        limits = LIMITS.get(max_allowed, LIMITS['JB'])
+        util = max((trip_w / limits['max_w']) * 100, (trip_c / limits['max_c']) * 100)
+        
+        if util > 100:
+            # ต้องแยกเป็นหลายคัน - แต่ยังใช้รถประเภทเดียวกัน!
+            # คำนวณจำนวนคันที่ต้องการ
+            num_vehicles = int(util / 100) + 1
+            
+            # เรียงตาม Cube มากไปน้อย แล้วแบ่งให้สมดุล
+            sorted_data = trip_data.sort_values('Cube', ascending=False)
+            
+            # สร้างทริปใหม่ (เลข trip ต่อจาก max ที่มี)
+            max_trip = test_df['Trip'].max()
+            new_trips = [trip_num] + [max_trip + i + 1 for i in range(num_vehicles - 1)]
+            
+            # แบ่ง rows ให้แต่ละทริป
+            vehicle_loads = [0] * num_vehicles  # Cube ในแต่ละรถ
+            
+            for idx, row in sorted_data.iterrows():
+                # หารถที่มีของน้อยที่สุด
+                min_load_idx = vehicle_loads.index(min(vehicle_loads))
+                test_df.at[idx, 'Trip'] = new_trips[min_load_idx]
+                vehicle_loads[min_load_idx] += row['Cube']
+            
+            # อัพเดต vehicle recommendation
+            for new_trip in new_trips:
+                trip_recommended_vehicles[new_trip] = max_allowed
+    
     # สรุปผลและแนะนำรถ
     summary_data = []
     for trip_num in sorted(test_df['Trip'].unique()):
