@@ -826,6 +826,141 @@ def get_branches_for_delivery_day(delivery_day):
     return DELIVERY_SCHEDULE.get(delivery_day, [])
 
 # ==========================================
+# 🆕 PRE-ASSIGNED TRIPS: จัดทริปล่วงหน้าตามวันส่ง
+# ==========================================
+PRE_ASSIGNED_TRIPS = {}  # {รหัสสาขา: เลขทริปล่วงหน้า}
+PRE_TRIP_INFO = {}  # {เลขทริป: {'codes': [...], 'delivery_day': ...}}
+
+@st.cache_data(ttl=7200)
+def generate_pre_assigned_trips():
+    """
+    จัดทริปล่วงหน้าสำหรับแต่ละวันส่ง
+    
+    หลักการ:
+    1. เรียงสาขาตาม Sorting_Key (ภาค → จังหวัด → อำเภอ → ตำบล → Route)
+    2. จัดสาขา Route เดียวกันไว้ทริปเดียวกัน
+    3. รวมทริปจนเต็ม capacity แล้วตัดทริปใหม่
+    
+    Returns:
+        dict: {รหัสสาขา: เลขทริป}
+        dict: {เลขทริป: {'codes': [...], 'delivery_day': ...}}
+    """
+    pre_assigned = {}
+    trip_info = {}
+    
+    if not DELIVERY_SCHEDULE:
+        return pre_assigned, trip_info
+    
+    trip_counter = 1
+    
+    for delivery_day, codes in DELIVERY_SCHEDULE.items():
+        if not codes:
+            continue
+        
+        # สร้าง sorting key สำหรับแต่ละสาขา
+        codes_with_key = []
+        for code in codes:
+            # ดึงข้อมูลจังหวัด/อำเภอ/ตำบล จาก LOCATION_INFO หรือ MASTER_DATA
+            province = ''
+            district = ''
+            subdistrict = ''
+            route = ''
+            
+            # จาก LOCATION_INFO
+            if code in LOCATION_INFO:
+                loc = LOCATION_INFO[code]
+                province = loc.get('จังหวัด', '')
+                district = loc.get('อำเภอ', '')
+                subdistrict = loc.get('ตำบล', '')
+                route = loc.get('Route', '') or LOCATION_CODE_TO_REF.get(code, '')
+            
+            # Fallback จาก MASTER_DATA
+            if not province and not MASTER_DATA.empty:
+                master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                if len(master_row) > 0:
+                    province = master_row.iloc[0].get('จังหวัด', '')
+                    district = master_row.iloc[0].get('อำเภอ', '')
+                    subdistrict = master_row.iloc[0].get('ตำบล', '')
+            
+            # สร้าง sorting key
+            zone_code = get_zone_code(province)
+            sorting_key = create_sorting_key(zone_code, province, district, subdistrict, route or code)
+            
+            codes_with_key.append({
+                'code': code,
+                'sorting_key': sorting_key,
+                'route': route,
+                'province': province
+            })
+        
+        # เรียงตาม sorting_key
+        codes_with_key.sort(key=lambda x: x['sorting_key'])
+        
+        # จัดทริปตาม Route และ Sorting_Key
+        current_trip_codes = []
+        current_route = None
+        current_province = None
+        
+        for item in codes_with_key:
+            code = item['code']
+            route = item['route']
+            province = item['province']
+            
+            # ถ้าเป็น Route เดียวกัน → รวมทริปเดียวกัน
+            if route and route == current_route:
+                current_trip_codes.append(code)
+            # ถ้าจังหวัดเดียวกันและยังไม่เกิน 10 สาขา → รวมได้
+            elif province and province == current_province and len(current_trip_codes) < 10:
+                current_trip_codes.append(code)
+            else:
+                # บันทึกทริปปัจจุบัน (ถ้ามี)
+                if current_trip_codes:
+                    for c in current_trip_codes:
+                        pre_assigned[c] = trip_counter
+                    trip_info[trip_counter] = {
+                        'codes': current_trip_codes.copy(),
+                        'delivery_day': delivery_day
+                    }
+                    trip_counter += 1
+                
+                # เริ่มทริปใหม่
+                current_trip_codes = [code]
+                current_route = route
+                current_province = province
+        
+        # บันทึกทริปสุดท้าย
+        if current_trip_codes:
+            for c in current_trip_codes:
+                pre_assigned[c] = trip_counter
+            trip_info[trip_counter] = {
+                'codes': current_trip_codes.copy(),
+                'delivery_day': delivery_day
+            }
+            trip_counter += 1
+    
+    return pre_assigned, trip_info
+
+def get_pre_assigned_trip(branch_code):
+    """ดึงเลขทริปล่วงหน้าของสาขา (ถ้ามี)"""
+    global PRE_ASSIGNED_TRIPS
+    if not PRE_ASSIGNED_TRIPS:
+        PRE_ASSIGNED_TRIPS, _ = generate_pre_assigned_trips()
+    
+    if not branch_code:
+        return None
+    code = str(branch_code).strip().upper()
+    return PRE_ASSIGNED_TRIPS.get(code, None)
+
+def get_pre_trip_codes(trip_num):
+    """ดึงรายชื่อสาขาในทริปล่วงหน้า"""
+    global PRE_TRIP_INFO
+    if not PRE_TRIP_INFO:
+        _, PRE_TRIP_INFO = generate_pre_assigned_trips()
+    
+    info = PRE_TRIP_INFO.get(trip_num, {})
+    return info.get('codes', [])
+
+# ==========================================
 # 🆕 โหลดไฟล์ สถานที่ส่ง.xlsx สำหรับจับกลุ่มสาขาที่อยู่ที่เดียวกัน (Reference) + พิกัด
 # ==========================================
 @st.cache_data(ttl=7200)
@@ -2563,10 +2698,11 @@ def predict_trips(test_df, model_data):
     0. ✅ ตรวจสอบว่าสาขาสามารถใช้รถประเภทนี้ได้หรือไม่จากประวัติ
     
     กฎการจับคู่ (หลังผ่านเงื่อนไขบังคับ):
-    1. ✅ เคยไปด้วยกันในประวัติ (trip_pairs) + ใช้รถแบบเดิม
-    2. ✅ ชื่อสาขาคล้ายกัน (เช่น นครราชสีมา1, นครราชสีมา2)
-    3. ✅ AI ทำนายจาก Decision Tree Model
-    4. ✅ เช็คน้ำหนัก/คิว ไม่เกินขีดจำกัดรถ
+    1. 🆕 ใช้ทริปล่วงหน้า (Pre-assigned) ถ้ามี
+    2. ✅ เคยไปด้วยกันในประวัติ (trip_pairs) + ใช้รถแบบเดิม
+    3. ✅ ชื่อสาขาคล้ายกัน (เช่น นครราชสีมา1, นครราชสีมา2)
+    4. ✅ AI ทำนายจาก Decision Tree Model
+    5. ✅ เช็คน้ำหนัก/คิว ไม่เกินขีดจำกัดรถ
     """
     # ตรวจสอบว่า model_data มีข้อมูลครบถ้วน
     if not model_data or not isinstance(model_data, dict):
@@ -2578,6 +2714,12 @@ def predict_trips(test_df, model_data):
     branch_info = model_data.get('branch_info', {})
     trip_vehicles = model_data.get('trip_vehicles', {}).copy()
     branch_vehicles = model_data.get('branch_vehicles', {})
+    
+    # 🆕 โหลด Pre-assigned Trips (ถ้ามี)
+    pre_assigned_trips, pre_trip_info = generate_pre_assigned_trips()
+    use_pre_assigned = len(pre_assigned_trips) > 0
+    if use_pre_assigned:
+        st.info(f"⚡ โหลดทริปล่วงหน้า: {len(pre_trip_info)} ทริป, {len(pre_assigned_trips)} สาขา")
     
     # ⚡ อนุญาตให้ทำงานโดยไม่มี model (ใช้กฎและประวัติเท่านั้น)
     # if model is None:
@@ -3704,6 +3846,34 @@ def predict_trips(test_df, model_data):
     assigned_trips = {}
     trip_counter = 1
     trip_recommended_vehicles = {}  # เก็บรถที่แนะนำสำหรับแต่ละทริป
+    
+    # 🆕 ใช้ Pre-assigned Trips ก่อน (ถ้ามี)
+    pre_assigned_used = 0
+    if use_pre_assigned:
+        # จัดกลุ่มสาขาที่มี pre-assigned trip
+        pre_trip_groups = {}  # {pre_trip_num: [codes ที่มีในไฟล์อัปโหลด]}
+        
+        for code in all_codes:
+            code_upper = str(code).strip().upper()
+            pre_trip = pre_assigned_trips.get(code_upper)
+            if pre_trip:
+                if pre_trip not in pre_trip_groups:
+                    pre_trip_groups[pre_trip] = []
+                pre_trip_groups[pre_trip].append(code)
+        
+        # จัด assigned_trips จาก pre-assigned
+        for pre_trip, codes in pre_trip_groups.items():
+            if len(codes) >= 1:  # ถ้ามีอย่างน้อย 1 สาขาจาก pre-trip นี้
+                for code in codes:
+                    assigned_trips[code] = trip_counter
+                    pre_assigned_used += 1
+                trip_counter += 1
+        
+        # เหลือเฉพาะสาขาที่ยังไม่ได้จัด
+        all_codes = [c for c in all_codes if c not in assigned_trips]
+        
+        if pre_assigned_used > 0:
+            st.success(f"⚡ ใช้ทริปล่วงหน้า: {pre_assigned_used} สาขา, เหลือจัดใหม่ {len(all_codes)} สาขา")
     
     total_codes = len(all_codes)
     processed = 0
