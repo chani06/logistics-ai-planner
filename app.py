@@ -7214,6 +7214,7 @@ def main():
                     district_map = {}
                     province_map = {}
                     
+                    # 🆕 ดึงจาก MASTER_DATA ก่อน
                     if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
                         for _, row in MASTER_DATA.iterrows():
                             code = row.get('Plan Code', '')
@@ -7228,10 +7229,36 @@ def main():
                                 if province:
                                     province_map[code] = province
                     
+                    # 🆕 Fallback: เพิ่มจาก LOCATION_INFO ถ้ายังไม่มี
+                    for code, loc_info in LOCATION_INFO.items():
+                        if code not in province_map and loc_info.get('จังหวัด'):
+                            province_map[code] = loc_info['จังหวัด']
+                        if code not in district_map and loc_info.get('อำเภอ'):
+                            district_map[code] = loc_info['อำเภอ']
+                        if code not in subdistrict_map and loc_info.get('ตำบล'):
+                            subdistrict_map[code] = loc_info['ตำบล']
+                    
                     # 🆕 เพิ่มคอลัมน์ ตำบล, อำเภอ
                     df_region['ตำบล'] = df_region['Code'].map(subdistrict_map).fillna('')
                     df_region['อำเภอ'] = df_region['Code'].map(district_map).fillna('')
                     df_region['จังหวัด'] = df_region['Code'].map(province_map).fillna('')
+                    
+                    # 🆕 ถ้ายังไม่มีจังหวัด ลองหาจาก DISTRICT_TO_PROVINCE โดยใช้ อำเภอ
+                    def find_province_from_district(row):
+                        if row['จังหวัด'] and str(row['จังหวัด']).strip() not in ['', 'nan']:
+                            return row['จังหวัด']
+                        district = str(row['อำเภอ']).strip() if row['อำเภอ'] else ''
+                        if district:
+                            # ลองหาจาก DISTRICT_TO_PROVINCE
+                            if district in DISTRICT_TO_PROVINCE:
+                                return DISTRICT_TO_PROVINCE[district]
+                            # ลองตัด "เขต" หรือ "อำเภอ" ออก
+                            clean_district = district.replace('เขต', '').replace('อำเภอ', '').strip()
+                            if clean_district in DISTRICT_TO_PROVINCE:
+                                return DISTRICT_TO_PROVINCE[clean_district]
+                        return row['จังหวัด']
+                    
+                    df_region['จังหวัด'] = df_region.apply(find_province_from_district, axis=1)
                     
                     # ดึงจังหวัดจาก Master ถ้า Province ไม่มี
                     if 'Province' not in df_region.columns or df_region['Province'].isna().any():
@@ -7245,6 +7272,12 @@ def main():
                                 if pd.isna(row.get('Province')) else row['Province'],
                                 axis=1
                             )
+                    
+                    # 🆕 ถ้า Province ยังว่าง ใช้ จังหวัด
+                    df_region['Province'] = df_region.apply(
+                        lambda row: row['จังหวัด'] if (pd.isna(row.get('Province')) or str(row.get('Province', '')).strip() in ['', 'nan', 'UNKNOWN']) and row['จังหวัด'] else row.get('Province', ''),
+                        axis=1
+                    )
                     
                     df_region['Region'] = df_region['Province'].apply(get_region)
                     
