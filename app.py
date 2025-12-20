@@ -6346,33 +6346,37 @@ def main():
                 # ==========================================
                 with tab1:
                     # 🆕 ตั้งค่า Buffer สำหรับการจัดทริป
-                    with st.expander("⚙️ ตั้งค่า Buffer (ขีดจำกัดการเกิน capacity)", expanded=False):
+                    with st.expander("⚙️ ตั้งค่า Buffer (ขีดจำกัด capacity)", expanded=False):
                         st.markdown("""
                         **คำอธิบาย:**
-                        - Buffer = 1.0 หมายถึง ห้ามเกิน 100%
-                        - Buffer = 1.10 หมายถึง เกินได้ 10% (110%)
-                        - Buffer = 1.20 หมายถึง เกินได้ 20% (120%)
+                        - Buffer = 100% หมายถึง ห้ามเกิน capacity
+                        - Buffer = 90% หมายถึง ใช้ได้แค่ 90% ของ capacity
+                        - Buffer = 110% หมายถึง เกินได้ 10%
                         """)
                         
                         col_buf1, col_buf2 = st.columns(2)
                         with col_buf1:
-                            punthai_buffer = st.slider(
-                                "🎚️ Punthai ล้วน Buffer",
-                                min_value=1.0,
-                                max_value=1.30,
-                                value=1.0,
-                                step=0.05,
-                                help="Buffer สำหรับทริป Punthai ล้วน (default: 1.0 = ห้ามเกิน 100%)"
+                            punthai_pct = st.number_input(
+                                "📝 Punthai ล้วน Buffer (%)",
+                                min_value=50,
+                                max_value=150,
+                                value=100,
+                                step=5,
+                                help="Buffer สำหรับทริป Punthai ล้วน (default: 100%)"
                             )
+                            punthai_buffer = punthai_pct / 100.0
                         with col_buf2:
-                            maxmart_buffer = st.slider(
-                                "🎚️ Maxmart Buffer",
-                                min_value=1.0,
-                                max_value=1.30,
-                                value=1.10,
-                                step=0.05,
-                                help="Buffer สำหรับทริปที่มี Maxmart (default: 1.10 = เกินได้ 10%)"
+                            maxmart_pct = st.number_input(
+                                "📝 Maxmart Buffer (%)",
+                                min_value=50,
+                                max_value=150,
+                                value=110,
+                                step=5,
+                                help="Buffer สำหรับทริปที่มี Maxmart (default: 110%)"
                             )
+                            maxmart_buffer = maxmart_pct / 100.0
+                        
+                        st.caption(f"🔹 Punthai: {punthai_buffer:.2f} | 🔹 Maxmart: {maxmart_buffer:.2f}")
                         
                         # เก็บค่า buffer ไว้ใน session_state
                         st.session_state.punthai_buffer = punthai_buffer
