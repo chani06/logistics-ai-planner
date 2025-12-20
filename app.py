@@ -4591,8 +4591,20 @@ def predict_trips(test_df, model_data):
             trip_data = test_df[test_df['Trip'] == trip_num]
             total_c = trip_data['Cube'].sum()
             
-            # เลือกรถแบบเร็ว (ไม่มี optimization)
-            if total_c <= 5:
+            # 🔒 เช็ค nearby จาก column จังหวัด - สำคัญมาก!
+            provinces_fast = set()
+            if 'จังหวัด' in trip_data.columns:
+                provinces_fast = set(trip_data['จังหวัด'].dropna().astype(str).tolist())
+            is_nearby_fast = any(get_region_type(p) == 'nearby' for p in provinces_fast if p and p != 'UNKNOWN')
+            
+            # เลือกรถแบบเร็ว (ไม่มี optimization) แต่ต้องเช็ค nearby!
+            if is_nearby_fast:
+                # 🔒 nearby → ห้าม 6W
+                if total_c <= 5:
+                    trip_recommended_vehicles[trip_num] = '4W'
+                else:
+                    trip_recommended_vehicles[trip_num] = 'JB'  # ไม่ใช้ 6W
+            elif total_c <= 5:
                 trip_recommended_vehicles[trip_num] = '4W'
             elif total_c <= 7:
                 trip_recommended_vehicles[trip_num] = 'JB'
@@ -4613,6 +4625,13 @@ def predict_trips(test_df, model_data):
                 prov = get_province(code)
                 if prov and prov != 'UNKNOWN':
                     provinces.add(prov)
+            
+            # 🆕 FALLBACK: ถ้า provinces ว่าง → ดึงจาก DataFrame column โดยตรง
+            if not provinces and 'จังหวัด' in trip_data.columns:
+                df_provinces = trip_data['จังหวัด'].dropna().astype(str).tolist()
+                for p in df_provinces:
+                    if p and p.strip() and p != 'UNKNOWN' and p != 'nan':
+                        provinces.add(p.strip())
             
             # 🔒 เช็คว่ามีสาขาใดอยู่ในพื้นที่ nearby หรือไม่ → ถ้ามีแม้สาขาเดียว ห้าม 6W
             all_nearby = any(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
@@ -4841,6 +4860,13 @@ def predict_trips(test_df, model_data):
             if prov != 'UNKNOWN':
                 provinces.add(prov)
         
+        # 🆕 FALLBACK: ถ้า provinces ว่าง → ดึงจาก DataFrame column โดยตรง
+        if not provinces and 'จังหวัด' in trip_data.columns:
+            df_provinces = trip_data['จังหวัด'].dropna().astype(str).tolist()
+            for p in df_provinces:
+                if p and p.strip() and p != 'UNKNOWN' and p != 'nan':
+                    provinces.add(p.strip())
+        
         # 🔒 ถ้ามีสาขาใดอยู่ nearby แม้สาขาเดียว → ห้าม 6W
         all_nearby = any(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
         current_vehicle = trip_recommended_vehicles.get(trip_num, '4W')  # Start with 4W
@@ -4924,6 +4950,14 @@ def predict_trips(test_df, model_data):
             prov = get_province(code)
             if prov and prov != 'UNKNOWN':
                 provinces.add(prov)
+        
+        # 🆕 FALLBACK: ถ้า provinces ว่าง → ดึงจาก DataFrame column โดยตรง
+        if not provinces and 'จังหวัด' in trip_data.columns:
+            df_provinces = trip_data['จังหวัด'].dropna().astype(str).tolist()
+            for p in df_provinces:
+                if p and p.strip() and p != 'UNKNOWN' and p != 'nan':
+                    provinces.add(p.strip())
+        
         # 🔒 ถ้ามีสาขาใดอยู่ nearby แม้สาขาเดียว → ห้าม 6W
         all_nearby = any(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
         
@@ -5663,6 +5697,14 @@ def predict_trips(test_df, model_data):
             prov = get_province(code)
             if prov and prov != 'UNKNOWN':
                 provinces.add(prov)
+        
+        # 🆕 FALLBACK: ถ้า provinces ว่าง → ดึงจาก DataFrame column โดยตรง
+        if not provinces and 'จังหวัด' in trip_data.columns:
+            df_provinces = trip_data['จังหวัด'].dropna().astype(str).tolist()
+            for p in df_provinces:
+                if p and p.strip() and p != 'UNKNOWN' and p != 'nan':
+                    provinces.add(p.strip())
+        
         # 🔒 ถ้ามีแม้สาขาเดียวใน nearby → ห้าม 6W
         is_nearby_trip = any(get_region_type(p) == 'nearby' for p in provinces) if provinces else False
         
