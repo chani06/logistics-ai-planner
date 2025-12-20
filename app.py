@@ -606,6 +606,69 @@ DISTRICT_TO_PROVINCE = {
 }
 
 # ==========================================
+# 🆕 ZONE_CODE: รหัสภาค/โซน สำหรับ Sorting
+# ==========================================
+# ใช้ตัวเลขเพื่อให้เรียงลำดับถูกต้อง (ไม่ใช่ตัวอักษร)
+ZONE_CODE = {
+    # 10 = ภาคเหนือ
+    'แพร่': '10', 'น่าน': '10', 'พะเยา': '10', 'เชียงราย': '10', 'เชียงใหม่': '10',
+    'ลำปาง': '10', 'ลำพูน': '10', 'แม่ฮ่องสอน': '10', 'อุตรดิตถ์': '10',
+    'พิษณุโลก': '10', 'สุโขทัย': '10', 'ตาก': '10', 'กำแพงเพชร': '10', 'พิจิตร': '10',
+    'เพชรบูรณ์': '10', 'นครสวรรค์': '10', 'อุทัยธานี': '10',
+    
+    # 20 = ภาคอีสาน
+    'นครราชสีมา': '20', 'ชัยภูมิ': '20', 'บุรีรัมย์': '20', 'สุรินทร์': '20',
+    'ศรีสะเกษ': '20', 'อุบลราชธานี': '20', 'ยโสธร': '20', 'อำนาจเจริญ': '20',
+    'ร้อยเอ็ด': '20', 'มหาสารคาม': '20', 'ขอนแก่น': '20', 'กาฬสินธุ์': '20',
+    'สกลนคร': '20', 'นครพนม': '20', 'มุกดาหาร': '20', 'หนองคาย': '20',
+    'อุดรธานี': '20', 'หนองบัวลำภู': '20', 'เลย': '20', 'บึงกาฬ': '20',
+    'สระบุรี': '20',  # สระบุรี เป็นทางผ่านไปอีสาน
+    
+    # 30 = ภาคตะวันออก
+    'ชลบุรี': '30', 'ระยอง': '30', 'จันทบุรี': '30', 'ตราด': '30',
+    'ฉะเชิงเทรา': '30', 'ปราจีนบุรี': '30', 'สระแก้ว': '30', 'นครนายก': '30',
+    
+    # 40 = ภาคกลาง/กทม./ปริมณฑล
+    'กรุงเทพมหานคร': '40', 'กรุงเทพ': '40', 'กทม': '40', 'กทม.': '40',
+    'นนทบุรี': '40', 'ปทุมธานี': '40', 'สมุทรปราการ': '40',
+    'นครปฐม': '40', 'สมุทรสาคร': '40', 'สมุทรสงคราม': '40',
+    'พระนครศรีอยุธยา': '40', 'อยุธยา': '40',
+    'อ่างทอง': '40', 'สิงห์บุรี': '40', 'ลพบุรี': '40', 'ชัยนาท': '40',
+    'สุพรรณบุรี': '40', 'กาญจนบุรี': '40', 'ราชบุรี': '40', 'เพชรบุรี': '40',
+    'ประจวบคีรีขันธ์': '40',
+    
+    # 50 = ภาคใต้
+    'ชุมพร': '50', 'ระนอง': '50', 'สุราษฎร์ธานี': '50', 'พังงา': '50',
+    'ภูเก็ต': '50', 'กระบี่': '50', 'นครศรีธรรมราช': '50', 'ตรัง': '50',
+    'พัทลุง': '50', 'สงขลา': '50', 'สตูล': '50', 'ปัตตานี': '50',
+    'ยะลา': '50', 'นราธิวาส': '50',
+}
+
+def get_zone_code(province):
+    """ดึงรหัสภาคจากจังหวัด"""
+    if not province:
+        return '99'  # ไม่ระบุ
+    province = str(province).strip()
+    return ZONE_CODE.get(province, '99')
+
+def create_sorting_key(zone_code, province, district, subdistrict, route_code):
+    """
+    สร้าง Sorting_Key สำหรับเรียงลำดับแบบ Hierarchy
+    
+    โครงสร้าง: [รหัสภาค]-[จังหวัด]-[อำเภอ]-[ตำบล]-[รหัสร้าน]
+    
+    ตัวอย่าง: 20-นครราชสีมา-ปากช่อง-หนองสาหร่าย-CD366
+    """
+    # ทำให้เป็น string และทำความสะอาด
+    zone = str(zone_code).zfill(2) if zone_code else '99'
+    prov = str(province).strip() if province else 'zzz_unknown'
+    dist = str(district).strip() if district else 'zzz'
+    subdist = str(subdistrict).strip() if subdistrict else 'zzz'
+    route = str(route_code).strip().upper() if route_code else 'ZZZ'
+    
+    return f"{zone}-{prov}-{dist}-{subdist}-{route}"
+
+# ==========================================
 # LOAD MASTER DATA
 # ==========================================
 @st.cache_data(ttl=7200)  # Cache 2 ชั่วโมง (เร็วขึ้น)
@@ -6795,6 +6858,28 @@ def main():
                             if 'Subdistrict' not in result_df.columns:
                                 result_df['Subdistrict'] = result_df['Code'].map(subdistrict_map).fillna('')
                             
+                            # 🆕 เพิ่ม Zone_Code (รหัสภาค) และ Sorting_Key
+                            if 'Zone_Code' not in result_df.columns:
+                                result_df['Zone_Code'] = result_df['Province'].apply(get_zone_code)
+                            
+                            # 🆕 ดึง Route Code จาก LOCATION_CODE_TO_REF
+                            if 'Route' not in result_df.columns:
+                                result_df['Route'] = result_df['Code'].apply(
+                                    lambda x: LOCATION_CODE_TO_REF.get(str(x).upper(), '')
+                                )
+                            
+                            # 🆕 สร้าง Sorting_Key: [รหัสภาค]-[จังหวัด]-[อำเภอ]-[ตำบล]-[รหัสร้าน/Route]
+                            if 'Sorting_Key' not in result_df.columns:
+                                result_df['Sorting_Key'] = result_df.apply(
+                                    lambda row: create_sorting_key(
+                                        row.get('Zone_Code', '99'),
+                                        row.get('Province', ''),
+                                        row.get('District', ''),
+                                        row.get('Subdistrict', ''),
+                                        row.get('Route', '') or row.get('Code', '')
+                                    ), axis=1
+                                )
+                            
                             # เพิ่ม Region จาก Province
                             if 'Region' not in result_df.columns:
                                 region_groups = {
@@ -6824,18 +6909,23 @@ def main():
                                 
                                 result_df['Region'] = result_df['Province'].apply(get_region_from_province)
                         
-                        # 🆕 เรียงลำดับ result_df ตาม: ภาค → จังหวัด → อำเภอ → ตำบล → Trip
-                        sort_cols = []
-                        if 'Region' in result_df.columns:
-                            sort_cols.append('Region')
-                        if 'Province' in result_df.columns:
-                            sort_cols.append('Province')
-                        if 'District' in result_df.columns:
-                            sort_cols.append('District')
-                        if 'Subdistrict' in result_df.columns:
-                            sort_cols.append('Subdistrict')
-                        sort_cols.append('Trip')
-                        sort_cols.append('Code')
+                        # 🆕 เรียงลำดับ result_df ตาม Sorting_Key (ถ้ามี) หรือ ภาค → จังหวัด → อำเภอ → ตำบล
+                        if 'Sorting_Key' in result_df.columns:
+                            # ใช้ Sorting_Key เป็นหลัก แล้วตามด้วย Trip
+                            sort_cols = ['Sorting_Key', 'Trip']
+                        else:
+                            # Fallback: เรียงตามลำดับชั้นเดิม
+                            sort_cols = []
+                            if 'Region' in result_df.columns:
+                                sort_cols.append('Region')
+                            if 'Province' in result_df.columns:
+                                sort_cols.append('Province')
+                            if 'District' in result_df.columns:
+                                sort_cols.append('District')
+                            if 'Subdistrict' in result_df.columns:
+                                sort_cols.append('Subdistrict')
+                            sort_cols.append('Trip')
+                            sort_cols.append('Code')
                         
                         # กรองเฉพาะคอลัมน์ที่มีอยู่
                         sort_cols = [c for c in sort_cols if c in result_df.columns]
@@ -7280,8 +7370,17 @@ def main():
                                 trip_data['_route'] = trip_data['Code'].apply(
                                     lambda c: location_map.get(str(c).upper(), {}).get('Route', '')
                                 )
-                                # 🆕 Sort สาขาภายในทริปตาม ตำบล → อำเภอ → จังหวัด → Route
-                                trip_data = trip_data.sort_values(['_subdistrict', '_district', '_province', '_route', 'Code'], ascending=[True, True, True, True, True])
+                                # 🆕 สร้าง Sorting_Key: [รหัสภาค]-[จังหวัด]-[อำเภอ]-[ตำบล]-[Route/Code]
+                                trip_data['_zone_code'] = trip_data['_province'].apply(get_zone_code)
+                                trip_data['_sorting_key'] = trip_data.apply(
+                                    lambda r: create_sorting_key(
+                                        r['_zone_code'], r['_province'], r['_district'], 
+                                        r['_subdistrict'], r['_route'] or r.get('Code', '')
+                                    ), axis=1
+                                )
+                                
+                                # 🆕 Sort สาขาภายในทริปตาม Sorting_Key
+                                trip_data = trip_data.sort_values(['_sorting_key', 'Code'], ascending=[True, True])
                                 
                                 trip_no = trip_no_map.get(trip_num, '')
                                 
@@ -7294,10 +7393,11 @@ def main():
                                 
                                 for _, row in trip_data.iterrows():
                                     # เขียนข้อมูลตามโครงสร้างไฟล์ต้นฉบับ
-                                    # คอลัมน์: A=Sep, B=BU, C=รหัสสาขา, D=รหัส WMS, E=สาขา, F=ตำบล, G=อำเภอ, H=จังหวัด, I=Route, J=Cube, K=Weight, L=Original QTY, M=Trip, N=Trip no
+                                    # คอลัมน์: A=Sep, B=BU, C=รหัสสาขา, D=รหัส WMS, E=สาขา, F=ตำบล, G=อำเภอ, H=จังหวัด, I=Route, J=Cube, K=Weight, L=Original QTY, M=Trip, N=Trip no, O=Sorting_Key
                                     branch_code = row.get('Code', '')
                                     branch_code_upper = str(branch_code).strip().upper()
                                     loc = location_map.get(branch_code_upper, {})
+                                    sorting_key = row.get('_sorting_key', '')  # 🆕 Sorting_Key
                                     data = [
                                         sep_num,  # A: Sep (ลำดับแถว)
                                         row.get('BU', 211),  # B: BU (จากต้นฉบับ)
@@ -7313,13 +7413,14 @@ def main():
                                         row.get('OriginalQty', 0) if pd.notna(row.get('OriginalQty')) else 0,  # L: Original QTY
                                         int(trip_num),  # M: Trip
                                         trip_no,  # N: Trip no
-                                        '',  # O: วันที่โหลด
-                                        '',  # P: เวลาโหลด
-                                        '',  # Q: ประตู
-                                        '',  # R: WAVE
-                                        '',  # S: remark
-                                        '',  # T: lat (เว้นว่าง)
-                                        '',  # U: lon (เว้นว่าง)
+                                        sorting_key,  # O: 🆕 Sorting_Key
+                                        '',  # P: วันที่โหลด
+                                        '',  # Q: เวลาโหลด
+                                        '',  # R: ประตู
+                                        '',  # S: WAVE
+                                        '',  # T: remark
+                                        '',  # U: lat (เว้นว่าง)
+                                        '',  # V: lon (เว้นว่าง)
                                     ]
                                     
                                     for col_idx, value in enumerate(data, 1):
@@ -7346,7 +7447,7 @@ def main():
                             ws.title = '2.Punthai'
                             
                             # เขียน header
-                            headers = ['Sep.', 'BU', 'รหัสสาขา', 'รหัส WMS', 'สาขา', 'ตำบล', 'อำเภอ', 'จังหวัด', 'Route', 'Total Cube', 'Total Wgt', 'Original QTY', 'Trip', 'Trip no']
+                            headers = ['Sep.', 'BU', 'รหัสสาขา', 'รหัส WMS', 'สาขา', 'ตำบล', 'อำเภอ', 'จังหวัด', 'Route', 'Total Cube', 'Total Wgt', 'Original QTY', 'Trip', 'Trip no', 'Sorting_Key']
                             for col_num, header in enumerate(headers, 1):
                                 ws.cell(row=1, column=col_num, value=header)
                             
@@ -7413,8 +7514,17 @@ def main():
                                 trip_data['_route'] = trip_data['Code'].apply(
                                     lambda c: location_map.get(str(c).upper(), {}).get('Route', '')
                                 )
-                                # 🆕 Sort สาขาภายในทริปตาม ตำบล → อำเภอ → จังหวัด → Route
-                                trip_data = trip_data.sort_values(['_subdistrict', '_district', '_province', '_route', 'Code'], ascending=[True, True, True, True, True])
+                                # 🆕 สร้าง Sorting_Key: [รหัสภาค]-[จังหวัด]-[อำเภอ]-[ตำบล]-[Route/Code]
+                                trip_data['_zone_code'] = trip_data['_province'].apply(get_zone_code)
+                                trip_data['_sorting_key'] = trip_data.apply(
+                                    lambda r: create_sorting_key(
+                                        r['_zone_code'], r['_province'], r['_district'], 
+                                        r['_subdistrict'], r['_route'] or r.get('Code', '')
+                                    ), axis=1
+                                )
+                                
+                                # 🆕 Sort สาขาภายในทริปตาม Sorting_Key
+                                trip_data = trip_data.sort_values(['_sorting_key', 'Code'], ascending=[True, True])
                                 
                                 trip_no = trip_no_map.get(trip_num, '')
                                 
@@ -7428,9 +7538,10 @@ def main():
                                     branch_code = row.get('Code', '')
                                     branch_code_upper = str(branch_code).strip().upper()
                                     loc = location_map.get(branch_code_upper, {})
+                                    sorting_key = row.get('_sorting_key', '')  # 🆕 Sorting_Key
                                     data = [sep_num, row.get('BU', 211), branch_code, branch_code, row.get('Name', ''),
                                             loc.get('ตำบล', ''), loc.get('อำเภอ', ''), loc.get('จังหวัด', ''), loc.get('Route', ''),
-                                            round(row.get('Cube', 0), 2), round(row.get('Weight', 0), 2), original_qty, int(trip_num), trip_no]
+                                            round(row.get('Cube', 0), 2), round(row.get('Weight', 0), 2), original_qty, int(trip_num), trip_no, sorting_key]
                                     for col_idx, value in enumerate(data, 1):
                                         cell = ws.cell(row=row_num, column=col_idx, value=value)
                                         cell.fill = fill
