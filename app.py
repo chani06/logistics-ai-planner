@@ -9,6 +9,7 @@ import pickle
 import os
 import glob
 from datetime import datetime, time
+from collections import Counter
 import io
 
 # Fuzzy String Matching
@@ -3809,14 +3810,15 @@ def predict_trips(test_df, model_data):
         else:
             codes_without_route.append(code)
     
-    # 🆕 Step 2: เรียงกลุ่ม Route และสาขาที่ไม่มี Route ตาม: ตำบล → อำเภอ → จังหวัด → รถ → ระยะทาง
+    # 🆕 Step 2: เรียงกลุ่ม Route และสาขาที่ไม่มี Route ตาม: จังหวัด → อำเภอ → ตำบล → ประเภทรถ → ระยะทาง
     def get_code_sort_key(code):
-        """Sort key สำหรับเรียงสาขา"""
-        subdistrict = subdistrict_cache.get(code, '') or ''
+        """Sort key สำหรับเรียงสาขา - เรียงตามจังหวัด → อำเภอ → ตำบล → ประเภทรถ → ระยะทาง"""
+        province = province_cache.get(code, '') or 'zzz_unknown'
         district = district_cache.get(code, '') or ''
-        province = province_cache.get(code, '') or ''
+        subdistrict = subdistrict_cache.get(code, '') or ''
         vehicle_type = get_max_vehicle_for_branch(code)
-        vehicle_order = {'6W': 0, 'JB': 1, '4W': 2}.get(vehicle_type, 2)
+        # เรียง: 4W ก่อน (เพราะ capacity เล็กสุด) → JB → 6W
+        vehicle_order = {'4W': 0, 'JB': 1, '6W': 2}.get(vehicle_type, 1)
         lat, lon = coord_cache.get(code, (None, None))
         dist = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon) if lat and lon else 0
         return (province, district, subdistrict, vehicle_order, -dist)
@@ -4008,99 +4010,243 @@ def predict_trips(test_df, model_data):
         
         return True, None, (total_weight, total_cube)
     
-    # 🆕 Main Loop: สร้างทริปตามลำดับ
-    while all_codes_remaining:
+    # ===============================================
+    # 🆕 NEW ALGORITHM: จัดทริปโดยมอง Route เป็น 1 ก้อน
+    # ===============================================
+    # Step 1: รวม Route เป็น 1 ก้อน (Consolidate by Route)
+    # Step 2: เรียง Route ตามภูมิศาสตร์ (Sort by Geography)  
+    # Step 3: จัดใส่รถทีละ Route (Load by Route)
+    # ===============================================
+    
+    # Step 1: สร้าง Route Groups - รวมสาขาที่มี Route เดียวกัน
+    route_groups = {}  # {route_id: {'codes': [...], 'weight': x, 'cube': y, 'lat': avg_lat, 'lon': avg_lon, 'province': ...}}
+    no_route_codes = []  # สาขาที่ไม่มี Route
+    
+    for code in all_codes_remaining:
+        route_id = LOCATION_CODE_TO_REF.get(str(code).upper(), '')
+        
+        if route_id and route_id != 'NAN' and route_id.strip():
+            if route_id not in route_groups:
+                route_groups[route_id] = {
+                    'codes': [],
+                    'weight': 0,
+                    'cube': 0,
+                    'lats': [],
+                    'lons': [],
+                    'provinces': []
+                }
+            
+            route_groups[route_id]['codes'].append(code)
+            route_groups[route_id]['weight'] += test_df[test_df['Code'] == code]['Weight'].sum()
+            route_groups[route_id]['cube'] += test_df[test_df['Code'] == code]['Cube'].sum()
+            
+            lat, lon = coord_cache.get(code, (None, None))
+            if lat and lon:
+                route_groups[route_id]['lats'].append(lat)
+                route_groups[route_id]['lons'].append(lon)
+            
+            prov = province_cache.get(code, '')
+            if prov:
+                route_groups[route_id]['provinces'].append(prov)
+        else:
+            no_route_codes.append(code)
+    
+    # คำนวณจุดกึ่งกลางของแต่ละ Route
+    for route_id, data in route_groups.items():
+        if data['lats']:
+            data['center_lat'] = sum(data['lats']) / len(data['lats'])
+            data['center_lon'] = sum(data['lons']) / len(data['lons'])
+        else:
+            data['center_lat'] = 0
+            data['center_lon'] = 0
+        
+        # จังหวัดหลักของ Route (mode)
+        if data['provinces']:
+            from collections import Counter
+            data['main_province'] = Counter(data['provinces']).most_common(1)[0][0]
+        else:
+            data['main_province'] = ''
+    
+    # Step 2: เรียง Route ตามภูมิศาสตร์ (ระยะทางจากศูนย์กลาง DC)
+    # DC อยู่ที่ประมาณ 13.7563, 100.5018 (กรุงเทพ)
+    DC_LAT, DC_LON = 13.7563, 100.5018
+    
+    def get_route_sort_key(route_id):
+        """เรียง Route ตาม: จังหวัด → ระยะทางจาก DC"""
+        data = route_groups[route_id]
+        province = data.get('main_province', 'zzz')
+        
+        # คำนวณระยะทางจาก DC
+        if data['center_lat'] and data['center_lon']:
+            dist = haversine_distance(DC_LAT, DC_LON, data['center_lat'], data['center_lon'])
+        else:
+            dist = 9999
+        
+        return (province, dist)
+    
+    sorted_routes = sorted(route_groups.keys(), key=get_route_sort_key)
+    
+    # Step 3: จัดใส่รถทีละ Route (Load by Route)
+    trip_counter = 1
+    current_trip_codes = []
+    current_weight = 0
+    current_cube = 0
+    current_province = ''
+    
+    for route_id in sorted_routes:
+        route_data = route_groups[route_id]
+        route_codes = route_data['codes']
+        route_weight = route_data['weight']
+        route_cube = route_data['cube']
+        route_province = route_data['main_province']
+        
         # ⏱️ Early stopping
         if time.time() - start_time > MAX_PROCESSING_TIME:
-            for remaining_code in all_codes_remaining:
-                assigned_trips[remaining_code] = trip_counter
-                trip_counter += 1
             break
         
-        # 🎯 Pop สาขาแรก
-        seed_code = all_codes_remaining.pop(0)
-        current_trip = [seed_code]
-        assigned_trips[seed_code] = trip_counter
+        # หาประเภทรถที่จำกัดที่สุดใน Route นี้
+        route_max_vehicle = '6W'
+        for code in route_codes:
+            v = get_max_vehicle_for_branch(code)
+            if v == '4W':
+                route_max_vehicle = '4W'
+                break
+            elif v == 'JB' and route_max_vehicle == '6W':
+                route_max_vehicle = 'JB'
         
-        # คำนวณ Weight/Cube ปัจจุบัน
-        current_weight = test_df[test_df['Code'] == seed_code]['Weight'].sum()
-        current_cube = test_df[test_df['Code'] == seed_code]['Cube'].sum()
+        # หาประเภทรถที่จำกัดที่สุดในทริปปัจจุบัน
+        trip_max_vehicle = '6W'
+        for code in current_trip_codes:
+            v = get_max_vehicle_for_branch(code)
+            if v == '4W':
+                trip_max_vehicle = '4W'
+                break
+            elif v == 'JB' and trip_max_vehicle == '6W':
+                trip_max_vehicle = 'JB'
         
-        # หา Route ของ seed (ต้องรวมสาขา Route เดียวกันก่อน)
-        seed_route = LOCATION_CODE_TO_REF.get(str(seed_code).upper(), '')
+        # เลือก vehicle ที่จำกัดที่สุด
+        combined_vehicle = trip_max_vehicle
+        if route_max_vehicle == '4W':
+            combined_vehicle = '4W'
+        elif route_max_vehicle == 'JB' and trip_max_vehicle == '6W':
+            combined_vehicle = 'JB'
         
-        # 🆕 Step 4.1: หาสาขา Route เดียวกันและเพิ่มเข้าทริป (บังคับ!)
-        if seed_route and seed_route != 'NAN':
-            same_route_codes = [c for c in all_codes_remaining if LOCATION_CODE_TO_REF.get(str(c).upper(), '') == seed_route]
-            for same_code in same_route_codes:
-                can_add, reason, new_totals = can_add_to_trip(current_trip, same_code, current_weight, current_cube)
-                if can_add:
-                    all_codes_remaining.remove(same_code)
-                    current_trip.append(same_code)
-                    assigned_trips[same_code] = trip_counter
-                    current_weight, current_cube = new_totals
+        # คำนวณ capacity limit
+        all_codes_for_check = current_trip_codes + route_codes
+        trip_data_for_check = test_df[test_df['Code'].isin(all_codes_for_check)]
+        punthai_type = is_punthai_only(trip_data_for_check)
+        if punthai_type == 'has_maxmart':
+            buffer = MAXMART_BUFFER
+        elif punthai_type == 'punthai_only':
+            buffer = PUNTHAI_BUFFER
+        else:
+            buffer = BUFFER
         
-        # 🆕 Step 4.2: หาสาขาถัดไป (จังหวัดเดียวกัน หรือ อำเภอติดกัน)
-        while all_codes_remaining:
-            best_code = None
-            best_score = float('inf')
+        max_weight = LIMITS[combined_vehicle]['max_w'] * buffer
+        max_cube = LIMITS[combined_vehicle]['max_c'] * buffer
+        
+        # เช็คว่า Route นี้ใส่รถปัจจุบันได้หรือไม่
+        new_weight = current_weight + route_weight
+        new_cube = current_cube + route_cube
+        
+        # เช็คว่าจังหวัดเดียวกันหรืออยู่บน corridor เดียวกัน
+        same_province = (route_province == current_province) if current_province and route_province else True
+        on_same_corridor = are_on_same_corridor(current_province, route_province) if current_province and route_province else True
+        can_combine_province = same_province or on_same_corridor
+        
+        # Decision: ใส่รถปัจจุบันได้ หรือ ต้องตัดรถใหม่?
+        if current_trip_codes and (new_weight > max_weight or new_cube > max_cube or not can_combine_province):
+            # ตัดรถ: บันทึกทริปปัจจุบัน แล้วเริ่มรถใหม่
+            for code in current_trip_codes:
+                assigned_trips[code] = trip_counter
+            trip_counter += 1
             
-            seed_province = province_cache.get(seed_code, '')
-            last_code = current_trip[-1]
-            last_province = province_cache.get(last_code, '')
-            last_district = district_cache.get(last_code, '')
-            last_subdistrict = subdistrict_cache.get(last_code, '')
-            
-            for code in all_codes_remaining:
-                # ตรวจสอบว่าเข้าทริปได้หรือไม่
-                can_add, reason, new_totals = can_add_to_trip(current_trip, code, current_weight, current_cube)
-                if not can_add:
-                    continue
-                
-                # คำนวณ score (ยิ่งต่ำยิ่งดี)
-                code_province = province_cache.get(code, '')
-                code_district = district_cache.get(code, '')
-                code_subdistrict = subdistrict_cache.get(code, '')
-                
-                # Priority: ตำบลเดียวกัน > อำเภอเดียวกัน > จังหวัดเดียวกัน > อำเภอติดกัน
-                same_subdistrict = (code_subdistrict and code_subdistrict == last_subdistrict)
-                same_district = (code_district and code_district == last_district)
-                same_province = (code_province and code_province == last_province)
-                
-                if same_subdistrict:
-                    priority = 0
-                elif same_district:
-                    priority = 1
-                elif same_province:
-                    priority = 2
-                else:
-                    priority = 3
-                
-                # คำนวณระยะทาง
-                code_lat, code_lon = coord_cache.get(code, (None, None))
-                last_lat, last_lon = coord_cache.get(last_code, (None, None))
-                if code_lat and last_lat:
-                    dist = haversine_distance(last_lat, last_lon, code_lat, code_lon)
-                else:
-                    dist = 9999
-                
-                score = priority * 1000 + dist  # Priority สำคัญกว่าระยะทาง
-                
-                if score < best_score:
-                    best_score = score
-                    best_code = code
-            
-            if best_code is None:
-                break  # ไม่มีสาขาที่เหมาะสม
-            
-            # เพิ่มสาขาที่ดีที่สุดเข้าทริป
-            can_add, reason, new_totals = can_add_to_trip(current_trip, best_code, current_weight, current_cube)
-            all_codes_remaining.remove(best_code)
-            current_trip.append(best_code)
-            assigned_trips[best_code] = trip_counter
-            current_weight, current_cube = new_totals
-        
+            # เริ่มรถใหม่ด้วย Route นี้
+            current_trip_codes = route_codes.copy()
+            current_weight = route_weight
+            current_cube = route_cube
+            current_province = route_province
+        else:
+            # ใส่รถปัจจุบัน: เพิ่ม Route เข้าไป
+            current_trip_codes.extend(route_codes)
+            current_weight = new_weight
+            current_cube = new_cube
+            if not current_province:
+                current_province = route_province
+    
+    # บันทึกทริปสุดท้าย
+    if current_trip_codes:
+        for code in current_trip_codes:
+            assigned_trips[code] = trip_counter
         trip_counter += 1
+    
+    # Step 4: จัดสาขาที่ไม่มี Route (no_route_codes)
+    for code in no_route_codes:
+        code_province = province_cache.get(code, '')
+        code_weight = test_df[test_df['Code'] == code]['Weight'].sum()
+        code_cube = test_df[test_df['Code'] == code]['Cube'].sum()
+        code_vehicle = get_max_vehicle_for_branch(code)
+        
+        # หาทริปที่เหมาะสมที่สุด (จังหวัดเดียวกัน + ยังมี capacity)
+        best_trip = None
+        best_score = float('inf')
+        
+        for trip_num in set(assigned_trips.values()):
+            trip_codes = [c for c, t in assigned_trips.items() if t == trip_num]
+            trip_data = test_df[test_df['Code'].isin(trip_codes)]
+            trip_weight = trip_data['Weight'].sum()
+            trip_cube = trip_data['Cube'].sum()
+            
+            # หาจังหวัดของทริป
+            trip_provinces = [province_cache.get(c, '') for c in trip_codes]
+            trip_main_province = Counter(trip_provinces).most_common(1)[0][0] if trip_provinces else ''
+            
+            # เช็คจังหวัดเดียวกัน
+            if code_province and trip_main_province and code_province != trip_main_province:
+                if not are_on_same_corridor(code_province, trip_main_province):
+                    continue
+            
+            # หา vehicle limit
+            trip_vehicle = '6W'
+            for tc in trip_codes:
+                v = get_max_vehicle_for_branch(tc)
+                if v == '4W':
+                    trip_vehicle = '4W'
+                    break
+                elif v == 'JB' and trip_vehicle == '6W':
+                    trip_vehicle = 'JB'
+            
+            if code_vehicle == '4W':
+                trip_vehicle = '4W'
+            elif code_vehicle == 'JB' and trip_vehicle == '6W':
+                trip_vehicle = 'JB'
+            
+            # เช็ค capacity
+            punthai_type = is_punthai_only(trip_data)
+            buffer = MAXMART_BUFFER if punthai_type == 'has_maxmart' else (PUNTHAI_BUFFER if punthai_type == 'punthai_only' else BUFFER)
+            max_w = LIMITS[trip_vehicle]['max_w'] * buffer
+            max_c = LIMITS[trip_vehicle]['max_c'] * buffer
+            
+            if trip_weight + code_weight <= max_w and trip_cube + code_cube <= max_c:
+                # คำนวณ score (ระยะทางจากจุดกึ่งกลางทริป)
+                code_lat, code_lon = coord_cache.get(code, (None, None))
+                if code_lat:
+                    trip_lats = [coord_cache.get(c, (None, None))[0] for c in trip_codes if coord_cache.get(c, (None, None))[0]]
+                    trip_lons = [coord_cache.get(c, (None, None))[1] for c in trip_codes if coord_cache.get(c, (None, None))[1]]
+                    if trip_lats:
+                        avg_lat = sum(trip_lats) / len(trip_lats)
+                        avg_lon = sum(trip_lons) / len(trip_lons)
+                        dist = haversine_distance(code_lat, code_lon, avg_lat, avg_lon)
+                        if dist < best_score:
+                            best_score = dist
+                            best_trip = trip_num
+        
+        if best_trip:
+            assigned_trips[code] = best_trip
+        else:
+            # สร้างทริปใหม่
+            assigned_trips[code] = trip_counter
+            trip_counter += 1
     
     test_df['Trip'] = test_df['Code'].map(assigned_trips)
     
