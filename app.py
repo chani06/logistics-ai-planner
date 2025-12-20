@@ -932,17 +932,32 @@ def get_trip_buffer(trip_data):
     🆕 ดึง Buffer ที่เหมาะสมสำหรับทริป
     
     กฎ:
-    - Punthai ล้วน: Buffer = 1.0 (ห้ามเกิน 100%)
-    - มี Maxmart: Buffer = 1.10 (เกินได้ 10%)
+    - Punthai ล้วน: ใช้ค่าจาก slider punthai_buffer (default 1.0)
+    - มี Maxmart: ใช้ค่าจาก slider maxmart_buffer (default 1.10)
+    - อื่นๆ: ใช้ค่าเฉลี่ยของทั้งสอง slider
     """
     trip_type = is_punthai_only(trip_data)
     
     if trip_type == 'punthai_only':
-        return PUNTHAI_BUFFER  # 1.0 ห้ามเกิน 100%
+        # 🆕 ใช้ค่าจาก slider หน้าเว็บ
+        try:
+            return st.session_state.get('punthai_buffer', PUNTHAI_BUFFER)
+        except:
+            return PUNTHAI_BUFFER
     elif trip_type == 'has_maxmart':
-        return MAXMART_BUFFER  # 1.10 เกินได้ 10%
+        # 🆕 ใช้ค่าจาก slider หน้าเว็บ
+        try:
+            return st.session_state.get('maxmart_buffer', MAXMART_BUFFER)
+        except:
+            return MAXMART_BUFFER
     else:
-        return BUFFER  # Default 1.0
+        # อื่นๆ: ใช้ค่าเฉลี่ยของทั้งสอง slider
+        try:
+            punthai_buf = st.session_state.get('punthai_buffer', PUNTHAI_BUFFER)
+            maxmart_buf = st.session_state.get('maxmart_buffer', MAXMART_BUFFER)
+            return (punthai_buf + maxmart_buf) / 2
+        except:
+            return BUFFER
 
 def get_punthai_vehicle_limits(trip_data, total_cube, branch_count):
     """
@@ -6330,6 +6345,39 @@ def main():
                 # แท็บ 1: จัดเที่ยว (ตามน้ำหนัก)
                 # ==========================================
                 with tab1:
+                    # 🆕 ตั้งค่า Buffer สำหรับการจัดทริป
+                    with st.expander("⚙️ ตั้งค่า Buffer (ขีดจำกัดการเกิน capacity)", expanded=False):
+                        st.markdown("""
+                        **คำอธิบาย:**
+                        - Buffer = 1.0 หมายถึง ห้ามเกิน 100%
+                        - Buffer = 1.10 หมายถึง เกินได้ 10% (110%)
+                        - Buffer = 1.20 หมายถึง เกินได้ 20% (120%)
+                        """)
+                        
+                        col_buf1, col_buf2 = st.columns(2)
+                        with col_buf1:
+                            punthai_buffer = st.slider(
+                                "🎚️ Punthai ล้วน Buffer",
+                                min_value=1.0,
+                                max_value=1.30,
+                                value=1.0,
+                                step=0.05,
+                                help="Buffer สำหรับทริป Punthai ล้วน (default: 1.0 = ห้ามเกิน 100%)"
+                            )
+                        with col_buf2:
+                            maxmart_buffer = st.slider(
+                                "🎚️ Maxmart Buffer",
+                                min_value=1.0,
+                                max_value=1.30,
+                                value=1.10,
+                                step=0.05,
+                                help="Buffer สำหรับทริปที่มี Maxmart (default: 1.10 = เกินได้ 10%)"
+                            )
+                        
+                        # เก็บค่า buffer ไว้ใน session_state
+                        st.session_state.punthai_buffer = punthai_buffer
+                        st.session_state.maxmart_buffer = maxmart_buffer
+                    
                     # ปุ่มจัดทริป
                     if st.button("🚀 เริ่มจัดเที่ยว", type="primary", use_container_width=True):
                         with st.spinner("⏳ กำลังประมวลผล..."):
