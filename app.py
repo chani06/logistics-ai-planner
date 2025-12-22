@@ -290,7 +290,17 @@ def load_master_data():
     try:
         # โหลดเฉพาะคอลัมน์ที่จำเป็น
         usecols = ['Plan Code', 'ตำบล', 'อำเภอ', 'จังหวัด', 'ละติจูด', 'ลองติจูด']
-        df_master = pd.read_excel('Dc/Master สถานที่ส่ง.xlsx', usecols=usecols)
+        # ลองหาไฟล์ที่มีอยู่จริง
+        possible_files = ['Dc/สถานที่ส่ง.xlsx', 'Dc/Master สถานที่ส่ง.xlsx']
+        df_master = pd.DataFrame()
+        for file_path in possible_files:
+            try:
+                df_master = pd.read_excel(file_path, usecols=usecols)
+                break
+            except:
+                continue
+        if df_master.empty:
+            return pd.DataFrame()
         # ทำความสะอาด Plan Code (vectorized)
         if 'Plan Code' in df_master.columns:
             df_master['Plan Code'] = df_master['Plan Code'].astype(str).str.strip().str.upper()
@@ -4220,78 +4230,53 @@ def main():
                     st.dataframe(df.head(10), use_container_width=True)
                 
                 # ==========================================
-                # ตรวจสอบข้อมูลพื้นที่ที่ขาด
+                # เติมข้อมูลพื้นที่จาก Master (ทำในหลังบ้าน)
                 # ==========================================
-                # เช็คว่ามีคอลัมน์ Province หรือไม่
-                if 'Province' in df.columns:
-                    missing_location_df = df[
-                        (df['Province'].isna() | (df['Province'] == '') | (df['Province'] == 'UNKNOWN'))
-                    ]
-                else:
-                    # ถ้าไม่มีคอลัมน์ Province ถือว่าทุกรายการขาดข้อมูล
-                    missing_location_df = df.copy()
-                    df['Province'] = ''
+                if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                    # สร้าง dict สำหรับค้นหาเร็ว
+                    master_lookup = {}
+                    for _, row in MASTER_DATA.iterrows():
+                        code = str(row['Plan Code']).strip().upper()
+                        master_lookup[code] = {
+                            'province': row.get('จังหวัด', ''),
+                            'district': row.get('อำเภอ', ''),
+                            'subdistrict': row.get('ตำบล', ''),
+                            'lat': row.get('ละติจูด', 0),
+                            'lon': row.get('ลองติจูด', 0)
+                        }
+                    
+                    # เติมข้อมูลที่ขาด
+                    filled_count = 0
+                    for idx, row in df.iterrows():
+                        code = str(row['Code']).strip().upper()
+                        if code in master_lookup:
+                            master_info = master_lookup[code]
+                            # เติม Province ถ้าว่าง
+                            if 'Province' not in df.columns or pd.isna(df.loc[idx, 'Province']) or df.loc[idx, 'Province'] == '' or df.loc[idx, 'Province'] == 'UNKNOWN':
+                                if master_info['province']:
+                                    df.loc[idx, 'Province'] = master_info['province']
+                                    filled_count += 1
+                            # เติม District ถ้าว่าง
+                            if 'District' not in df.columns:
+                                df['District'] = ''
+                            if pd.isna(df.loc[idx, 'District']) or df.loc[idx, 'District'] == '':
+                                if master_info['district']:
+                                    df.loc[idx, 'District'] = master_info['district']
+                            # เติม Subdistrict ถ้าว่าง
+                            if 'Subdistrict' not in df.columns:
+                                df['Subdistrict'] = ''
+                            if pd.isna(df.loc[idx, 'Subdistrict']) or df.loc[idx, 'Subdistrict'] == '':
+                                if master_info['subdistrict']:
+                                    df.loc[idx, 'Subdistrict'] = master_info['subdistrict']
+                    
+                    if filled_count > 0:
+                        st.info(f"📍 เติมข้อมูลพื้นที่จาก Master แล้ว {filled_count} รายการ")
                 
-                if len(missing_location_df) > 0:
-                    with st.expander(f"⚠️ พบ {len(missing_location_df)} สาขาที่ไม่มีข้อมูลพื้นที่ (คลิกเพื่อเพิ่ม)", expanded=False):
-                        st.warning("สาขาเหล่านี้ไม่มีข้อมูลจังหวัด/อำเภอ/ตำบล อาจทำให้การจัดทริปไม่เหมาะสม")
-                        
-                        # แสดงรายการที่ขาด
-                        display_missing = missing_location_df[['Code', 'Name']].drop_duplicates()
-                        st.dataframe(display_missing, use_container_width=True, height=200)
-                        
-                        st.markdown("#### 📝 เพิ่มข้อมูลพื้นที่")
-                        
-                        # ฟอร์มเพิ่มข้อมูล
-                        with st.form("add_location_form"):
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                selected_code = st.selectbox(
-                                    "เลือกรหัสสาขา",
-                                    options=display_missing['Code'].tolist()
-                                )
-                            with col2:
-                                # แสดงชื่อสาขา
-                                if selected_code:
-                                    name = display_missing[display_missing['Code'] == selected_code]['Name'].values
-                                    if len(name) > 0:
-                                        st.text_input("ชื่อสาขา", value=name[0], disabled=True)
-                            
-                            col3, col4, col5 = st.columns(3)
-                            with col3:
-                                new_province = st.selectbox(
-                                    "จังหวัด",
-                                    options=[''] + list(REGION_CODE.keys())
-                                )
-                            with col4:
-                                new_district = st.text_input("อำเภอ")
-                            with col5:
-                                new_subdistrict = st.text_input("ตำบล")
-                            
-                            col6, col7 = st.columns(2)
-                            with col6:
-                                new_route = st.text_input("Route (เช่น CD1234)")
-                            with col7:
-                                new_lat = st.number_input("ละติจูด", min_value=0.0, max_value=90.0, value=0.0, format="%.6f")
-                                new_lon = st.number_input("ลองติจูด", min_value=0.0, max_value=180.0, value=0.0, format="%.6f")
-                            
-                            submitted = st.form_submit_button("💾 บันทึกข้อมูล", type="primary")
-                            
-                            if submitted and selected_code and new_province:
-                                # อัพเดตข้อมูลใน df
-                                df.loc[df['Code'] == selected_code, 'Province'] = new_province
-                                if new_district:
-                                    df.loc[df['Code'] == selected_code, 'District'] = new_district
-                                if new_subdistrict:
-                                    df.loc[df['Code'] == selected_code, 'Subdistrict'] = new_subdistrict
-                                if new_route:
-                                    df.loc[df['Code'] == selected_code, 'Route'] = new_route
-                                
-                                # เพิ่มคอลัมน์ Region
-                                df.loc[df['Code'] == selected_code, 'Region'] = get_region_name(new_province)
-                                
-                                st.success(f"✅ บันทึกข้อมูลสาขา {selected_code} สำเร็จ!")
-                                st.rerun()
+                # ตรวจสอบว่ายังมีข้อมูลที่ขาดหรือไม่ (แสดงแค่จำนวน)
+                if 'Province' in df.columns:
+                    missing_count = len(df[(df['Province'].isna()) | (df['Province'] == '') | (df['Province'] == 'UNKNOWN')])
+                    if missing_count > 0:
+                        st.warning(f"⚠️ ยังมี {missing_count} สาขาที่ไม่พบข้อมูลพื้นที่ใน Master")
                 
                 st.markdown("---")
                 
