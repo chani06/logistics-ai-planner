@@ -10,6 +10,7 @@ import os
 import glob
 from datetime import datetime, time
 import io
+from math import radians, sin, cos, sqrt, atan2
 
 # Auto-refresh component
 try:
@@ -1530,7 +1531,7 @@ def process_dataframe(df):
     
     return df.reset_index(drop=True)
 
-def predict_trips(test_df, model_data, buffer_type='auto'):
+def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     """
     จัดทริปแบบใหม่ - เรียบง่ายและมีประสิทธิภาพ
     
@@ -1539,12 +1540,13 @@ def predict_trips(test_df, model_data, buffer_type='auto'):
     2. จับกลุ่ม Route เดียวกัน รวมน้ำหนักไว้ด้วยกัน
     3. เรียงจากไกลมาใกล้ (จาก DC)
     4. ตัดเป็นทริปตามน้ำหนัก/คิวของรถแต่ละประเภท
-    5. ใช้ BUFFER ตามที่เลือกจากหน้าเว็บ: auto/punthai/maxmart
+    5. ใช้ BUFFER ตาม BU (ตรวจจากชื่อสาขา)
     
     Args:
         test_df: DataFrame ข้อมูลสาขาที่จะจัดทริป
         model_data: ข้อมูลโมเดล (branch_vehicles, etc.)
-        buffer_type: 'auto' (ตรวจจาก BU), 'punthai' (100%), 'maxmart' (110%)
+        punthai_buffer: Buffer สำหรับ Punthai (เช่น 1.0 = 100%)
+        maxmart_buffer: Buffer สำหรับ Maxmart/ผสม (เช่น 1.10 = 110%)
     """
     branch_vehicles = model_data.get('branch_vehicles', {})
     
@@ -1721,28 +1723,12 @@ def predict_trips(test_df, model_data, buffer_type='auto'):
         max_weight = limits['max_w']
         max_cube = limits['max_c']
         
-        # คำนวณ BUFFER ตามที่เลือกจากหน้าเว็บ
-        if buffer_type == 'punthai':
-            # Punthai ล้วน: 100%
-            buffer = PUNTHAI_BUFFER  # 1.0
-        elif buffer_type == 'maxmart':
-            # Maxmart/ผสม: 110%
-            buffer = MAXMART_BUFFER  # 1.10
+        # เลือก BUFFER ตามคอลัมน์ BU
+        bu = str(row.get('BU', '')).upper()
+        if bu in ['211', 'PUNTHAI']:
+            buffer = punthai_buffer
         else:
-            # auto: ตรวจจาก BU/ชื่อสาขา
-            if current_trip_rows:
-                trip_df_temp = pd.DataFrame(current_trip_rows + [row.to_dict()])
-                buffer = get_buffer_for_trip(trip_df_temp)
-            else:
-                # ถ้าเป็นสาขาแรก เช็ค BU จาก row ปัจจุบัน
-                bu = row.get('BU', None)
-                name = str(row.get('Name', '')).upper()
-                if bu == 211 or bu == '211' or 'PUNTHAI' in name or 'PUN-' in name:
-                    buffer = PUNTHAI_BUFFER  # 1.0
-                elif bu == 200 or bu == '200' or 'MAXMART' in name or 'MAX MART' in name:
-                    buffer = MAXMART_BUFFER  # 1.10
-                else:
-                    buffer = BUFFER  # 1.0
+            buffer = maxmart_buffer
         
         # ลองเพิ่มสาขานี้เข้าทริป
         new_weight = current_trip_weight + weight
@@ -1751,8 +1737,8 @@ def predict_trips(test_df, model_data, buffer_type='auto'):
         # เช็คว่าต้องขึ้นทริปใหม่หรือไม่
         start_new_trip = False
         
-        # ถ้าเกินขีดจำกัด (ตาม BUFFER: Punthai=100%, Maxmart=110%) → ขึ้นทริปใหม่
-        max_util_threshold = buffer * 100  # 100% หรือ 110%
+        # ถ้าเกินขีดจำกัด (ตาม BUFFER)
+        max_util_threshold = buffer * 100
         weight_util = (new_weight / max_weight) * 100
         cube_util = (new_cube / max_cube) * 100
         if weight_util > max_util_threshold or cube_util > max_util_threshold:
@@ -1805,20 +1791,18 @@ def predict_trips(test_df, model_data, buffer_type='auto'):
         min_max_size = min(vehicle_priority.get(v, 3) for v in max_vehicles)
         max_allowed_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(min_max_size, '6W')
         
-        # ดึง BUFFER ตามที่เลือกจากหน้าเว็บ
-        if buffer_type == 'punthai':
-            buffer = PUNTHAI_BUFFER
-            buffer_label = "🅿️ Punthai (100%)"
-            trip_type = 'punthai_only'
-        elif buffer_type == 'maxmart':
-            buffer = MAXMART_BUFFER
-            buffer_label = "🅼 Maxmart (110%)"
-            trip_type = 'maxmart_only'
-        else:
-            # auto: ตรวจจาก BU
-            trip_type = is_punthai_only(trip_data)
-            buffer = get_buffer_for_trip(trip_data)
-            buffer_label = "🅿️ Punthai (100%)" if trip_type == 'punthai_only' else "🅼 Maxmart (110%)" if trip_type in ['maxmart_only', 'mixed'] else "🔄 Auto"
+        # ตรวจ BU ของทริป (ถ้ามี PUNTHAI/211 แม้แต่ 1 สาขา → ใช้ punthai_buffer)
+        is_punthai = False
+        for _, r in trip_data.iterrows():
+            bu = str(r.get('BU', '')).upper()
+            if bu in ['211', 'PUNTHAI']:
+                is_punthai = True
+                break
+        
+        buffer = punthai_buffer if is_punthai else maxmart_buffer
+        buffer_pct = int(buffer * 100)
+        buffer_label = f"🅿️ {buffer_pct}%" if is_punthai else f"🅼 {buffer_pct}%"
+        trip_type = 'punthai' if is_punthai else 'maxmart'
         
         # เลือกรถที่พอดีที่สุด
         suggested = max_allowed_vehicle
@@ -2087,58 +2071,30 @@ def main():
                     # ==========================================
                     st.markdown("#### ⚙️ ตั้งค่าการจัดทริป")
                     
-                    # เลือก Buffer Type (Punthai/Maxmart)
-                    buffer_type = st.selectbox(
-                        "📦 ประเภทสินค้า (Buffer)",
-                        options=['auto', 'punthai', 'maxmart'],
-                        format_func=lambda x: {
-                            'auto': '🔄 อัตโนมัติ (ตรวจจาก BU)',
-                            'punthai': '🅿️ Punthai ล้วน (100%)',
-                            'maxmart': '🅼 Maxmart/ผสม (110%)'
-                        }[x],
-                        index=0,
-                        help="""
-                        **เลือก Buffer ตามประเภทสินค้า:**
-                        - 🔄 อัตโนมัติ: ระบบจะตรวจจากคอลัมน์ BU หรือชื่อสาขา
-                        - 🅿️ Punthai ล้วน: ห้ามเกิน 100% ของขีดจำกัดรถ
-                        - 🅼 Maxmart/ผสม: เกินได้ 10% (110%)
-                        """
-                    )
+                    # กรอก Buffer แยกตามประเภท
+                    col_buf1, col_buf2 = st.columns(2)
                     
-                    # แสดงข้อมูล Buffer ที่เลือก
-                    if buffer_type == 'punthai':
-                        st.info("🅿️ **Punthai ล้วน**: ใช้ Buffer 100% (ห้ามเกินขีดจำกัดรถ)")
-                    elif buffer_type == 'maxmart':
-                        st.info("🅼 **Maxmart/ผสม**: ใช้ Buffer 110% (เกินได้ 10%)")
-                    else:
-                        st.info("🔄 **อัตโนมัติ**: ระบบจะตรวจจากคอลัมน์ BU หรือชื่อสาขา")
+                    with col_buf1:
+                        punthai_buffer = st.number_input(
+                            "🅿️ Punthai Buffer %",
+                            min_value=80,
+                            max_value=120,
+                            value=100,
+                            step=5
+                        )
                     
-                    # แสดงข้อมูลโครงสร้างลำดับชั้นการปกครอง
-                    with st.expander("🗺️ โครงสร้างลำดับชั้นการปกครอง (Administrative Hierarchy)", expanded=False):
-                        st.markdown("""
-                        **ระบบใช้ข้อมูล Master Dist.xlsx ในการเรียงลำดับสาขาตามพื้นที่:**
-                        
-                        | Level | ระดับ | ตัวอย่าง | รหัส |
-                        |-------|--------|----------|------|
-                        | 1 | **ภูมิภาค (Region)** | ภาคกลาง | R01 |
-                        | 2 | **จังหวัด (Province)** | จ.ปทุมธานี | P010 |
-                        | 3 | **อำเภอ (District)** | อ.คลองหลวง | D0100 |
-                        | 4 | **ตำบล (Subdistrict)** | ต.คลองห้า | S01000 |
-                        
-                        **ข้อมูลระยะทาง (Distance Metrics):**
-                        - `Dist_from_DC_km`: ระยะทางจาก DC ไปยังจังหวัด
-                        - `Prov_Dist_km`: ระยะทางจากจังหวัดไปยังอำเภอ
-                        - `Dist_Subdist_km`: ระยะทางจากอำเภอไปยังตำบล
-                        
-                        **รหัสเฉพาะ (Sum_Code):** 
-                        `R01P010D0100S01000` = ภาคกลาง + ปทุมธานี + คลองหลวง + คลองห้า
-                        """)
-                        
-                        # แสดงสถิติจาก Master Dist
-                        if MASTER_DIST_DATA and 'by_name' in MASTER_DIST_DATA and len(MASTER_DIST_DATA['by_name']) > 0:
-                            st.success(f"✅ โหลดข้อมูล Master Dist สำเร็จ: **{len(MASTER_DIST_DATA['by_name']):,}** ตำบล")
-                        else:
-                            st.warning("⚠️ ไม่พบข้อมูล Master Dist - ใช้การคำนวณระยะทางจาก Lat/Lng แทน")
+                    with col_buf2:
+                        maxmart_buffer = st.number_input(
+                            "🅼 Maxmart/ผสม Buffer %",
+                            min_value=80,
+                            max_value=150,
+                            value=110,
+                            step=5
+                        )
+                    
+                    # แปลงเป็น buffer value
+                    punthai_buffer_value = punthai_buffer / 100.0
+                    maxmart_buffer_value = maxmart_buffer / 100.0
                     
                     st.markdown("---")
                     
@@ -2148,8 +2104,13 @@ def main():
                             # จัดเรียงตามภาค/จังหวัด/อำเภอ/ตำบล/Route (ในฟังก์ชัน predict_trips)
                             df_to_process = df.copy()
                             
-                            # ส่ง buffer_type ที่เลือกจากหน้าเว็บ
-                            result_df, summary = predict_trips(df_to_process, model_data, buffer_type=buffer_type)
+                            # ส่ง buffer แยกตาม BU
+                            result_df, summary = predict_trips(
+                                df_to_process, 
+                                model_data, 
+                                punthai_buffer=punthai_buffer_value,
+                                maxmart_buffer=maxmart_buffer_value
+                            )
                             
                             st.balloons()
                             st.success(f"✅ **จัดทริปเสร็จสมบูรณ์!** รวม **{len(summary)}** ทริป")
