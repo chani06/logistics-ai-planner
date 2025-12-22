@@ -1786,6 +1786,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         """แยก stores ออกจาก current_trip จนกว่าจะพอดีรถ (ไม่เกิน buffer)"""
         nonlocal trip_counter, overflow_queue
         
+        split_count = 0
+        
         while True:
             # หา capacity สูงสุดที่ใช้ได้ (รวม branch constraints)
             is_punthai = is_all_punthai(current_trip['rows'])
@@ -1802,28 +1804,28 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             max_c = lim.get('max_c', 20.0) * buffer_mult
             max_d = lim.get('max_drops', 12)
             
-            # เช็คว่าเกินหรือไม่
-            weight_ok = current_trip['weight'] <= max_w
-            cube_ok = current_trip['cube'] <= max_c
-            drops_ok = current_trip['drops'] <= max_d
+            # เช็คว่าเกินหรือไม่ (Weight หรือ Cube หรือ Drops)
+            weight_over = current_trip['weight'] > max_w
+            cube_over = current_trip['cube'] > max_c
+            drops_over = current_trip['drops'] > max_d
             
-            if weight_ok and cube_ok and drops_ok:
-                # พอดีแล้ว
+            if not weight_over and not cube_over and not drops_over:
+                # พอดีแล้ว ไม่ต้อง split
                 break
             
             if len(current_trip['codes']) <= 1:
-                # เหลือ 1 store → ต้องยอมรับ (หรือ split ไม่ได้)
+                # เหลือ 1 store → ต้องยอมรับ (แต่จะถูก flag ใน summary)
                 break
             
-            # เอา store สุดท้ายออกไป overflow queue
+            # 🔥 ตัดทันที: เอา store สุดท้ายออก
             overflow_code = current_trip['codes'].pop()
             overflow_row = current_trip['rows'].pop()
             current_trip['weight'] -= overflow_row['Weight']
             current_trip['cube'] -= overflow_row['Cube']
             current_trip['drops'] -= 1
+            split_count += 1
             
             # อัพเดท allowed_vehicles หลังเอา store ออก
-            # (บาง store อาจมี constraint ที่จำกัด)
             new_allowed = allowed_vehicles.copy()
             for code in current_trip['codes']:
                 branch_max_v = get_max_vehicle_for_code(code)
@@ -1840,7 +1842,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 'code': overflow_code,
                 'row': overflow_row,
                 'region': region,
-                'allowed_vehicles': allowed_vehicles  # ใช้ region allowed เป็น base
+                'allowed_vehicles': allowed_vehicles
             })
     
     def process_overflow_queue():
@@ -1871,6 +1873,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     current_trip['cube'] = test_cube
                     current_trip['drops'] = test_drops
                     current_trip['rows'].append(row)
+                    
+                    # 🔒 DOUBLE CHECK: Split ถ้ายังเกินอยู่
+                    split_until_fits(allowed_vehicles, region)
                 else:
                     # ไม่พอดี → ปิดทริปเก่า, เริ่มใหม่
                     finalize_current_trip()
@@ -1958,7 +1963,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             vehicle = select_vehicle_for_load(test_weight, test_cube, test_drops, test_punthai, test_allowed)
             
             if vehicle:
-                # District พอดี!
+                # District พอดี! เพิ่มเข้าทริป
                 current_trip['codes'].extend(district_codes)
                 current_trip['weight'] = test_weight
                 current_trip['cube'] = test_cube
@@ -1966,6 +1971,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 current_trip['rows'].extend(district_rows)
                 current_trip['allowed_vehicles'] = test_allowed
                 current_trip['region'] = region
+                
+                # 🔒 DOUBLE CHECK: Split ถ้ายังเกินอยู่
+                split_until_fits(test_allowed, region)
             else:
                 # District ไม่พอดี → ปิดทริปเก่า
                 finalize_current_trip()
