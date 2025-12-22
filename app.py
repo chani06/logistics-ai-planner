@@ -24,19 +24,34 @@ except ImportError:
 # ==========================================
 MODEL_PATH = 'models/decision_tree_model.pkl'
 
-# ขีดจำกัดรถแต่ละประเภท
+# ขีดจำกัดรถแต่ละประเภท (มาตรฐาน)
 LIMITS = {
-    '4W': {'max_w': 2500, 'max_c': 5.0},   # ไม่เกิน 12 จุด, Cube ≤ 5
-    'JB': {'max_w': 3500, 'max_c': 8.0},   # ไม่เกิน 12 จุด, Cube ≤ 8
-    '6W': {'max_w': 5500, 'max_c': 20.0}   # ไม่จำกัดจุด, Cube ต้องเต็ม
+    '4W': {'max_w': 2500, 'max_c': 5.0},   # ไม่เกิน 12 จุด, Cube ≤ 5 (Punthai ล้วน)
+    'JB': {'max_w': 3500, 'max_c': 7.0},   # ไม่เกิน 12 จุด, Cube ≤ 7
+    '6W': {'max_w': 6000, 'max_c': 20.0}   # ไม่จำกัดจุด, Cube ต้องเต็ม, Weight ≤ 6000
 }
 
-# เผื่อการใช้รถได้เกิน 5%
-BUFFER = 1.05
+# 🔒 ขีดจำกัดสำหรับ Punthai ล้วน (ห้ามเกิน 100%)
+PUNTHAI_LIMITS = {
+    '4W': {'max_w': 2500, 'max_c': 5.0, 'max_drops': 5},   # Punthai ล้วน 4W: สูงสุด 5 สาขา
+    'JB': {'max_w': 3500, 'max_c': 7.0, 'max_drops': 7},   # Punthai ล้วน: ไม่เกิน 7 drop
+    '6W': {'max_w': 6000, 'max_c': 20.0, 'max_drops': 999}
+}
+
+# 🎯 Minimum utilization ต่อประเภทรถ (สำหรับ balancing)
+MIN_UTIL = {
+    '4W': 70,   # 4W ต้องใช้อย่างน้อย 70%
+    'JB': 80,   # JB ต้องใช้อย่างน้อย 80%
+    '6W': 90    # 6W ต้องใช้อย่างน้อย 90%
+}
+
+# Buffer สำหรับการใช้รถ (ตาม BU)
+BUFFER = 1.0  # Default buffer
+PUNTHAI_BUFFER = 1.0  # 🅿️ Punthai ล้วน: ห้ามเกิน 100%
+MAXMART_BUFFER = 1.10  # 🅼 Maxmart/ผสม: เกินได้ 10%
 
 # จำนวนสาขาต่อทริป - ใช้กับ 4W/JB เท่านั้น (6W ไม่จำกัด)
 MAX_BRANCHES_PER_TRIP = 12  # สูงสุด 12 สาขาต่อทริปสำหรับ 4W/JB (6W ไม่จำกัด)
-TARGET_BRANCHES_PER_TRIP = 12  # เป้าหมาย 12 สาขาต่อทริป
 
 # Performance Config
 MAX_DETOUR_KM = 12  # ลดจาก 15km เป็น 12km เพื่อประมวลผลเร็วขึ้น
@@ -310,11 +325,152 @@ def load_master_data():
     except FileNotFoundError:
         return pd.DataFrame()
     except Exception as e:
-        st.warning(f"ไม่สามารถโหลดไฟล์ Master: {e} (จะใช้ข้อมูลจากไฟล์อัปโหลดแทน)")
+        try:
+            st.warning(f"ไม่สามารถโหลดไฟล์ Master: {e} (จะใช้ข้อมูลจากไฟล์อัปโหลดแทน)")
+        except:
+            pass
         return pd.DataFrame()
 
 # โหลด Master Data
 MASTER_DATA = load_master_data()
+
+def load_master_dist_data():
+    """โหลดไฟล์ Master Dist.xlsx สำหรับระยะทางระดับตำบล"""
+    try:
+        file_path = 'Dc/Master Dist.xlsx'
+        df = pd.read_excel(file_path)
+        
+        # สร้าง lookup dict - สอง key: Sum_Code และ จังหวัด_อำเภอ_ตำบล
+        dist_lookup = {}
+        name_lookup = {}  # key = จังหวัด_อำเภอ_ตำบล (หลังตัด prefix)
+        
+        for _, row in df.iterrows():
+            sum_code = str(row.get('Sum_Code', '')).strip()
+            
+            # ข้อมูลระยะทาง
+            data = {
+                'region': row.get('Region', ''),
+                'region_code': row.get('Region_Code', ''),
+                'province': row.get('Province', ''),
+                'prov_code': row.get('Prov_Code', ''),
+                'district': row.get('District', ''),
+                'dist_code': row.get('Dist_Code', ''),
+                'subdistrict': row.get('Subdistrict', ''),
+                'subdist_code': row.get('Subdist_Code', ''),
+                'dist_from_dc_km': float(row.get('Dist_from_DC_km', 9999)) if pd.notna(row.get('Dist_from_DC_km')) else 9999,
+                'prov_dist_km': float(row.get('Prov_Dist_km', 0)) if pd.notna(row.get('Prov_Dist_km')) else 0,
+                'dist_subdist_km': float(row.get('Dist_Subdist_km', 0)) if pd.notna(row.get('Dist_Subdist_km')) else 0,
+            }
+            
+            # Key 1: Sum_Code
+            if sum_code:
+                dist_lookup[sum_code] = data
+            
+            # Key 2: จังหวัด_อำเภอ_ตำบล (หลังตัด prefix "จ. ", "อ. ", "ต. ")
+            # ใช้หลาย key เผื่อชื่อไม่ตรงกัน
+            prov_raw = str(row.get('Province', ''))
+            dist_raw = str(row.get('District', ''))
+            subdist_raw = str(row.get('Subdistrict', ''))
+            
+            prov_clean = prov_raw.replace('จ. ', '').replace('จ.', '').strip()
+            dist_clean = dist_raw.replace('อ. ', '').replace('อ.', '').strip()
+            subdist_clean = subdist_raw.replace('ต. ', '').replace('ต.', '').strip()
+            
+            # Key แบบ clean (ไม่มี prefix)
+            name_key = f"{prov_clean}_{dist_clean}_{subdist_clean}"
+            if name_key and name_key != '__':
+                name_lookup[name_key] = data
+            
+            # Key แบบ raw (มี prefix)
+            raw_key = f"{prov_raw.strip()}_{dist_raw.strip()}_{subdist_raw.strip()}"
+            if raw_key and raw_key != '__':
+                name_lookup[raw_key] = data
+        
+        return {'by_code': dist_lookup, 'by_name': name_lookup}
+    except Exception as e:
+        return {'by_code': {}, 'by_name': {}}
+
+# โหลด Master Dist Data
+MASTER_DIST_DATA = load_master_dist_data()
+
+# ==========================================
+# PUNTHAI/MAXMART BUFFER FUNCTIONS
+# ==========================================
+def is_punthai_only(trip_data):
+    """
+    ตรวจสอบว่าทริปนี้เป็น Punthai ล้วน, Maxmart ล้วน หรือผสม
+    
+    Returns:
+        'punthai_only': ถ้าทั้งหมดเป็น Punthai (BU = 211 หรือชื่อมี PUNTHAI)
+        'maxmart_only': ถ้าทั้งหมดเป็น Maxmart (BU = 200 หรือชื่อมี MAXMART)
+        'mixed': ถ้ามีทั้ง Punthai และ Maxmart
+        'other': ถ้าไม่มีข้อมูล BU
+    """
+    if trip_data is None or len(trip_data) == 0:
+        return 'other'
+    
+    punthai_count = 0
+    maxmart_count = 0
+    total_count = len(trip_data)
+    
+    for _, row in trip_data.iterrows():
+        bu = row.get('BU', None)
+        name = str(row.get('Name', '')).upper()
+        
+        # เช็ค Punthai: BU = 211 หรือชื่อมี PUNTHAI
+        if bu == 211 or bu == '211' or 'PUNTHAI' in name or 'PUN-' in name:
+            punthai_count += 1
+        # เช็ค Maxmart: BU = 200 หรือชื่อมี MAXMART/MAX MART
+        elif bu == 200 or bu == '200' or 'MAXMART' in name or 'MAX MART' in name:
+            maxmart_count += 1
+    
+    if punthai_count == total_count:
+        return 'punthai_only'
+    elif maxmart_count == total_count:
+        return 'maxmart_only'
+    elif punthai_count > 0 or maxmart_count > 0:
+        return 'mixed'
+    else:
+        return 'other'
+
+def get_buffer_for_trip(trip_data):
+    """
+    ดึง Buffer ที่เหมาะสมตาม BU ของทริป
+    
+    Rules:
+    - Punthai ล้วน: BUFFER = 1.0 (ห้ามเกิน 100%)
+    - Maxmart ล้วน/ผสม: BUFFER = 1.10 (เกินได้ 10%)
+    
+    Returns:
+        float: buffer multiplier (1.0 หรือ 1.10)
+    """
+    trip_type = is_punthai_only(trip_data)
+    
+    if trip_type == 'punthai_only':
+        return PUNTHAI_BUFFER  # 1.0 - ห้ามเกิน 100%
+    elif trip_type in ['maxmart_only', 'mixed']:
+        return MAXMART_BUFFER  # 1.10 - เกินได้ 10%
+    else:
+        return BUFFER  # default 1.0
+
+def get_punthai_drop_limit(trip_data, vehicle_type):
+    """
+    ดึงจำกัดจำนวน Drop สำหรับ Punthai ล้วน
+    
+    Rules:
+    - Punthai ล้วน + 4W: สูงสุด 5 สาขา
+    - Punthai ล้วน + JB: สูงสุด 7 drop
+    - อื่นๆ: ไม่จำกัด (999)
+    
+    Returns:
+        int: max drops allowed
+    """
+    trip_type = is_punthai_only(trip_data)
+    
+    if trip_type == 'punthai_only':
+        return PUNTHAI_LIMITS.get(vehicle_type, {}).get('max_drops', 999)
+    else:
+        return 999  # ไม่จำกัด
 
 @st.cache_data(ttl=3600)  # Cache 1 ชั่วโมง
 def load_booking_history_restrictions():
@@ -1328,17 +1484,24 @@ def predict_trips(test_df, model_data):
     จัดทริปแบบใหม่ - เรียบง่ายและมีประสิทธิภาพ
     
     หลักการ:
-    1. เรียงตาม: ภาค → จังหวัด → อำเภอ → ตำบล → Route
+    1. เรียงตาม: ภาค → จังหวัด → อำเภอ → ตำบล → Route (ใช้ระยะทางจาก Master Dist.xlsx ไม่ใช่ตัวอักษร)
     2. จับกลุ่ม Route เดียวกัน รวมน้ำหนักไว้ด้วยกัน
     3. เรียงจากไกลมาใกล้ (จาก DC)
     4. ตัดเป็นทริปตามน้ำหนัก/คิวของรถแต่ละประเภท
+    5. ใช้ BUFFER ตาม BU: Punthai=100%, Maxmart=110%
     """
     branch_vehicles = model_data.get('branch_vehicles', {})
     
     # ==========================================
-    # Step 1: เตรียมข้อมูลพื้นที่จาก MASTER_DATA
+    # Step 1: เตรียมข้อมูลพื้นที่จาก MASTER_DATA และ MASTER_DIST_DATA
     # ==========================================
-    location_map = {}  # {code: {province, district, subdistrict, route, lat, lon, distance_from_dc}}
+    location_map = {}  # {code: {province, district, subdistrict, route, lat, lon, distance_from_dc, ...}}
+    
+    # สร้าง lookup จาก Master Dist (ตำบล → ระยะทาง)
+    subdistrict_dist_lookup = {}  # {จังหวัด_อำเภอ_ตำบล: {dist_from_dc, prov_dist, dist_subdist, region_code, ...}}
+    # ดึง lookup จาก MASTER_DIST_DATA (by_name)
+    if MASTER_DIST_DATA and 'by_name' in MASTER_DIST_DATA:
+        subdistrict_dist_lookup = MASTER_DIST_DATA['by_name']
     
     if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
         for _, row in MASTER_DATA.iterrows():
@@ -1353,13 +1516,33 @@ def predict_trips(test_df, model_data):
             lat = float(row.get('ละติจูด', 0)) if pd.notna(row.get('ละติจูด')) else 0
             lon = float(row.get('ลองติจูด', 0)) if pd.notna(row.get('ลองติจูด')) else 0
             
-            # คำนวณระยะทางจาก DC
-            dist_from_dc = 0
-            if lat and lon:
-                dist_from_dc = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
+            # ดึงระยะทางจาก Master Dist (ตาม ตำบล+อำเภอ+จังหวัด)
+            prov_clean = province.replace('จ. ', '').replace('จ.', '').strip()
+            dist_clean = district.replace('อ. ', '').replace('อ.', '').strip()
+            subdist_clean = subdistrict.replace('ต. ', '').replace('ต.', '').strip()
+            lookup_key = f"{prov_clean}_{dist_clean}_{subdist_clean}"
             
-            # ดึงรหัสภาค
-            region_code = get_region_code(province)
+            dist_data = subdistrict_dist_lookup.get(lookup_key, {})
+            
+            # ใช้ระยะทางจาก Master Dist ถ้ามี ไม่งั้นคำนวณจาก lat/lon
+            if dist_data:
+                dist_from_dc = dist_data.get('dist_from_dc_km', 9999)
+                region_code_from_dist = dist_data.get('region_code', '')
+                prov_code = dist_data.get('prov_code', '')
+                dist_code = dist_data.get('dist_code', '')
+                subdist_code = dist_data.get('subdist_code', '')
+            else:
+                # Fallback: คำนวณจาก lat/lon
+                dist_from_dc = 0
+                if lat and lon:
+                    dist_from_dc = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
+                region_code_from_dist = ''
+                prov_code = ''
+                dist_code = ''
+                subdist_code = ''
+            
+            # ดึงรหัสภาคจากชื่อจังหวัด (fallback)
+            region_code = region_code_from_dist if region_code_from_dist else get_region_code(province)
             region_name = get_region_name(province)
             
             location_map[code] = {
@@ -1371,6 +1554,9 @@ def predict_trips(test_df, model_data):
                 'lon': lon,
                 'distance_from_dc': dist_from_dc,
                 'region_code': region_code,
+                'prov_code': prov_code,
+                'dist_code': dist_code,
+                'subdist_code': subdist_code,
                 'region_name': region_name
             }
     
@@ -1384,12 +1570,16 @@ def predict_trips(test_df, model_data):
         return location_map.get(code_upper, {
             'province': '', 'district': '', 'subdistrict': '', 'route': '',
             'lat': 0, 'lon': 0, 'distance_from_dc': 9999,
-            'region_code': '99', 'region_name': 'ไม่ระบุ'
+            'region_code': 'R99', 'prov_code': 'P999', 'dist_code': 'D9999', 'subdist_code': 'S99999',
+            'region_name': 'ไม่ระบุ'
         })
     
     # เพิ่มคอลัมน์ข้อมูลพื้นที่
     df['_region_code'] = df['Code'].apply(lambda c: get_location_info(c)['region_code'])
     df['_region_name'] = df['Code'].apply(lambda c: get_location_info(c)['region_name'])
+    df['_prov_code'] = df['Code'].apply(lambda c: get_location_info(c)['prov_code'])
+    df['_dist_code'] = df['Code'].apply(lambda c: get_location_info(c)['dist_code'])
+    df['_subdist_code'] = df['Code'].apply(lambda c: get_location_info(c)['subdist_code'])
     df['_province'] = df['Code'].apply(lambda c: get_location_info(c)['province'])
     df['_district'] = df['Code'].apply(lambda c: get_location_info(c)['district'])
     df['_subdistrict'] = df['Code'].apply(lambda c: get_location_info(c)['subdistrict'])
@@ -1397,10 +1587,11 @@ def predict_trips(test_df, model_data):
     df['_distance_from_dc'] = df['Code'].apply(lambda c: get_location_info(c)['distance_from_dc'])
     
     # ==========================================
-    # Step 3: เรียงลำดับ ภาค → จังหวัด → อำเภอ → ตำบล → Route → ระยะทาง (ไกลมาใกล้)
+    # Step 3: เรียงลำดับตามรหัส (ระยะทาง) ไม่ใช่ตัวอักษร
+    # ภาค → จังหวัด → อำเภอ → ตำบล → Route → ระยะทาง (ไกลมาใกล้)
     # ==========================================
     df = df.sort_values(
-        ['_region_code', '_province', '_district', '_subdistrict', '_route', '_distance_from_dc'],
+        ['_region_code', '_prov_code', '_dist_code', '_subdist_code', '_route', '_distance_from_dc'],
         ascending=[True, True, True, True, True, False]  # ระยะทางเรียงจากไกลมาใกล้
     ).reset_index(drop=True)
     
@@ -1412,8 +1603,8 @@ def predict_trips(test_df, model_data):
         route = row['_route']
         if route and route.strip():
             return f"R_{route}"
-        # ถ้าไม่มี route ใช้ ตำบล+อำเภอ+จังหวัด
-        return f"L_{row['_province']}_{row['_district']}_{row['_subdistrict']}"
+        # ถ้าไม่มี route ใช้ รหัสตำบล (เรียงตามระยะทาง)
+        return f"L_{row['_subdist_code']}_{row['_dist_code']}_{row['_prov_code']}"
     
     df['_group_key'] = df.apply(get_group_key, axis=1)
     
@@ -1428,7 +1619,7 @@ def predict_trips(test_df, model_data):
     df['_max_vehicle'] = df['Code'].apply(get_max_vehicle_for_code)
     
     # ==========================================
-    # Step 6: ตัดเป็นทริปตามน้ำหนัก/คิว
+    # Step 6: ตัดเป็นทริปตามน้ำหนัก/คิว (ใช้ BUFFER ตาม BU)
     # ==========================================
     trip_counter = 1
     df['Trip'] = 0
@@ -1438,6 +1629,7 @@ def predict_trips(test_df, model_data):
     current_trip_cube = 0
     current_trip_max_vehicle = '6W'  # เริ่มต้นเป็น 6W (ใหญ่สุด)
     current_group_key = None
+    current_trip_rows = []  # เก็บ rows เพื่อเช็ค BU
     
     vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
     
@@ -1460,6 +1652,22 @@ def predict_trips(test_df, model_data):
         max_weight = limits['max_w']
         max_cube = limits['max_c']
         
+        # คำนวณ BUFFER ตาม BU (Punthai/Maxmart)
+        # ถ้ายังไม่มีข้อมูลใน trip ให้ใช้ default
+        if current_trip_rows:
+            trip_df_temp = pd.DataFrame(current_trip_rows + [row.to_dict()])
+            buffer = get_buffer_for_trip(trip_df_temp)
+        else:
+            # ถ้าเป็นสาขาแรก เช็ค BU จาก row ปัจจุบัน
+            bu = row.get('BU', None)
+            name = str(row.get('Name', '')).upper()
+            if bu == 211 or bu == '211' or 'PUNTHAI' in name or 'PUN-' in name:
+                buffer = PUNTHAI_BUFFER  # 1.0
+            elif bu == 200 or bu == '200' or 'MAXMART' in name or 'MAX MART' in name:
+                buffer = MAXMART_BUFFER  # 1.10
+            else:
+                buffer = BUFFER  # 1.0
+        
         # ลองเพิ่มสาขานี้เข้าทริป
         new_weight = current_trip_weight + weight
         new_cube = current_trip_cube + cube
@@ -1467,10 +1675,11 @@ def predict_trips(test_df, model_data):
         # เช็คว่าต้องขึ้นทริปใหม่หรือไม่
         start_new_trip = False
         
-        # 1. ถ้าเกินขีดจำกัด (>105%) → ขึ้นทริปใหม่
+        # 1. ถ้าเกินขีดจำกัด (ตาม BUFFER: Punthai=100%, Maxmart=110%) → ขึ้นทริปใหม่
+        max_util_threshold = buffer * 100  # 100% หรือ 110%
         weight_util = (new_weight / max_weight) * 100
         cube_util = (new_cube / max_cube) * 100
-        if weight_util > 105 or cube_util > 105:
+        if weight_util > max_util_threshold or cube_util > max_util_threshold:
             start_new_trip = True
         
         # 2. ถ้าจำนวนสาขาเกิน 12 (สำหรับ 4W/JB) → ขึ้นทริปใหม่
@@ -1495,12 +1704,14 @@ def predict_trips(test_df, model_data):
             current_trip_cube = cube
             current_trip_max_vehicle = code_max_vehicle
             current_group_key = group_key
+            current_trip_rows = [row.to_dict()]  # เริ่มเก็บ rows ใหม่
         else:
             # เพิ่มเข้าทริปปัจจุบัน
             current_trip_codes.append(code)
             current_trip_weight = new_weight
             current_trip_cube = new_cube
             current_trip_max_vehicle = proposed_max_vehicle
+            current_trip_rows.append(row.to_dict())  # เก็บ row เพื่อเช็ค BU
             if not current_group_key:
                 current_group_key = group_key
     
@@ -1528,21 +1739,27 @@ def predict_trips(test_df, model_data):
         min_max_size = min(vehicle_priority.get(v, 3) for v in max_vehicles)
         max_allowed_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(min_max_size, '6W')
         
+        # ดึง BUFFER ตาม BU (Punthai/Maxmart)
+        trip_type = is_punthai_only(trip_data)
+        buffer = get_buffer_for_trip(trip_data)
+        buffer_label = "🅿️ Punthai (100%)" if trip_type == 'punthai_only' else "🅼 Maxmart (110%)" if trip_type in ['maxmart_only', 'mixed'] else ""
+        
         # เลือกรถที่พอดีที่สุด
         suggested = max_allowed_vehicle
         source = "📋 จำกัดสาขา" if min_max_size < 3 else "🤖 อัตโนมัติ"
         
         # คำนวณ utilization
+        max_util_threshold = buffer * 100  # 100% หรือ 110% ตาม BU
         if suggested in LIMITS:
             w_util = (total_w / LIMITS[suggested]['max_w']) * 100
             c_util = (total_c / LIMITS[suggested]['max_c']) * 100
             max_util = max(w_util, c_util)
             
-            # ถ้าเกิน 105% ต้องเพิ่มขนาดรถ
-            if max_util > 105:
+            # ถ้าเกิน threshold ตาม BU ต้องเพิ่มขนาดรถ
+            if max_util > max_util_threshold:
                 if suggested == '4W' and min_max_size >= 2:
                     jb_util = max((total_w / LIMITS['JB']['max_w']), (total_c / LIMITS['JB']['max_c'])) * 100
-                    if jb_util <= 105:
+                    if jb_util <= max_util_threshold:
                         suggested = 'JB'
                         source += " → JB"
                         w_util = (total_w / LIMITS['JB']['max_w']) * 100
@@ -1583,6 +1800,8 @@ def predict_trips(test_df, model_data):
             'Weight': total_w,
             'Cube': total_c,
             'Truck': f"{suggested} {source}",
+            'BU_Type': trip_type,
+            'Buffer': buffer_label,
             'Weight_Use%': w_util,
             'Cube_Use%': c_util,
             'Total_Distance': round(total_distance, 1)
@@ -1612,8 +1831,13 @@ def predict_trips(test_df, model_data):
     # เพิ่มคอลัมน์เช็ครถ
     df['VehicleCheck'] = '✅ ใช้ได้'
     
+    # ==========================================
+    # Step 9: เรียงทริปใหม่ให้ทริปติดกัน (สำหรับ export)
+    # ==========================================
+    df = df.sort_values(['Trip', '_distance_from_dc'], ascending=[True, False]).reset_index(drop=True)
+    
     # ลบคอลัมน์ชั่วคราว
-    cols_to_drop = ['_region_code', '_region_name', '_province', '_district', '_subdistrict', '_route', '_distance_from_dc', '_group_key', '_max_vehicle']
+    cols_to_drop = ['_region_code', '_region_name', '_prov_code', '_dist_code', '_subdist_code', '_province', '_district', '_subdistrict', '_route', '_distance_from_dc', '_group_key', '_max_vehicle']
     df = df.drop(columns=[c for c in cols_to_drop if c in df.columns], errors='ignore')
     
     return df, summary_df
