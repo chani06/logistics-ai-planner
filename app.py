@@ -334,21 +334,65 @@ def load_master_data():
 # โหลด Master Data
 MASTER_DATA = load_master_data()
 
+# ==========================================
+# CLEAN NAME FUNCTION (สำหรับทำ Join_Key)
+# ==========================================
+def clean_name(text):
+    """
+    ทำความสะอาดชื่อ: ลบ prefix จ./อ./ต. และ trim whitespace
+    ใช้สำหรับสร้าง Join_Key เพื่อเทียบกับ Master Data
+    """
+    if pd.isna(text) or text is None:
+        return ''
+    text = str(text)
+    # ลบ prefix ภาษาไทย
+    text = text.replace('จ. ', '').replace('จ.', '')
+    text = text.replace('อ. ', '').replace('อ.', '')
+    text = text.replace('ต. ', '').replace('ต.', '')
+    # ลบ prefix ภาษาอังกฤษ (ถ้ามี)
+    text = text.replace('Tambon ', '').replace('Amphoe ', '').replace('Changwat ', '')
+    return text.strip()
+
+def normalize_province_name(province):
+    """
+    แปลงชื่อจังหวัดให้เป็นมาตรฐาน (แก้ปัญหาชื่อเพี้ยน)
+    """
+    if pd.isna(province) or province is None:
+        return ''
+    province = clean_name(province)
+    # Mapping ชื่อที่พบบ่อย
+    province_mapping = {
+        'พระนครศรีอยุธยา': 'อยุธยา',
+        'กรุงเทพฯ': 'กรุงเทพมหานคร',
+        'กทม': 'กรุงเทพมหานคร',
+        'กทม.': 'กรุงเทพมหานคร',
+        'โคราช': 'นครราชสีมา',
+    }
+    return province_mapping.get(province, province)
+
 def load_master_dist_data():
-    """โหลดไฟล์ Master Dist.xlsx สำหรับระยะทางระดับตำบล"""
+    """
+    โหลดไฟล์ Master Dist.xlsx สำหรับ:
+    1. ระยะทางระดับตำบล
+    2. Sum_Code (Sort_Code) สำหรับเรียงลำดับตามภูมิศาสตร์
+    
+    หลักการ: ใช้ Join_Key (จังหวัด_อำเภอ_ตำบล) เป็นตัวเชื่อม
+    เพื่อดึง Sum_Code มาใช้ในการ Sort
+    """
     try:
         file_path = 'Dc/Master Dist.xlsx'
         df = pd.read_excel(file_path)
         
-        # สร้าง lookup dict - สอง key: Sum_Code และ จังหวัด_อำเภอ_ตำบล
-        dist_lookup = {}
-        name_lookup = {}  # key = จังหวัด_อำเภอ_ตำบล (หลังตัด prefix)
+        # สร้าง lookup dict - สอง key: Sum_Code และ Join_Key (จังหวัด_อำเภอ_ตำบล)
+        dist_lookup = {}   # key = Sum_Code
+        name_lookup = {}   # key = Join_Key (จังหวัด_อำเภอ_ตำบล)
         
         for _, row in df.iterrows():
             sum_code = str(row.get('Sum_Code', '')).strip()
             
-            # ข้อมูลระยะทาง
+            # ข้อมูลสำคัญ: เพิ่ม sum_code (Sort_Code) เข้าไปด้วย!
             data = {
+                'sum_code': sum_code,  # 🔑 กุญแจสำคัญสำหรับ Sort!
                 'region': row.get('Region', ''),
                 'region_code': row.get('Region_Code', ''),
                 'province': row.get('Province', ''),
@@ -362,28 +406,35 @@ def load_master_dist_data():
                 'dist_subdist_km': float(row.get('Dist_Subdist_km', 0)) if pd.notna(row.get('Dist_Subdist_km')) else 0,
             }
             
-            # Key 1: Sum_Code
+            # Key 1: Sum_Code (สำหรับ lookup โดยตรง)
             if sum_code:
                 dist_lookup[sum_code] = data
             
-            # Key 2: จังหวัด_อำเภอ_ตำบล (หลังตัด prefix "จ. ", "อ. ", "ต. ")
-            # ใช้หลาย key เผื่อชื่อไม่ตรงกัน
+            # Key 2: Join_Key (จังหวัด_อำเภอ_ตำบล) - หัวใจของ Lookup!
             prov_raw = str(row.get('Province', ''))
             dist_raw = str(row.get('District', ''))
             subdist_raw = str(row.get('Subdistrict', ''))
             
-            prov_clean = prov_raw.replace('จ. ', '').replace('จ.', '').strip()
-            dist_clean = dist_raw.replace('อ. ', '').replace('อ.', '').strip()
-            subdist_clean = subdist_raw.replace('ต. ', '').replace('ต.', '').strip()
+            # Clean name สำหรับ Join
+            prov_clean = clean_name(prov_raw)
+            dist_clean = clean_name(dist_raw)
+            subdist_clean = clean_name(subdist_raw)
             
-            # Key แบบ clean (ไม่มี prefix)
-            name_key = f"{prov_clean}_{dist_clean}_{subdist_clean}"
-            if name_key and name_key != '__':
-                name_lookup[name_key] = data
+            # Join_Key แบบ clean (มาตรฐาน)
+            join_key = f"{prov_clean}_{dist_clean}_{subdist_clean}"
+            if join_key and join_key != '__':
+                name_lookup[join_key] = data
             
-            # Key แบบ raw (มี prefix)
+            # Join_Key แบบ normalized province (เผื่อชื่อเพี้ยน)
+            prov_normalized = normalize_province_name(prov_raw)
+            if prov_normalized != prov_clean:
+                alt_key = f"{prov_normalized}_{dist_clean}_{subdist_clean}"
+                if alt_key and alt_key != '__':
+                    name_lookup[alt_key] = data
+            
+            # Join_Key แบบมี prefix (เผื่อข้อมูลมี prefix)
             raw_key = f"{prov_raw.strip()}_{dist_raw.strip()}_{subdist_raw.strip()}"
-            if raw_key and raw_key != '__':
+            if raw_key and raw_key != '__' and raw_key not in name_lookup:
                 name_lookup[raw_key] = data
         
         return {'by_code': dist_lookup, 'by_name': name_lookup}
@@ -1498,15 +1549,16 @@ def predict_trips(test_df, model_data, buffer_type='auto'):
     branch_vehicles = model_data.get('branch_vehicles', {})
     
     # ==========================================
-    # Step 1: เตรียมข้อมูลพื้นที่จาก MASTER_DATA และ MASTER_DIST_DATA
+    # Step 1: เตรียม Master Dist Lookup (Join_Key → Sort_Code)
+    # หลักการ: ใช้ Join_Key (จังหวัด_อำเภอ_ตำบล) เป็นตัวเชื่อม
+    # เพื่อดึง Sum_Code (Sort_Code) มาใช้ในการเรียงลำดับ
     # ==========================================
-    location_map = {}  # {code: {province, district, subdistrict, route, lat, lon, distance_from_dc, ...}}
-    
-    # สร้าง lookup จาก Master Dist (ตำบล → ระยะทาง)
-    subdistrict_dist_lookup = {}  # {จังหวัด_อำเภอ_ตำบล: {dist_from_dc, prov_dist, dist_subdist, region_code, ...}}
-    # ดึง lookup จาก MASTER_DIST_DATA (by_name)
+    subdistrict_dist_lookup = {}  # {Join_Key: {sum_code, dist_from_dc, ...}}
     if MASTER_DIST_DATA and 'by_name' in MASTER_DIST_DATA:
         subdistrict_dist_lookup = MASTER_DIST_DATA['by_name']
+    
+    # สร้าง location_map จาก MASTER_DATA (ข้อมูลสาขา)
+    location_map = {}  # {code: {province, district, subdistrict, route, sum_code, ...}}
     
     if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
         for _, row in MASTER_DATA.iterrows():
@@ -1521,33 +1573,39 @@ def predict_trips(test_df, model_data, buffer_type='auto'):
             lat = float(row.get('ละติจูด', 0)) if pd.notna(row.get('ละติจูด')) else 0
             lon = float(row.get('ลองติจูด', 0)) if pd.notna(row.get('ลองติจูด')) else 0
             
-            # ดึงระยะทางจาก Master Dist (ตาม ตำบล+อำเภอ+จังหวัด)
-            prov_clean = province.replace('จ. ', '').replace('จ.', '').strip()
-            dist_clean = district.replace('อ. ', '').replace('อ.', '').strip()
-            subdist_clean = subdistrict.replace('ต. ', '').replace('ต.', '').strip()
-            lookup_key = f"{prov_clean}_{dist_clean}_{subdist_clean}"
+            # 🔑 สร้าง Join_Key เพื่อเทียบกับ Master Dist (VLOOKUP)
+            prov_clean = clean_name(province)
+            dist_clean = clean_name(district)
+            subdist_clean = clean_name(subdistrict)
+            join_key = f"{prov_clean}_{dist_clean}_{subdist_clean}"
             
-            dist_data = subdistrict_dist_lookup.get(lookup_key, {})
+            # ลองหลาย key เผื่อชื่อไม่ตรง
+            dist_data = subdistrict_dist_lookup.get(join_key, {})
+            if not dist_data:
+                # ลอง normalize ชื่อจังหวัด
+                prov_normalized = normalize_province_name(province)
+                alt_key = f"{prov_normalized}_{dist_clean}_{subdist_clean}"
+                dist_data = subdistrict_dist_lookup.get(alt_key, {})
             
-            # ใช้ระยะทางจาก Master Dist ถ้ามี ไม่งั้นคำนวณจาก lat/lon
+            # ดึงข้อมูลจาก Master Dist (ถ้ามี)
             if dist_data:
+                sum_code = dist_data.get('sum_code', '')  # 🎯 Sort_Code หลัก!
                 dist_from_dc = dist_data.get('dist_from_dc_km', 9999)
-                region_code_from_dist = dist_data.get('region_code', '')
+                region_code = dist_data.get('region_code', '')
                 prov_code = dist_data.get('prov_code', '')
-                dist_code = dist_data.get('dist_code', '')
+                dist_code_val = dist_data.get('dist_code', '')
                 subdist_code = dist_data.get('subdist_code', '')
             else:
-                # Fallback: คำนวณจาก lat/lon
-                dist_from_dc = 0
+                # Fallback: สร้าง sort_code จาก region code และคำนวณระยะทางจาก lat/lon
+                region_code = get_region_code(province)
+                sum_code = f"R99P999D9999S99999"  # Default สำหรับไม่พบ
+                dist_from_dc = 9999
                 if lat and lon:
                     dist_from_dc = haversine_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
-                region_code_from_dist = ''
-                prov_code = ''
-                dist_code = ''
-                subdist_code = ''
+                prov_code = 'P999'
+                dist_code_val = 'D9999'
+                subdist_code = 'S99999'
             
-            # ดึงรหัสภาคจากชื่อจังหวัด (fallback)
-            region_code = region_code_from_dist if region_code_from_dist else get_region_code(province)
             region_name = get_region_name(province)
             
             location_map[code] = {
@@ -1557,16 +1615,18 @@ def predict_trips(test_df, model_data, buffer_type='auto'):
                 'route': route,
                 'lat': lat,
                 'lon': lon,
+                'join_key': join_key,  # 🔑 Join_Key ที่ใช้ lookup
+                'sum_code': sum_code,  # 🎯 Sort_Code หลัก (จาก Master Dist)
                 'distance_from_dc': dist_from_dc,
                 'region_code': region_code,
                 'prov_code': prov_code,
-                'dist_code': dist_code,
+                'dist_code': dist_code_val,
                 'subdist_code': subdist_code,
                 'region_name': region_name
             }
     
     # ==========================================
-    # Step 2: เพิ่มข้อมูลพื้นที่ให้แต่ละสาขา
+    # Step 2: เพิ่มข้อมูลพื้นที่ให้แต่ละสาขา (pd.merge แบบ manual)
     # ==========================================
     df = test_df.copy()
     
@@ -1574,12 +1634,16 @@ def predict_trips(test_df, model_data, buffer_type='auto'):
         code_upper = str(code).strip().upper()
         return location_map.get(code_upper, {
             'province': '', 'district': '', 'subdistrict': '', 'route': '',
-            'lat': 0, 'lon': 0, 'distance_from_dc': 9999,
+            'lat': 0, 'lon': 0, 'join_key': '', 
+            'sum_code': 'R99P999D9999S99999',  # Default sort_code
+            'distance_from_dc': 9999,
             'region_code': 'R99', 'prov_code': 'P999', 'dist_code': 'D9999', 'subdist_code': 'S99999',
             'region_name': 'ไม่ระบุ'
         })
     
-    # เพิ่มคอลัมน์ข้อมูลพื้นที่
+    # เพิ่มคอลัมน์ข้อมูลพื้นที่ (รวม sum_code สำหรับ sort)
+    df['_sum_code'] = df['Code'].apply(lambda c: get_location_info(c)['sum_code'])  # 🎯 Sort_Code!
+    df['_join_key'] = df['Code'].apply(lambda c: get_location_info(c)['join_key'])
     df['_region_code'] = df['Code'].apply(lambda c: get_location_info(c)['region_code'])
     df['_region_name'] = df['Code'].apply(lambda c: get_location_info(c)['region_name'])
     df['_prov_code'] = df['Code'].apply(lambda c: get_location_info(c)['prov_code'])
@@ -1592,12 +1656,12 @@ def predict_trips(test_df, model_data, buffer_type='auto'):
     df['_distance_from_dc'] = df['Code'].apply(lambda c: get_location_info(c)['distance_from_dc'])
     
     # ==========================================
-    # Step 3: เรียงลำดับตามรหัส (ระยะทาง) ไม่ใช่ตัวอักษร
-    # ภาค → จังหวัด → อำเภอ → ตำบล → Route → ระยะทาง (ไกลมาใกล้)
+    # Step 3: เรียงลำดับตาม Sum_Code (Sort_Code) จาก Master Dist
+    # 🎯 หัวใจสำคัญ: เรียงตาม sum_code (ภูมิศาสตร์) ก่อน แล้วค่อยเรียงตาม Route และระยะทาง
     # ==========================================
     df = df.sort_values(
-        ['_region_code', '_prov_code', '_dist_code', '_subdist_code', '_route', '_distance_from_dc'],
-        ascending=[True, True, True, True, True, False]  # ระยะทางเรียงจากไกลมาใกล้
+        ['_sum_code', '_route', '_distance_from_dc'],
+        ascending=[True, True, False]  # Sum_Code ascending, Route ascending, Distance descending (ไกลมาใกล้)
     ).reset_index(drop=True)
     
     # ==========================================
@@ -1687,22 +1751,12 @@ def predict_trips(test_df, model_data, buffer_type='auto'):
         # เช็คว่าต้องขึ้นทริปใหม่หรือไม่
         start_new_trip = False
         
-        # 1. ถ้าเกินขีดจำกัด (ตาม BUFFER: Punthai=100%, Maxmart=110%) → ขึ้นทริปใหม่
+        # ถ้าเกินขีดจำกัด (ตาม BUFFER: Punthai=100%, Maxmart=110%) → ขึ้นทริปใหม่
         max_util_threshold = buffer * 100  # 100% หรือ 110%
         weight_util = (new_weight / max_weight) * 100
         cube_util = (new_cube / max_cube) * 100
         if weight_util > max_util_threshold or cube_util > max_util_threshold:
             start_new_trip = True
-        
-        # 2. ถ้าจำนวนสาขาเกิน 12 (สำหรับ 4W/JB) → ขึ้นทริปใหม่
-        if len(current_trip_codes) >= 12 and proposed_max_vehicle in ['4W', 'JB']:
-            start_new_trip = True
-        
-        # 3. ถ้าเปลี่ยน group_key และทริปมีของแล้ว (>60%) → ขึ้นทริปใหม่เพื่อให้ group เดียวกันอยู่ด้วยกัน
-        if current_group_key and current_group_key != group_key:
-            current_util = max((current_trip_weight / max_weight) * 100, (current_trip_cube / max_cube) * 100)
-            if current_util >= 60:  # ถ้าเต็ม 60% แล้ว ขึ้นทริปใหม่
-                start_new_trip = True
         
         if start_new_trip and current_trip_codes:
             # บันทึกทริปปัจจุบัน
@@ -2015,10 +2069,9 @@ def main():
                 st.markdown("---")
                 
                 # แท็บหลัก
-                tab1, tab2, tab3 = st.tabs([
+                tab1, tab2 = st.tabs([
                     "📦 จัดเที่ยว (ตามน้ำหนัก)", 
-                    "🗺️ จัดกลุ่มตามภาค", 
-                    "🔍 ตรวจสอบทริป"
+                    "🗺️ จัดกลุ่มตามภาค"
                 ])
                     
                 # ==========================================
@@ -2034,34 +2087,23 @@ def main():
                     # ==========================================
                     st.markdown("#### ⚙️ ตั้งค่าการจัดทริป")
                     
-                    col_set1, col_set2, col_set3 = st.columns(3)
-                    
-                    with col_set1:
-                        # เลือก Buffer Type (Punthai/Maxmart)
-                        buffer_type = st.selectbox(
-                            "📦 ประเภทสินค้า (Buffer)",
-                            options=['auto', 'punthai', 'maxmart'],
-                            format_func=lambda x: {
-                                'auto': '🔄 อัตโนมัติ (ตรวจจาก BU)',
-                                'punthai': '🅿️ Punthai ล้วน (100%)',
-                                'maxmart': '🅼 Maxmart/ผสม (110%)'
-                            }[x],
-                            index=0,
-                            help="""
-                            **เลือก Buffer ตามประเภทสินค้า:**
-                            - 🔄 อัตโนมัติ: ระบบจะตรวจจากคอลัมน์ BU หรือชื่อสาขา
-                            - 🅿️ Punthai ล้วน: ห้ามเกิน 100% ของขีดจำกัดรถ
-                            - 🅼 Maxmart/ผสม: เกินได้ 10% (110%)
-                            """
-                        )
-                    
-                    with col_set2:
-                        sort_by_region = st.checkbox("🗺️ เรียงตามภาค/จังหวัด", value=True, 
-                                                     help="จัดเรียงสาขาตาม ภาค→จังหวัด→อำเภอ→ตำบล→Route ก่อนจัดทริป")
-                    
-                    with col_set3:
-                        validate_vehicle = st.checkbox("🚛 ตรวจสอบรถตามภาค", value=True,
-                                                       help="ตรวจสอบว่ารถที่จัดให้เหมาะสมกับภาค (เหนือ/อีสาน/ใต้ ใช้ 6W)")
+                    # เลือก Buffer Type (Punthai/Maxmart)
+                    buffer_type = st.selectbox(
+                        "📦 ประเภทสินค้า (Buffer)",
+                        options=['auto', 'punthai', 'maxmart'],
+                        format_func=lambda x: {
+                            'auto': '🔄 อัตโนมัติ (ตรวจจาก BU)',
+                            'punthai': '🅿️ Punthai ล้วน (100%)',
+                            'maxmart': '🅼 Maxmart/ผสม (110%)'
+                        }[x],
+                        index=0,
+                        help="""
+                        **เลือก Buffer ตามประเภทสินค้า:**
+                        - 🔄 อัตโนมัติ: ระบบจะตรวจจากคอลัมน์ BU หรือชื่อสาขา
+                        - 🅿️ Punthai ล้วน: ห้ามเกิน 100% ของขีดจำกัดรถ
+                        - 🅼 Maxmart/ผสม: เกินได้ 10% (110%)
+                        """
+                    )
                     
                     # แสดงข้อมูล Buffer ที่เลือก
                     if buffer_type == 'punthai':
@@ -2103,47 +2145,14 @@ def main():
                     # ปุ่มจัดทริป
                     if st.button("🚀 เริ่มจัดเที่ยว", type="primary", use_container_width=True):
                         with st.spinner("⏳ กำลังประมวลผล..."):
-                            # จัดเรียงตามภาค/จังหวัดก่อน (ถ้าเลือก)
+                            # จัดเรียงตามภาค/จังหวัด/อำเภอ/ตำบล/Route (ในฟังก์ชัน predict_trips)
                             df_to_process = df.copy()
-                            if sort_by_region:
-                                df_to_process = sort_branches_by_region_route(df_to_process)
-                                st.info("📋 จัดเรียงสาขาตามภาค/จังหวัด/Route แล้ว")
                             
                             # ส่ง buffer_type ที่เลือกจากหน้าเว็บ
                             result_df, summary = predict_trips(df_to_process, model_data, buffer_type=buffer_type)
                             
-                            # ตรวจสอบรถตามภาค (ถ้าเลือก)
-                            vehicle_warnings = []
-                            if validate_vehicle and 'Province' in result_df.columns:
-                                for trip_num in result_df['Trip'].unique():
-                                    if trip_num == 0:
-                                        continue
-                                    trip_data = result_df[result_df['Trip'] == trip_num]
-                                    assigned_vehicle = summary[summary['Trip'] == trip_num]['Truck'].values[0].split()[0] if len(summary[summary['Trip'] == trip_num]) > 0 else '6W'
-                                    
-                                    is_valid, recommended, reason = validate_trip_vehicle(trip_data, assigned_vehicle)
-                                    if not is_valid:
-                                        vehicle_warnings.append({
-                                            'trip': trip_num,
-                                            'assigned': assigned_vehicle,
-                                            'recommended': recommended,
-                                            'reason': reason,
-                                            'provinces': trip_data['Province'].dropna().unique().tolist()
-                                        })
-                            
                             st.balloons()
                             st.success(f"✅ **จัดทริปเสร็จสมบูรณ์!** รวม **{len(summary)}** ทริป")
-                            
-                            # แสดงคำเตือนรถไม่เหมาะสม
-                            if vehicle_warnings:
-                                st.warning(f"⚠️ พบ {len(vehicle_warnings)} ทริปที่รถอาจไม่เหมาะสมกับภาค")
-                                with st.expander("🚨 ดูรายละเอียดคำเตือนรถ"):
-                                    for warn in vehicle_warnings:
-                                        st.error(f"""
-                                        **Trip {warn['trip']}**: จัด {warn['assigned']} → แนะนำ {warn['recommended']}
-                                        - เหตุผล: {warn['reason']}
-                                        - จังหวัด: {', '.join(warn['provinces'])}
-                                        """)
                             
                             st.markdown("---")
                             
@@ -2713,135 +2722,6 @@ def main():
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             use_container_width=True
                         )
-                
-                # ==========================================
-                # แท็บ 3: ตรวจสอบทริป
-                # ==========================================
-                with tab3:
-                    st.markdown("### 🔍 ตรวจสอบทริปที่มีปัญหา")
-                    st.info("อัปโหลดไฟล์ผลจัดทริปเพื่อตรวจสอบปัญหา Route กระจาย, หลายจังหวัด, รถไม่เหมาะสม")
-                    
-                    # อัปโหลดไฟล์ผลทริป
-                    trip_file = st.file_uploader(
-                        "เลือกไฟล์ผลจัดทริป (.xlsx)",
-                        type=['xlsx'],
-                        key="trip_check_file"
-                    )
-                    
-                    if trip_file:
-                        trip_df = pd.read_excel(trip_file)
-                        st.success(f"อ่านข้อมูล {len(trip_df)} รายการ")
-                        
-                        # หา column ที่เกี่ยวข้อง
-                        trip_col = None
-                        for col in ['Trip', 'Trip_No', 'TripNo', 'ทริป']:
-                            if col in trip_df.columns:
-                                trip_col = col
-                                break
-                        
-                        province_col = None
-                        for col in ['Province', 'จังหวัด']:
-                            if col in trip_df.columns:
-                                province_col = col
-                                break
-                        
-                        route_col = None
-                        for col in ['Route', 'เส้นทาง']:
-                            if col in trip_df.columns:
-                                route_col = col
-                                break
-                        
-                        vehicle_col = None
-                        for col in ['Vehicle_Type', 'Truck', 'รถ', 'ประเภทรถ']:
-                            if col in trip_df.columns:
-                                vehicle_col = col
-                                break
-                        
-                        if trip_col:
-                            # วิเคราะห์แต่ละทริป
-                            issues = []
-                            trips = trip_df.groupby(trip_col)
-                            
-                            for trip_no, trip_data in trips:
-                                issue = {'trip': trip_no, 'issues': [], 'provinces': [], 'route_range': 0}
-                                
-                                # ตรวจสอบจังหวัด
-                                if province_col:
-                                    provinces = trip_data[province_col].dropna().unique()
-                                    issue['provinces'] = [str(p) for p in provinces if str(p) not in ['', 'nan', 'UNKNOWN']]
-                                    
-                                    if len(issue['provinces']) > 2:
-                                        issue['issues'].append(f"🚨 หลายจังหวัด ({len(issue['provinces'])})")
-                                
-                                # ตรวจสอบ Route
-                                if route_col:
-                                    routes = trip_data[route_col].dropna().unique()
-                                    route_nums = []
-                                    for r in routes:
-                                        if pd.notna(r) and str(r).startswith('CD'):
-                                            try:
-                                                route_nums.append(int(str(r).replace('CD', '')))
-                                            except:
-                                                pass
-                                    
-                                    if len(route_nums) > 1:
-                                        route_range = max(route_nums) - min(route_nums)
-                                        issue['route_range'] = route_range
-                                        if route_range > 4000:
-                                            issue['issues'].append(f"⚠️ Route กระจาย ({route_range})")
-                                
-                                # ตรวจสอบรถตามภาค
-                                if vehicle_col and province_col:
-                                    vehicle = trip_data[vehicle_col].dropna().iloc[0] if len(trip_data[vehicle_col].dropna()) > 0 else None
-                                    if vehicle:
-                                        vehicle = str(vehicle).split()[0]  # เอาเฉพาะ 4W, JB, 6W
-                                        for prov in issue['provinces']:
-                                            code = get_region_code(prov)
-                                            region = code[0] if code != '99' else '1'
-                                            if region in REGIONS_REQUIRE_6W and vehicle in ['4W', 'JB']:
-                                                issue['issues'].append(f"🚛 รถ {vehicle} ไม่เหมาะกับภาค{REGION_NAMES.get(region, 'ไกล')}")
-                                                break
-                                
-                                if issue['issues']:
-                                    issues.append(issue)
-                            
-                            # แสดงผล
-                            if issues:
-                                st.error(f"⚠️ พบ {len(issues)} ทริปที่มีปัญหา")
-                                
-                                for issue in issues:
-                                    with st.expander(f"Trip {issue['trip']} - {len(issue['issues'])} ปัญหา"):
-                                        for iss in issue['issues']:
-                                            st.write(iss)
-                                        st.write(f"**จังหวัด:** {', '.join(issue['provinces'])}")
-                                        st.write(f"**Route Range:** {issue['route_range']}")
-                                        
-                                        # แสดงรายละเอียดสาขา
-                                        trip_detail = trip_df[trip_df[trip_col] == issue['trip']]
-                                        display_cols = [col for col in ['Code', 'Name', province_col, route_col, vehicle_col] if col and col in trip_detail.columns]
-                                        if display_cols:
-                                            st.dataframe(trip_detail[display_cols], use_container_width=True)
-                            else:
-                                st.success("✅ ไม่พบปัญหาในทริป")
-                        else:
-                            st.warning("ไม่พบคอลัมน์ Trip ในไฟล์")
-                    
-                    st.markdown("---")
-                    st.markdown("### 📋 รายการจังหวัดและรหัสภาค")
-                    
-                    # แสดงตารางจังหวัด-ภาค
-                    region_list = []
-                    for prov, code in REGION_CODE.items():
-                        region = code[0]
-                        region_list.append({
-                            'จังหวัด': prov,
-                            'รหัส': code,
-                            'ภาค': REGION_NAMES.get(region, 'ไม่ระบุ'),
-                            'แนะนำรถ': '6W' if region in REGIONS_REQUIRE_6W else '4W/JB'
-                        })
-                    
-                    region_df = pd.DataFrame(region_list)
-                    st.dataframe(region_df, use_container_width=True, height=400)
 
 if __name__ == "__main__":
     main()
