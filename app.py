@@ -35,7 +35,7 @@ LIMITS = {
 # 🔒 ขีดจำกัดสำหรับ Punthai ล้วน (ห้ามเกิน 100%)
 PUNTHAI_LIMITS = {
     '4W': {'max_w': 2500, 'max_c': 5.0, 'max_drops': 5},   # Punthai ล้วน 4W: สูงสุด 5 สาขา
-    'JB': {'max_w': 3500, 'max_c': 7.0, 'max_drops': 7},   # Punthai ล้วน: ไม่เกิน 7 drop
+    'JB': {'max_w': 3500, 'max_c': 7.0, 'max_drops': 10},  # Punthai ล้วน JB: สูงสุด 10 สาขา
     '6W': {'max_w': 6000, 'max_c': 20.0, 'max_drops': 999}
 }
 
@@ -1732,130 +1732,177 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     df['_region_allowed_vehicles'] = df['_region_name'].apply(get_allowed_vehicles_for_region)
     
     # ==========================================
-    # Step 6: ตัดเป็นทริปตามน้ำหนัก/คิว + Central Rule + Punthai Drop Limits
+    # Step 6: DISTRICT CLUSTERING ALLOCATION
+    # NEW: จัดทริปตาม District Buckets (ไม่ใช่ row-by-row)
     # ==========================================
     trip_counter = 1
     df['Trip'] = 0
     
-    current_trip_codes = []
-    current_trip_weight = 0
-    current_trip_cube = 0
-    current_trip_max_vehicle = '6W'  # เริ่มต้นเป็น 6W (ใหญ่สุด)
-    current_trip_region = None  # เพิ่ม: track region ของทริป
-    current_trip_allowed_vehicles = ['4W', 'JB', '6W']  # เพิ่ม: รถที่ใช้ได้
-    current_group_key = None
-    current_trip_rows = []  # เก็บ rows เพื่อเช็ค BU
-    current_trip_drops = 0  # เพิ่ม: นับจำนวน drops
-    
     vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
     
-    for idx, row in df.iterrows():
-        code = row['Code']
-        weight = row['Weight']
-        cube = row['Cube']
-        group_key = row['_group_key']
-        code_max_vehicle = row['_max_vehicle']
-        region_name = row['_region_name']
-        region_allowed = row['_region_allowed_vehicles']  # ['4W', 'JB'] for Central
+    # Helper function: เลือกรถที่เหมาะสม
+    def select_vehicle_for_load(weight, cube, drops, is_punthai, allowed_vehicles):
+        """เลือกรถที่เล็กที่สุดที่รับโหลดได้"""
+        limits_to_use = PUNTHAI_LIMITS if is_punthai else LIMITS
+        buffer_mult = punthai_buffer if is_punthai else maxmart_buffer
         
-        # หารถที่จะใช้สำหรับทริปนี้
-        # 1. ใช้รถที่เล็กที่สุดที่จำกัด (branch constraint)
-        # 2. ตัด 6W ออกถ้าเป็น Central Region
-        if vehicle_priority.get(code_max_vehicle, 3) < vehicle_priority.get(current_trip_max_vehicle, 3):
-            proposed_max_vehicle = code_max_vehicle
-        else:
-            proposed_max_vehicle = current_trip_max_vehicle
-        
-        # ถ้า proposed เป็น 6W แต่ region ห้าม → ลดเป็น JB
-        if proposed_max_vehicle == '6W' and '6W' not in region_allowed:
-            proposed_max_vehicle = 'JB'
-        
-        # ขีดจำกัดของรถที่จะใช้
-        limits = LIMITS.get(proposed_max_vehicle, LIMITS['6W'])
-        max_weight = limits['max_w']
-        max_cube = limits['max_c']
-        
-        # เลือก BUFFER ตามคอลัมน์ BU
-        bu = str(row.get('BU', '')).upper()
-        if bu in ['211', 'PUNTHAI']:
-            buffer = punthai_buffer
-        else:
-            buffer = maxmart_buffer
-        
-        # ลองเพิ่มสาขานี้เข้าทริป
-        new_weight = current_trip_weight + weight
-        new_cube = current_trip_cube + cube
-        new_drops = current_trip_drops + 1
-        
-        # เช็คว่าต้องขึ้นทริปใหม่หรือไม่
-        start_new_trip = False
-        
-        # Rule 0: Region change (ทริปต้องอยู่ภาคเดียวกัน)
-        if current_trip_region and current_trip_region != region_name:
-            start_new_trip = True
-        
-        # Rule 1: ถ้าเกินขีดจำกัด Weight/Cube (ตาม BUFFER)
-        if not start_new_trip:
-            max_util_threshold = buffer * 100
-            weight_util = (new_weight / max_weight) * 100
-            cube_util = (new_cube / max_cube) * 100
-            if weight_util > max_util_threshold or cube_util > max_util_threshold:
-                start_new_trip = True
-        
-        # Rule 2: Punthai Drop Limit Check (ถ้าทริปเป็น Punthai ล้วน)
-        if not start_new_trip and current_trip_rows:
-            # เช็คว่าทริปเป็น Punthai ล้วนหรือไม่
-            all_punthai = all(
-                str(r.get('BU', '')).upper() in ['211', 'PUNTHAI'] 
-                for r in current_trip_rows + [row.to_dict()]
-            )
-            if all_punthai:
-                punthai_drop_limit = PUNTHAI_LIMITS.get(proposed_max_vehicle, {}).get('max_drops', 999)
-                if new_drops > punthai_drop_limit:
-                    start_new_trip = True
-        
-        # Rule 3: ถ้า 6W ไม่ได้ใช้แล้ว (Central) แต่ต้องการ 6W
-        if not start_new_trip:
-            if '6W' not in current_trip_allowed_vehicles and proposed_max_vehicle == '6W':
-                start_new_trip = True
-        
-        if start_new_trip and current_trip_codes:
-            # บันทึกทริปปัจจุบัน
-            for c in current_trip_codes:
-                df.loc[df['Code'] == c, 'Trip'] = trip_counter
-            trip_counter += 1
+        for v in ['4W', 'JB', '6W']:
+            if v not in allowed_vehicles:
+                continue
+            lim = limits_to_use.get(v, LIMITS['6W'])
+            max_w = lim.get('max_w', lim.get('max_weight', 6000))
+            max_c = lim.get('max_c', lim.get('max_cube', 20.0))
+            max_d = lim.get('max_drops', 999)
             
-            # เริ่มทริปใหม่
-            current_trip_codes = [code]
-            current_trip_weight = weight
-            current_trip_cube = cube
-            current_trip_max_vehicle = code_max_vehicle
-            current_trip_region = region_name
-            current_trip_allowed_vehicles = list(region_allowed) if isinstance(region_allowed, list) else ['4W', 'JB', '6W']
-            current_group_key = group_key
-            current_trip_rows = [row.to_dict()]
-            current_trip_drops = 1
+            if weight <= max_w * buffer_mult and cube <= max_c * buffer_mult and drops <= max_d:
+                return v
+        return None
+    
+    # Helper function: เช็คว่าเป็น Punthai ล้วนหรือไม่
+    def is_all_punthai(rows):
+        return all(str(r.get('BU', '')).upper() in ['211', 'PUNTHAI'] for r in rows)
+    
+    # Current trip state
+    current_trip = {
+        'codes': [], 'weight': 0, 'cube': 0, 'drops': 0,
+        'rows': [], 'region': None, 'allowed_vehicles': ['4W', 'JB', '6W'],
+        'district': None
+    }
+    
+    def finalize_current_trip():
+        """ปิดทริปปัจจุบันและบันทึก"""
+        if current_trip['codes']:
+            for c in current_trip['codes']:
+                df.loc[df['Code'] == c, 'Trip'] = trip_counter
+    
+    # ==========================================
+    # GROUP BY DISTRICT BUCKETS (Key Algorithm Change!)
+    # ==========================================
+    # จัดกลุ่มตาม Region + Province + District
+    district_groups = df.groupby(['_region_name', '_province', '_district'], sort=False)
+    
+    for (region, province, district), district_df in district_groups:
+        # ข้อมูล District
+        district_codes = district_df['Code'].tolist()
+        district_weight = district_df['Weight'].sum()
+        district_cube = district_df['Cube'].sum()
+        district_drops = len(district_codes)
+        district_rows = district_df.to_dict('records')
+        district_bus = [str(r.get('BU', '')).upper() for r in district_rows]
+        
+        # หารถที่ใช้ได้ตามภาค
+        allowed_vehicles = ['4W', 'JB', '6W']
+        if region in CENTRAL_REGIONS:
+            allowed_vehicles = CENTRAL_ALLOWED_VEHICLES
+        
+        # ==========================================
+        # Rule 0: Region Change → ปิดทริปเก่า
+        # ==========================================
+        if current_trip['region'] and current_trip['region'] != region:
+            finalize_current_trip()
+            trip_counter += 1
+            current_trip = {
+                'codes': [], 'weight': 0, 'cube': 0, 'drops': 0,
+                'rows': [], 'region': None, 'allowed_vehicles': allowed_vehicles,
+                'district': None
+            }
+        
+        # ==========================================
+        # Rule 1: ลองใส่ทั้ง District ลงทริปปัจจุบัน
+        # ==========================================
+        if current_trip['codes']:
+            # เช็คว่า District ทั้งอันใส่ได้ไหม
+            test_weight = current_trip['weight'] + district_weight
+            test_cube = current_trip['cube'] + district_cube
+            test_drops = current_trip['drops'] + district_drops
+            test_rows = current_trip['rows'] + district_rows
+            test_punthai = is_all_punthai(test_rows)
+            test_allowed = list(set(current_trip['allowed_vehicles']) & set(allowed_vehicles))
+            
+            vehicle = select_vehicle_for_load(test_weight, test_cube, test_drops, test_punthai, test_allowed)
+            
+            if vehicle:
+                # District พอดี! เพิ่มเข้าทริปปัจจุบัน
+                current_trip['codes'].extend(district_codes)
+                current_trip['weight'] = test_weight
+                current_trip['cube'] = test_cube
+                current_trip['drops'] = test_drops
+                current_trip['rows'].extend(district_rows)
+                current_trip['allowed_vehicles'] = test_allowed
+            else:
+                # District ไม่พอดี → ปิดทริปเก่า, เริ่มทริปใหม่กับ District นี้
+                finalize_current_trip()
+                trip_counter += 1
+                
+                # เริ่มทริปใหม่กับ District นี้
+                current_trip = {
+                    'codes': district_codes.copy(),
+                    'weight': district_weight,
+                    'cube': district_cube,
+                    'drops': district_drops,
+                    'rows': district_rows.copy(),
+                    'region': region,
+                    'allowed_vehicles': allowed_vehicles,
+                    'district': district
+                }
         else:
-            # เพิ่มเข้าทริปปัจจุบัน
-            current_trip_codes.append(code)
-            current_trip_weight = new_weight
-            current_trip_cube = new_cube
-            current_trip_max_vehicle = proposed_max_vehicle
-            current_trip_drops = new_drops
-            current_trip_rows.append(row.to_dict())
-            # Update allowed vehicles (intersection)
-            if isinstance(region_allowed, list):
-                current_trip_allowed_vehicles = list(set(current_trip_allowed_vehicles) & set(region_allowed))
-            if not current_trip_region:
-                current_trip_region = region_name
-            if not current_group_key:
-                current_group_key = group_key
+            # ทริปว่าง → เพิ่ม District เข้าไป
+            current_trip = {
+                'codes': district_codes.copy(),
+                'weight': district_weight,
+                'cube': district_cube,
+                'drops': district_drops,
+                'rows': district_rows.copy(),
+                'region': region,
+                'allowed_vehicles': allowed_vehicles,
+                'district': district
+            }
+        
+        # ==========================================
+        # Rule 2: ถ้า District เดียวใหญ่เกินรถ → ต้องแยก
+        # ==========================================
+        is_punthai = is_all_punthai(current_trip['rows'])
+        vehicle = select_vehicle_for_load(
+            current_trip['weight'], current_trip['cube'], 
+            current_trip['drops'], is_punthai, current_trip['allowed_vehicles']
+        )
+        
+        if vehicle is None and len(current_trip['codes']) > 1:
+            # District ใหญ่เกิน ต้องแยก
+            while vehicle is None and len(current_trip['codes']) > 1:
+                # เอาสาขาสุดท้ายออก
+                overflow_code = current_trip['codes'].pop()
+                overflow_row = current_trip['rows'].pop()
+                current_trip['weight'] -= overflow_row['Weight']
+                current_trip['cube'] -= overflow_row['Cube']
+                current_trip['drops'] -= 1
+                
+                is_punthai = is_all_punthai(current_trip['rows'])
+                vehicle = select_vehicle_for_load(
+                    current_trip['weight'], current_trip['cube'],
+                    current_trip['drops'], is_punthai, current_trip['allowed_vehicles']
+                )
+                
+                if vehicle:
+                    # ปิดทริปนี้
+                    finalize_current_trip()
+                    trip_counter += 1
+                    
+                    # เริ่มทริปใหม่กับ overflow
+                    current_trip = {
+                        'codes': [overflow_code],
+                        'weight': overflow_row['Weight'],
+                        'cube': overflow_row['Cube'],
+                        'drops': 1,
+                        'rows': [overflow_row],
+                        'region': region,
+                        'allowed_vehicles': allowed_vehicles,
+                        'district': district
+                    }
     
-    # บันทึกทริปสุดท้าย
-    if current_trip_codes:
-        for c in current_trip_codes:
-            df.loc[df['Code'] == c, 'Trip'] = trip_counter
-    
+    # ปิดทริปสุดท้าย
+    finalize_current_trip()
+
     # ==========================================
     # Step 7: สร้าง Summary + Central Rule + Punthai Drop Limits
     # ==========================================
