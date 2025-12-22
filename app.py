@@ -1732,7 +1732,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     df['_region_allowed_vehicles'] = df['_region_name'].apply(get_allowed_vehicles_for_region)
     
     # ==========================================
-    # Step 6: DISTRICT CLUSTERING ALLOCATION (FIXED)
+    # Step 6: DISTRICT CLUSTERING ALLOCATION (OPTIMIZED)
     # จัดทริปตาม District Buckets พร้อม Split เมื่อเกิน
     # ==========================================
     trip_counter = 1
@@ -1740,37 +1740,68 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     
     vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
     
-    # Helper function: เลือกรถที่เหมาะสม
+    # 🚀 CACHE: Pre-compute branch constraints และ BU type
+    branch_max_vehicle_cache = {}
+    branch_bu_cache = {}
+    for _, row in df.iterrows():
+        code = row['Code']
+        branch_max_vehicle_cache[code] = row['_max_vehicle']
+        bu = str(row.get('BU', '')).upper()
+        branch_bu_cache[code] = bu in ['211', 'PUNTHAI']
+    
+    # 🚀 Pre-compute limits with buffer
+    def get_max_limits(allowed_vehicles, is_punthai):
+        """หา capacity สูงสุดที่ใช้ได้"""
+        buffer_mult = punthai_buffer if is_punthai else maxmart_buffer
+        max_vehicle = '6W' if '6W' in allowed_vehicles else ('JB' if 'JB' in allowed_vehicles else '4W')
+        limits_to_use = PUNTHAI_LIMITS if is_punthai else LIMITS
+        lim = limits_to_use.get(max_vehicle, LIMITS['6W'])
+        return {
+            'max_w': lim.get('max_w', 6000) * buffer_mult,
+            'max_c': lim.get('max_c', 20.0) * buffer_mult,
+            'max_d': lim.get('max_drops', 12)
+        }
+    
+    # Helper function: เลือกรถที่เหมาะสม (Optimized)
     def select_vehicle_for_load(weight, cube, drops, is_punthai, allowed_vehicles):
         """เลือกรถที่เล็กที่สุดที่รับโหลดได้ (ต้องไม่เกิน Buffer)"""
-        limits_to_use = PUNTHAI_LIMITS if is_punthai else LIMITS
         buffer_mult = punthai_buffer if is_punthai else maxmart_buffer
+        limits_to_use = PUNTHAI_LIMITS if is_punthai else LIMITS
         
         for v in ['4W', 'JB', '6W']:
             if v not in allowed_vehicles:
                 continue
-            lim = limits_to_use.get(v, LIMITS['6W'])
-            max_w = lim.get('max_w', lim.get('max_weight', 6000)) * buffer_mult
-            max_c = lim.get('max_c', lim.get('max_cube', 20.0)) * buffer_mult
-            max_d = lim.get('max_drops', 12)
-            
-            if weight <= max_w and cube <= max_c and drops <= max_d:
+            lim = limits_to_use[v]
+            if (weight <= lim['max_w'] * buffer_mult and 
+                cube <= lim['max_c'] * buffer_mult and 
+                drops <= lim.get('max_drops', 12)):
                 return v
-        
-        # ไม่มีรถรองรับได้ภายใน buffer → return None (ต้อง split)
         return None
     
-    # Helper function: เช็คว่าเป็น Punthai ล้วนหรือไม่
-    def is_all_punthai(rows):
-        if not rows:
+    # Helper function: เช็คว่าเป็น Punthai ล้วนหรือไม่ (Optimized - ใช้ cache)
+    def is_all_punthai_codes(codes):
+        if not codes:
             return False
-        return all(str(r.get('BU', '')).upper() in ['211', 'PUNTHAI'] for r in rows)
+        return all(branch_bu_cache.get(c, False) for c in codes)
+    
+    # Helper function: หา allowed vehicles จาก codes (Optimized)
+    def get_allowed_from_codes(codes, base_allowed):
+        """หา allowed vehicles โดยรวม branch constraints"""
+        result = set(base_allowed)
+        for code in codes:
+            branch_max = branch_max_vehicle_cache.get(code, '6W')
+            if branch_max == 'JB':
+                result.discard('6W')
+            elif branch_max == '4W':
+                result.discard('6W')
+                result.discard('JB')
+        return list(result)
     
     # Current trip state
     current_trip = {
         'codes': [], 'weight': 0, 'cube': 0, 'drops': 0,
-        'rows': [], 'region': None, 'allowed_vehicles': ['4W', 'JB', '6W'],
-        'district': None
+        'region': None, 'allowed_vehicles': ['4W', 'JB', '6W'],
+        'district': None, 'is_punthai': False
     }
     
     overflow_queue = []  # Queue สำหรับ stores ที่ overflow
@@ -1783,88 +1814,65 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 df.loc[df['Code'] == c, 'Trip'] = trip_counter
     
     def split_until_fits(allowed_vehicles, region):
-        """แยก stores ออกจาก current_trip จนกว่าจะพอดีรถ (ไม่เกิน buffer)"""
+        """แยก stores ออกจาก current_trip จนกว่าจะพอดีรถ (ไม่เกิน buffer) - OPTIMIZED"""
         nonlocal trip_counter, overflow_queue
         
-        split_count = 0
-        
         while True:
-            # หา capacity สูงสุดที่ใช้ได้ (รวม branch constraints)
-            is_punthai = is_all_punthai(current_trip['rows'])
-            buffer_mult = punthai_buffer if is_punthai else maxmart_buffer
+            # ใช้ cached is_punthai
+            is_punthai = current_trip['is_punthai']
+            limits = get_max_limits(current_trip['allowed_vehicles'], is_punthai)
             
-            # หา allowed_vehicles ที่แท้จริง (รวม branch constraints ของทริปปัจจุบัน)
-            effective_allowed = current_trip['allowed_vehicles'].copy() if current_trip['allowed_vehicles'] else allowed_vehicles.copy()
-            
-            # หารถที่ใหญ่ที่สุดที่อนุญาต
-            max_vehicle = '6W' if '6W' in effective_allowed else ('JB' if 'JB' in effective_allowed else '4W')
-            limits_to_use = PUNTHAI_LIMITS if is_punthai else LIMITS
-            lim = limits_to_use.get(max_vehicle, LIMITS['6W'])
-            max_w = lim.get('max_w', 6000) * buffer_mult
-            max_c = lim.get('max_c', 20.0) * buffer_mult
-            max_d = lim.get('max_drops', 12)
-            
-            # เช็คว่าเกินหรือไม่ (Weight หรือ Cube หรือ Drops)
-            weight_over = current_trip['weight'] > max_w
-            cube_over = current_trip['cube'] > max_c
-            drops_over = current_trip['drops'] > max_d
-            
-            if not weight_over and not cube_over and not drops_over:
-                # พอดีแล้ว ไม่ต้อง split
+            # เช็คว่าเกินหรือไม่
+            if (current_trip['weight'] <= limits['max_w'] and 
+                current_trip['cube'] <= limits['max_c'] and 
+                current_trip['drops'] <= limits['max_d']):
                 break
             
             if len(current_trip['codes']) <= 1:
-                # เหลือ 1 store → ต้องยอมรับ (แต่จะถูก flag ใน summary)
                 break
             
-            # 🔥 ตัดทันที: เอา store สุดท้ายออก
+            # ตัด store สุดท้ายออก
             overflow_code = current_trip['codes'].pop()
-            overflow_row = current_trip['rows'].pop()
-            current_trip['weight'] -= overflow_row['Weight']
-            current_trip['cube'] -= overflow_row['Cube']
+            overflow_weight = df.loc[df['Code'] == overflow_code, 'Weight'].iloc[0]
+            overflow_cube = df.loc[df['Code'] == overflow_code, 'Cube'].iloc[0]
+            current_trip['weight'] -= overflow_weight
+            current_trip['cube'] -= overflow_cube
             current_trip['drops'] -= 1
-            split_count += 1
             
-            # อัพเดท allowed_vehicles หลังเอา store ออก
-            new_allowed = allowed_vehicles.copy()
-            for code in current_trip['codes']:
-                branch_max_v = get_max_vehicle_for_code(code)
-                if branch_max_v == 'JB' and '6W' in new_allowed:
-                    new_allowed.remove('6W')
-                elif branch_max_v == '4W':
-                    if '6W' in new_allowed:
-                        new_allowed.remove('6W')
-                    if 'JB' in new_allowed:
-                        new_allowed.remove('JB')
-            current_trip['allowed_vehicles'] = new_allowed
+            # Update is_punthai และ allowed_vehicles
+            current_trip['is_punthai'] = is_all_punthai_codes(current_trip['codes'])
+            current_trip['allowed_vehicles'] = get_allowed_from_codes(current_trip['codes'], allowed_vehicles)
             
             overflow_queue.append({
                 'code': overflow_code,
-                'row': overflow_row,
+                'weight': overflow_weight,
+                'cube': overflow_cube,
                 'region': region,
                 'allowed_vehicles': allowed_vehicles
             })
     
     def process_overflow_queue():
-        """ประมวลผล overflow queue - สร้างทริปใหม่สำหรับ stores ที่ล้น"""
+        """ประมวลผล overflow queue - สร้างทริปใหม่สำหรับ stores ที่ล้น - OPTIMIZED"""
         nonlocal trip_counter, current_trip, overflow_queue
         
         while overflow_queue:
             item = overflow_queue.pop(0)
             code = item['code']
-            row = item['row']
+            weight = item['weight']
+            cube = item['cube']
             region = item['region']
             allowed_vehicles = item['allowed_vehicles']
             
             # ลองเพิ่มเข้า current_trip
             if current_trip['codes']:
-                test_weight = current_trip['weight'] + row['Weight']
-                test_cube = current_trip['cube'] + row['Cube']
+                test_codes = current_trip['codes'] + [code]
+                test_weight = current_trip['weight'] + weight
+                test_cube = current_trip['cube'] + cube
                 test_drops = current_trip['drops'] + 1
-                test_rows = current_trip['rows'] + [row]
-                test_punthai = is_all_punthai(test_rows)
+                test_punthai = is_all_punthai_codes(test_codes)
+                test_allowed = get_allowed_from_codes(test_codes, allowed_vehicles)
                 
-                vehicle = select_vehicle_for_load(test_weight, test_cube, test_drops, test_punthai, allowed_vehicles)
+                vehicle = select_vehicle_for_load(test_weight, test_cube, test_drops, test_punthai, test_allowed)
                 
                 if vehicle:
                     # พอดี! เพิ่มเข้า
@@ -1872,135 +1880,113 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     current_trip['weight'] = test_weight
                     current_trip['cube'] = test_cube
                     current_trip['drops'] = test_drops
-                    current_trip['rows'].append(row)
+                    current_trip['is_punthai'] = test_punthai
+                    current_trip['allowed_vehicles'] = test_allowed
                     
-                    # 🔒 DOUBLE CHECK: Split ถ้ายังเกินอยู่
+                    # Double check
                     split_until_fits(allowed_vehicles, region)
                 else:
                     # ไม่พอดี → ปิดทริปเก่า, เริ่มใหม่
                     finalize_current_trip()
                     trip_counter += 1
+                    new_allowed = get_allowed_from_codes([code], allowed_vehicles)
                     current_trip = {
                         'codes': [code],
-                        'weight': row['Weight'],
-                        'cube': row['Cube'],
+                        'weight': weight,
+                        'cube': cube,
                         'drops': 1,
-                        'rows': [row],
                         'region': region,
-                        'allowed_vehicles': allowed_vehicles,
-                        'district': None
+                        'allowed_vehicles': new_allowed,
+                        'district': None,
+                        'is_punthai': branch_bu_cache.get(code, False)
                     }
             else:
                 # ทริปว่าง
+                new_allowed = get_allowed_from_codes([code], allowed_vehicles)
                 current_trip = {
                     'codes': [code],
-                    'weight': row['Weight'],
-                    'cube': row['Cube'],
+                    'weight': weight,
+                    'cube': cube,
                     'drops': 1,
-                    'rows': [row],
                     'region': region,
-                    'allowed_vehicles': allowed_vehicles,
-                    'district': None
+                    'allowed_vehicles': new_allowed,
+                    'district': None,
+                    'is_punthai': branch_bu_cache.get(code, False)
                 }
     
     # ==========================================
-    # GROUP BY DISTRICT BUCKETS
+    # GROUP BY DISTRICT BUCKETS - OPTIMIZED
     # ==========================================
+    # Pre-group data for faster iteration
     district_groups = df.groupby(['_region_name', '_province', '_district'], sort=False)
     
     for (region, province, district), district_df in district_groups:
-        # ข้อมูล District
+        # ข้อมูล District (vectorized - no dict conversion)
         district_codes = district_df['Code'].tolist()
         district_weight = district_df['Weight'].sum()
         district_cube = district_df['Cube'].sum()
         district_drops = len(district_codes)
-        district_rows = district_df.to_dict('records')
         
         # หารถที่ใช้ได้ตามภาค
         allowed_vehicles = ['4W', 'JB', '6W']
         if region in CENTRAL_REGIONS:
-            allowed_vehicles = CENTRAL_ALLOWED_VEHICLES
+            allowed_vehicles = CENTRAL_ALLOWED_VEHICLES.copy()
         
         # ==========================================
         # Rule 0: Region Change → ปิดทริปเก่า + process overflow
         # ==========================================
         if current_trip['region'] and current_trip['region'] != region:
-            # Process overflow ของ region เก่าก่อน
             process_overflow_queue()
             finalize_current_trip()
             trip_counter += 1
             current_trip = {
                 'codes': [], 'weight': 0, 'cube': 0, 'drops': 0,
-                'rows': [], 'region': None, 'allowed_vehicles': allowed_vehicles,
-                'district': None
+                'region': None, 'allowed_vehicles': allowed_vehicles,
+                'district': None, 'is_punthai': False
             }
         
         # ==========================================
-        # Rule 1: ลองใส่ทั้ง District
+        # Rule 1: ลองใส่ทั้ง District - OPTIMIZED
         # ==========================================
         if current_trip['codes']:
+            test_codes = current_trip['codes'] + district_codes
             test_weight = current_trip['weight'] + district_weight
             test_cube = current_trip['cube'] + district_cube
             test_drops = current_trip['drops'] + district_drops
-            test_rows = current_trip['rows'] + district_rows
-            test_punthai = is_all_punthai(test_rows)
-            
-            # รวม allowed_vehicles จาก region + branch constraints
-            test_allowed = list(set(current_trip['allowed_vehicles']) & set(allowed_vehicles))
-            
-            # เพิ่ม: ตรวจสอบ branch constraints ของ District ใหม่
-            for code in district_codes:
-                branch_max_v = get_max_vehicle_for_code(code)
-                # ถ้าสาขาห้าม 6W ต้องเอา 6W ออก
-                if branch_max_v == 'JB' and '6W' in test_allowed:
-                    test_allowed.remove('6W')
-                elif branch_max_v == '4W':
-                    if '6W' in test_allowed:
-                        test_allowed.remove('6W')
-                    if 'JB' in test_allowed:
-                        test_allowed.remove('JB')
+            test_punthai = is_all_punthai_codes(test_codes)
+            test_allowed = get_allowed_from_codes(test_codes, allowed_vehicles)
             
             vehicle = select_vehicle_for_load(test_weight, test_cube, test_drops, test_punthai, test_allowed)
             
             if vehicle:
-                # District พอดี! เพิ่มเข้าทริป
+                # District พอดี!
                 current_trip['codes'].extend(district_codes)
                 current_trip['weight'] = test_weight
                 current_trip['cube'] = test_cube
                 current_trip['drops'] = test_drops
-                current_trip['rows'].extend(district_rows)
                 current_trip['allowed_vehicles'] = test_allowed
                 current_trip['region'] = region
+                current_trip['is_punthai'] = test_punthai
                 
-                # 🔒 DOUBLE CHECK: Split ถ้ายังเกินอยู่
+                # Double check
                 split_until_fits(test_allowed, region)
             else:
                 # District ไม่พอดี → ปิดทริปเก่า
                 finalize_current_trip()
                 trip_counter += 1
                 
-                # หา allowed_vehicles สำหรับ District ใหม่ (รวม branch constraints)
-                new_allowed = allowed_vehicles.copy()
-                for code in district_codes:
-                    branch_max_v = get_max_vehicle_for_code(code)
-                    if branch_max_v == 'JB' and '6W' in new_allowed:
-                        new_allowed.remove('6W')
-                    elif branch_max_v == '4W':
-                        if '6W' in new_allowed:
-                            new_allowed.remove('6W')
-                        if 'JB' in new_allowed:
-                            new_allowed.remove('JB')
+                new_allowed = get_allowed_from_codes(district_codes, allowed_vehicles)
+                new_punthai = is_all_punthai_codes(district_codes)
                 
-                # เริ่มทริปใหม่กับ District นี้
                 current_trip = {
                     'codes': district_codes.copy(),
                     'weight': district_weight,
                     'cube': district_cube,
                     'drops': district_drops,
-                    'rows': district_rows.copy(),
                     'region': region,
                     'allowed_vehicles': new_allowed,
-                    'district': district
+                    'district': district,
+                    'is_punthai': new_punthai
                 }
                 
                 # ==========================================
@@ -2008,27 +1994,19 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 # ==========================================
                 split_until_fits(allowed_vehicles, region)
         else:
-            # ทริปว่าง - หา allowed_vehicles รวม branch constraints
-            new_allowed = allowed_vehicles.copy()
-            for code in district_codes:
-                branch_max_v = get_max_vehicle_for_code(code)
-                if branch_max_v == 'JB' and '6W' in new_allowed:
-                    new_allowed.remove('6W')
-                elif branch_max_v == '4W':
-                    if '6W' in new_allowed:
-                        new_allowed.remove('6W')
-                    if 'JB' in new_allowed:
-                        new_allowed.remove('JB')
+            # ทริปว่าง - หา allowed_vehicles รวม branch constraints (ใช้ cache)
+            new_allowed = get_allowed_from_codes(district_codes, allowed_vehicles)
+            new_punthai = is_all_punthai_codes(district_codes)
             
             current_trip = {
                 'codes': district_codes.copy(),
                 'weight': district_weight,
                 'cube': district_cube,
                 'drops': district_drops,
-                'rows': district_rows.copy(),
                 'region': region,
                 'allowed_vehicles': new_allowed,
-                'district': district
+                'district': district,
+                'is_punthai': new_punthai
             }
             
             # ==========================================
