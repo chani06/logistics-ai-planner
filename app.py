@@ -2117,7 +2117,7 @@ def predict_trips(test_df, model_data):
                 # ฟังก์ชันคำนวณระยะทางจากจุดสุดท้ายในทริปไปยังสาขาใหม่
                 def get_distance_from_last_branch(current_trip_codes, new_code):
                     """คำนวณระยะทางจากสาขาสุดท้ายในทริปไปยังสาขาใหม่"""
-                    if not current_trip_codes or MASTER_DATA.empty:
+                    if not current_trip_codes or MASTER_DATA.empty or 'Plan Code' not in MASTER_DATA.columns:
                         return 0
                     
                     # เอาสาขาสุดท้าย
@@ -3959,7 +3959,7 @@ def predict_trips(test_df, model_data):
                     code1, code2 = trip_codes[i], trip_codes[j]
                     
                     # ดึงพิกัด
-                    if not MASTER_DATA.empty:
+                    if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
                         m1 = MASTER_DATA[MASTER_DATA['Plan Code'] == code1]
                         m2 = MASTER_DATA[MASTER_DATA['Plan Code'] == code2]
                         
@@ -4016,7 +4016,9 @@ def predict_trips(test_df, model_data):
             
             for i, code in enumerate(codes):
                 # หาพิกัดสาขานี้
-                m = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
+                m = pd.DataFrame()
+                if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                    m = MASTER_DATA[MASTER_DATA['Plan Code'] == code]
                 
                 if len(m) > 0:
                     lat = m.iloc[0].get('ละติจูด', 0)
