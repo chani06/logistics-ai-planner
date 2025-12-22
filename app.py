@@ -1732,8 +1732,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     df['_region_allowed_vehicles'] = df['_region_name'].apply(get_allowed_vehicles_for_region)
     
     # ==========================================
-    # Step 6: DISTRICT CLUSTERING ALLOCATION
-    # NEW: จัดทริปตาม District Buckets (ไม่ใช่ row-by-row)
+    # Step 6: DISTRICT CLUSTERING ALLOCATION (FIXED)
+    # จัดทริปตาม District Buckets พร้อม Split เมื่อเกิน
     # ==========================================
     trip_counter = 1
     df['Trip'] = 0
@@ -1760,6 +1760,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     
     # Helper function: เช็คว่าเป็น Punthai ล้วนหรือไม่
     def is_all_punthai(rows):
+        if not rows:
+            return False
         return all(str(r.get('BU', '')).upper() in ['211', 'PUNTHAI'] for r in rows)
     
     # Current trip state
@@ -1769,16 +1771,106 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         'district': None
     }
     
+    overflow_queue = []  # Queue สำหรับ stores ที่ overflow
+    
     def finalize_current_trip():
         """ปิดทริปปัจจุบันและบันทึก"""
+        nonlocal trip_counter
         if current_trip['codes']:
             for c in current_trip['codes']:
                 df.loc[df['Code'] == c, 'Trip'] = trip_counter
     
+    def split_until_fits(allowed_vehicles, region):
+        """แยก stores ออกจาก current_trip จนกว่าจะพอดีรถ"""
+        nonlocal trip_counter, overflow_queue
+        
+        while True:
+            is_punthai = is_all_punthai(current_trip['rows'])
+            vehicle = select_vehicle_for_load(
+                current_trip['weight'], current_trip['cube'],
+                current_trip['drops'], is_punthai, allowed_vehicles
+            )
+            
+            if vehicle is not None:
+                # พอดีแล้ว
+                break
+            
+            if len(current_trip['codes']) <= 1:
+                # เหลือ 1 store แต่ยังเกิน → ต้องใช้รถใหญ่สุด (force)
+                break
+            
+            # เอา store สุดท้ายออกไป overflow queue
+            overflow_code = current_trip['codes'].pop()
+            overflow_row = current_trip['rows'].pop()
+            current_trip['weight'] -= overflow_row['Weight']
+            current_trip['cube'] -= overflow_row['Cube']
+            current_trip['drops'] -= 1
+            
+            overflow_queue.append({
+                'code': overflow_code,
+                'row': overflow_row,
+                'region': region,
+                'allowed_vehicles': allowed_vehicles
+            })
+    
+    def process_overflow_queue():
+        """ประมวลผล overflow queue - สร้างทริปใหม่สำหรับ stores ที่ล้น"""
+        nonlocal trip_counter, current_trip, overflow_queue
+        
+        while overflow_queue:
+            item = overflow_queue.pop(0)
+            code = item['code']
+            row = item['row']
+            region = item['region']
+            allowed_vehicles = item['allowed_vehicles']
+            
+            # ลองเพิ่มเข้า current_trip
+            if current_trip['codes']:
+                test_weight = current_trip['weight'] + row['Weight']
+                test_cube = current_trip['cube'] + row['Cube']
+                test_drops = current_trip['drops'] + 1
+                test_rows = current_trip['rows'] + [row]
+                test_punthai = is_all_punthai(test_rows)
+                
+                vehicle = select_vehicle_for_load(test_weight, test_cube, test_drops, test_punthai, allowed_vehicles)
+                
+                if vehicle:
+                    # พอดี! เพิ่มเข้า
+                    current_trip['codes'].append(code)
+                    current_trip['weight'] = test_weight
+                    current_trip['cube'] = test_cube
+                    current_trip['drops'] = test_drops
+                    current_trip['rows'].append(row)
+                else:
+                    # ไม่พอดี → ปิดทริปเก่า, เริ่มใหม่
+                    finalize_current_trip()
+                    trip_counter += 1
+                    current_trip = {
+                        'codes': [code],
+                        'weight': row['Weight'],
+                        'cube': row['Cube'],
+                        'drops': 1,
+                        'rows': [row],
+                        'region': region,
+                        'allowed_vehicles': allowed_vehicles,
+                        'district': None
+                    }
+            else:
+                # ทริปว่าง
+                current_trip = {
+                    'codes': [code],
+                    'weight': row['Weight'],
+                    'cube': row['Cube'],
+                    'drops': 1,
+                    'rows': [row],
+                    'region': region,
+                    'allowed_vehicles': allowed_vehicles,
+                    'district': None
+                }
+    
     # ==========================================
-    # GROUP BY DISTRICT BUCKETS (Key Algorithm Change!)
+    # GROUP BY DISTRICT BUCKETS
     # ==========================================
-    # จัดกลุ่มตาม Region + Province + District
     district_groups = df.groupby(['_region_name', '_province', '_district'], sort=False)
     
     for (region, province, district), district_df in district_groups:
@@ -1788,7 +1880,6 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         district_cube = district_df['Cube'].sum()
         district_drops = len(district_codes)
         district_rows = district_df.to_dict('records')
-        district_bus = [str(r.get('BU', '')).upper() for r in district_rows]
         
         # หารถที่ใช้ได้ตามภาค
         allowed_vehicles = ['4W', 'JB', '6W']
@@ -1796,9 +1887,11 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             allowed_vehicles = CENTRAL_ALLOWED_VEHICLES
         
         # ==========================================
-        # Rule 0: Region Change → ปิดทริปเก่า
+        # Rule 0: Region Change → ปิดทริปเก่า + process overflow
         # ==========================================
         if current_trip['region'] and current_trip['region'] != region:
+            # Process overflow ของ region เก่าก่อน
+            process_overflow_queue()
             finalize_current_trip()
             trip_counter += 1
             current_trip = {
@@ -1808,10 +1901,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             }
         
         # ==========================================
-        # Rule 1: ลองใส่ทั้ง District ลงทริปปัจจุบัน
+        # Rule 1: ลองใส่ทั้ง District
         # ==========================================
         if current_trip['codes']:
-            # เช็คว่า District ทั้งอันใส่ได้ไหม
             test_weight = current_trip['weight'] + district_weight
             test_cube = current_trip['cube'] + district_cube
             test_drops = current_trip['drops'] + district_drops
@@ -1822,15 +1914,16 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             vehicle = select_vehicle_for_load(test_weight, test_cube, test_drops, test_punthai, test_allowed)
             
             if vehicle:
-                # District พอดี! เพิ่มเข้าทริปปัจจุบัน
+                # District พอดี!
                 current_trip['codes'].extend(district_codes)
                 current_trip['weight'] = test_weight
                 current_trip['cube'] = test_cube
                 current_trip['drops'] = test_drops
                 current_trip['rows'].extend(district_rows)
                 current_trip['allowed_vehicles'] = test_allowed
+                current_trip['region'] = region
             else:
-                # District ไม่พอดี → ปิดทริปเก่า, เริ่มทริปใหม่กับ District นี้
+                # District ไม่พอดี → ปิดทริปเก่า
                 finalize_current_trip()
                 trip_counter += 1
                 
@@ -1845,8 +1938,13 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     'allowed_vehicles': allowed_vehicles,
                     'district': district
                 }
+                
+                # ==========================================
+                # Rule 2: ถ้า District ใหญ่เกินรถ → Split ทันที!
+                # ==========================================
+                split_until_fits(allowed_vehicles, region)
         else:
-            # ทริปว่าง → เพิ่ม District เข้าไป
+            # ทริปว่าง
             current_trip = {
                 'codes': district_codes.copy(),
                 'weight': district_weight,
@@ -1857,50 +1955,16 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 'allowed_vehicles': allowed_vehicles,
                 'district': district
             }
-        
-        # ==========================================
-        # Rule 2: ถ้า District เดียวใหญ่เกินรถ → ต้องแยก
-        # ==========================================
-        is_punthai = is_all_punthai(current_trip['rows'])
-        vehicle = select_vehicle_for_load(
-            current_trip['weight'], current_trip['cube'], 
-            current_trip['drops'], is_punthai, current_trip['allowed_vehicles']
-        )
-        
-        if vehicle is None and len(current_trip['codes']) > 1:
-            # District ใหญ่เกิน ต้องแยก
-            while vehicle is None and len(current_trip['codes']) > 1:
-                # เอาสาขาสุดท้ายออก
-                overflow_code = current_trip['codes'].pop()
-                overflow_row = current_trip['rows'].pop()
-                current_trip['weight'] -= overflow_row['Weight']
-                current_trip['cube'] -= overflow_row['Cube']
-                current_trip['drops'] -= 1
-                
-                is_punthai = is_all_punthai(current_trip['rows'])
-                vehicle = select_vehicle_for_load(
-                    current_trip['weight'], current_trip['cube'],
-                    current_trip['drops'], is_punthai, current_trip['allowed_vehicles']
-                )
-                
-                if vehicle:
-                    # ปิดทริปนี้
-                    finalize_current_trip()
-                    trip_counter += 1
-                    
-                    # เริ่มทริปใหม่กับ overflow
-                    current_trip = {
-                        'codes': [overflow_code],
-                        'weight': overflow_row['Weight'],
-                        'cube': overflow_row['Cube'],
-                        'drops': 1,
-                        'rows': [overflow_row],
-                        'region': region,
-                        'allowed_vehicles': allowed_vehicles,
-                        'district': district
-                    }
+            
+            # ==========================================
+            # Rule 2: ถ้า District ใหญ่เกินรถ → Split ทันที!
+            # ==========================================
+            split_until_fits(allowed_vehicles, region)
     
-    # ปิดทริปสุดท้าย
+    # ==========================================
+    # Final: Process remaining overflow และปิดทริปสุดท้าย
+    # ==========================================
+    process_overflow_queue()
     finalize_current_trip()
 
     # ==========================================
@@ -2374,27 +2438,42 @@ def main():
                             trip_no_map = {}
                             vehicle_counts = {'4W': 0, '4WJ': 0, '6W': 0}
                             
-                            # เรียง trip ตามจังหวัด/อำเภอ/Route เพื่อให้ทริปที่ใกล้กันอยู่ด้วยกัน
-                            trip_provinces = {}
-                            trip_districts = {}
+                            # เรียง trip ตาม Zone Order + Province Max Dist + District Max Dist (เหมือนตอนจัดทริป)
+                            ZONE_ORDER_EXPORT = {'NORTH': 1, 'NE': 2, 'SOUTH': 3, 'EAST': 4, 'WEST': 5, 'CENTRAL': 6}
+                            trip_sort_keys = {}
+                            
                             for trip_num in result_df['Trip'].unique():
                                 if trip_num == 0:
                                     continue
                                 trip_data = result_df[result_df['Trip'] == trip_num]
-                                provinces = []
-                                districts = []
+                                
+                                # หา Region Order
+                                region = trip_data['Region'].iloc[0] if 'Region' in trip_data.columns else 'ไม่ระบุ'
+                                region_order = ZONE_ORDER_EXPORT.get(region, 99)
+                                
+                                # หา Province Max Distance และ District Max Distance
+                                prov_max_dist = 0
+                                dist_max_dist = 0
+                                
                                 for code in trip_data['Code'].unique():
                                     loc = location_map.get(str(code).upper(), {})
-                                    if loc.get('จังหวัด'):
-                                        provinces.append(loc.get('จังหวัด'))
-                                    if loc.get('อำเภอ'):
-                                        districts.append(loc.get('อำเภอ'))
-                                trip_provinces[trip_num] = provinces[0] if provinces else ''
-                                trip_districts[trip_num] = districts[0] if districts else ''
+                                    # ดึงระยะทางจาก MASTER_DATA
+                                    if not MASTER_DATA.empty:
+                                        master_row = MASTER_DATA[MASTER_DATA['Plan Code'].astype(str).str.upper() == str(code).upper()]
+                                        if len(master_row) > 0:
+                                            dist_km = master_row.iloc[0].get('Distance from DC (km)', 0)
+                                            if pd.notna(dist_km):
+                                                prov_max_dist = max(prov_max_dist, float(dist_km))
+                                                dist_max_dist = max(dist_max_dist, float(dist_km))
+                                
+                                # Sort key: Region Order (Asc), Prov Max Dist (Desc), Dist Max Dist (Desc)
+                                # ใช้ค่าลบเพื่อให้ sort Desc
+                                trip_sort_keys[trip_num] = (region_order, -prov_max_dist, -dist_max_dist)
                             
+                            # Sort: Zone Order → Province Max Dist (ไกลก่อน) → District Max Dist (ไกลก่อน)
                             sorted_trips = sorted(
                                 [t for t in result_df['Trip'].unique() if t != 0],
-                                key=lambda t: (trip_provinces.get(t, ''), trip_districts.get(t, ''))
+                                key=lambda t: trip_sort_keys.get(t, (99, 0, 0))
                             )
                             
                             for trip_num in sorted_trips:
