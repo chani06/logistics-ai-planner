@@ -4206,8 +4206,12 @@ def main():
     )
     
     if uploaded_file:
+        # เก็บไฟล์ต้นฉบับไว้ใน session_state เพื่อใช้ตอน export
+        uploaded_file_content = uploaded_file.read()
+        st.session_state['original_file_content'] = uploaded_file_content
+        
         with st.spinner("⏳ กำลังอ่านข้อมูล..."):
-            df = load_excel(uploaded_file.read())
+            df = load_excel(uploaded_file_content)
             df = process_dataframe(df)
             
             if df is not None and 'Code' in df.columns:
@@ -4429,102 +4433,193 @@ def main():
                             
                             st.markdown("---")
                             
-                            # ดาวน์โหลด
+                            # ดาวน์โหลด - เขียนทับชีต 2.Punthai ในไฟล์ต้นฉบับ พร้อมสลับสีเหลืองโทนส้ม-ขาว
+                            from openpyxl import load_workbook
+                            from openpyxl.styles import PatternFill, Font, Border, Side
+                            
                             output = io.BytesIO()
-                            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                                # เพิ่มคอลัมน์ Trip no และประเภทรถ
-                                export_df = result_df.copy()
+                            
+                            # สร้าง location_map จาก MASTER_DATA
+                            location_map = {}
+                            if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                                for _, row in MASTER_DATA.iterrows():
+                                    code = str(row.get('Plan Code', '')).strip().upper()
+                                    if code:
+                                        location_map[code] = {
+                                            'ตำบล': row.get('ตำบล', ''),
+                                            'อำเภอ': row.get('อำเภอ', ''),
+                                            'จังหวัด': row.get('จังหวัด', ''),
+                                            'Route': row.get('Reference', '')
+                                        }
+                            
+                            # สร้าง Trip_No map
+                            trip_no_map = {}
+                            vehicle_counts = {'4W': 0, '4WJ': 0, '6W': 0}
+                            
+                            # เรียง trip ตามจังหวัด/อำเภอ/Route เพื่อให้ทริปที่ใกล้กันอยู่ด้วยกัน
+                            trip_provinces = {}
+                            trip_districts = {}
+                            for trip_num in result_df['Trip'].unique():
+                                if trip_num == 0:
+                                    continue
+                                trip_data = result_df[result_df['Trip'] == trip_num]
+                                provinces = []
+                                districts = []
+                                for code in trip_data['Code'].unique():
+                                    loc = location_map.get(str(code).upper(), {})
+                                    if loc.get('จังหวัด'):
+                                        provinces.append(loc.get('จังหวัด'))
+                                    if loc.get('อำเภอ'):
+                                        districts.append(loc.get('อำเภอ'))
+                                trip_provinces[trip_num] = provinces[0] if provinces else ''
+                                trip_districts[trip_num] = districts[0] if districts else ''
+                            
+                            sorted_trips = sorted(
+                                [t for t in result_df['Trip'].unique() if t != 0],
+                                key=lambda t: (trip_provinces.get(t, ''), trip_districts.get(t, ''))
+                            )
+                            
+                            for trip_num in sorted_trips:
+                                trip_summary = summary[summary['Trip'] == trip_num]
+                                if len(trip_summary) > 0:
+                                    truck_info = trip_summary.iloc[0]['Truck']
+                                    vehicle_type = truck_info.split()[0] if truck_info else '6W'
+                                    # JB ใช้ prefix 4WJ
+                                    if vehicle_type == 'JB':
+                                        vehicle_type = '4WJ'
+                                    vehicle_counts[vehicle_type] = vehicle_counts.get(vehicle_type, 0) + 1
+                                    trip_no = f"{vehicle_type}{vehicle_counts[vehicle_type]:03d}"
+                                    trip_no_map[trip_num] = trip_no
+                            
+                            try:
+                                # โหลด workbook ต้นฉบับ
+                                wb = load_workbook(io.BytesIO(st.session_state.get('original_file_content', b'')))
                                 
-                                # สร้างคอลัมน์ Trip no (เช่น 4W001, JB002, 6W003)
-                                trip_no_map = {}
-                                vehicle_counts = {'4W': 0, 'JB': 0, '6W': 0}
+                                # หาชีตเป้าหมาย (2.Punthai)
+                                target_sheet = None
+                                for sheet_name in wb.sheetnames:
+                                    if 'punthai' in sheet_name.lower() or '2.' in sheet_name.lower():
+                                        target_sheet = sheet_name
+                                        break
                                 
-                                for trip_num in sorted(export_df['Trip'].unique()):
-                                    # ดึงประเภทรถจาก summary
-                                    trip_summary = summary[summary['Trip'] == trip_num]
-                                    if len(trip_summary) > 0:
-                                        truck_info = trip_summary.iloc[0]['Truck']
-                                        # แยกประเภทรถ (4W, JB, 6W)
-                                        vehicle_type = truck_info.split()[0] if truck_info else '6W'
-                                        
-                                        # นับรถแต่ละประเภท
-                                        vehicle_counts[vehicle_type] += 1
-                                        trip_no = f"{vehicle_type}{vehicle_counts[vehicle_type]:03d}"
-                                        trip_no_map[trip_num] = {'trip_no': trip_no, 'vehicle': vehicle_type}
+                                if not target_sheet:
+                                    target_sheet = '2.Punthai'
+                                    if target_sheet not in wb.sheetnames:
+                                        wb.create_sheet(target_sheet)
                                 
-                                # เพิ่มคอลัมน์ใหม่
-                                export_df['Trip_No'] = export_df['Trip'].map(lambda x: trip_no_map.get(x, {}).get('trip_no', ''))
-                                export_df['Vehicle_Type'] = export_df['Trip'].map(lambda x: trip_no_map.get(x, {}).get('vehicle', ''))
+                                ws = wb[target_sheet]
                                 
-                                # เรียงคอลัมน์ใหม่
-                                cols = ['Trip_No', 'Vehicle_Type', 'Trip'] + [c for c in export_df.columns if c not in ['Trip_No', 'Vehicle_Type', 'Trip']]
-                                export_df = export_df[cols]
+                                # หา header row
+                                header_row = 1
+                                for row_idx in range(1, min(5, ws.max_row + 1)):
+                                    for col_idx in range(1, min(15, ws.max_column + 1)):
+                                        cell_val = str(ws.cell(row=row_idx, column=col_idx).value or '')
+                                        if 'รหัสสาขา' in cell_val or 'Trip' in cell_val.upper():
+                                            header_row = row_idx
+                                            break
                                 
-                                # เขียน Excel
-                                export_df.to_excel(writer, sheet_name='รายละเอียดทริป', index=False)
-                                summary.to_excel(writer, sheet_name='สรุปทริป', index=False)
+                                # ลบข้อมูลเก่า
+                                if ws.max_row > header_row:
+                                    ws.delete_rows(header_row + 1, ws.max_row - header_row)
                                 
-                                # จัดรูปแบบ - แยกสีตามทริป
-                                workbook = writer.book
-                                worksheet = writer.sheets['รายละเอียดทริป']
+                                # เขียน header ใหม่
+                                new_headers = ['Sep.', 'BU', 'รหัสสาขา', 'รหัส WMS', 'สาขา', 'ตำบล', 'อำเภอ', 'จังหวัด', 'Route',
+                                              'Total Cube', 'Total Wgt', 'Original QTY', 'Trip', 'Trip no']
+                                for col_idx, header_val in enumerate(new_headers, 1):
+                                    ws.cell(row=header_row, column=col_idx, value=header_val)
                                 
-                                # สีสำหรับแต่ละทริป (สลับสี)
-                                colors = [
-                                    '#E3F2FD', '#FFEBEE', '#F3E5F5', '#E8F5E9', '#FFF3E0',
-                                    '#E0F2F1', '#FFF9C4', '#F1F8E9', '#FCE4EC', '#E1F5FE'
-                                ]
+                                # สีเหลืองโทนส้ม-ขาว (สลับ 2 สี)
+                                yellow_orange = PatternFill(start_color='FFE699', end_color='FFE699', fill_type='solid')
+                                white_fill = PatternFill(start_color='FFFFFF', end_color='FFFFFF', fill_type='solid')
+                                thin_border = Border(
+                                    left=Side(style='thin'), right=Side(style='thin'),
+                                    top=Side(style='thin'), bottom=Side(style='thin')
+                                )
+                                red_font = Font(color='FF0000', bold=True)
                                 
-                                # Format header
-                                header_format = workbook.add_format({
-                                    'bold': True,
-                                    'bg_color': '#1976D2',
-                                    'font_color': 'white',
-                                    'border': 1,
-                                    'align': 'center',
-                                    'valign': 'vcenter'
-                                })
+                                # หาทริปที่ไม่ผ่านเกณฑ์
+                                failed_trips = set()
+                                vehicle_limits = {'4W': {'max_w': 2500, 'max_c': 5.0}, 'JB': {'max_w': 3500, 'max_c': 7.0}, '6W': {'max_w': 6000, 'max_c': 20.0}}
+                                for t in result_df['Trip'].unique():
+                                    if t == 0:
+                                        continue
+                                    trip_data = result_df[result_df['Trip'] == t]
+                                    trip_cube = trip_data['Cube'].sum()
+                                    trip_weight = trip_data['Weight'].sum()
+                                    trip_no = trip_no_map.get(t, '6W001')
+                                    veh_type = 'JB' if trip_no.startswith('4WJ') else ('4W' if trip_no.startswith('4W') else '6W')
+                                    limits = vehicle_limits.get(veh_type, vehicle_limits['6W'])
+                                    max_util = max((trip_cube / limits['max_c']) * 100, (trip_weight / limits['max_w']) * 100)
+                                    if max_util > 105 or max_util < 50:
+                                        failed_trips.add(t)
                                 
-                                # เขียน header
-                                for col_num, value in enumerate(export_df.columns.values):
-                                    worksheet.write(0, col_num, value, header_format)
-                                
-                                # จัดรูปแบบแต่ละแถว (แยกสีตามทริป)
+                                # เขียนข้อมูล
                                 current_trip = None
-                                color_index = 0
+                                use_yellow = True
+                                row_num = header_row + 1
+                                sep_num = 1
                                 
-                                for row_num in range(len(export_df)):
-                                    trip = export_df.iloc[row_num]['Trip']
+                                for trip_num in sorted_trips:
+                                    trip_data = result_df[result_df['Trip'] == trip_num].copy()
                                     
-                                    # เปลี่ยนสีเมื่อเปลี่ยนทริป
-                                    if trip != current_trip:
-                                        current_trip = trip
-                                        color_index = (color_index + 1) % len(colors)
+                                    # Sort ตาม ตำบล → อำเภอ → จังหวัด
+                                    trip_data['_sort_sub'] = trip_data['Code'].apply(lambda c: location_map.get(str(c).upper(), {}).get('ตำบล', ''))
+                                    trip_data['_sort_dist'] = trip_data['Code'].apply(lambda c: location_map.get(str(c).upper(), {}).get('อำเภอ', ''))
+                                    trip_data['_sort_prov'] = trip_data['Code'].apply(lambda c: location_map.get(str(c).upper(), {}).get('จังหวัด', ''))
+                                    trip_data = trip_data.sort_values(['_sort_prov', '_sort_dist', '_sort_sub', 'Code'])
                                     
-                                    # สร้าง format สำหรับแถวนี้
-                                    cell_format = workbook.add_format({
-                                        'bg_color': colors[color_index],
-                                        'border': 1
-                                    })
+                                    trip_no = trip_no_map.get(trip_num, '')
                                     
-                                    # ใส่สีทุก cell ในแถว
-                                    for col_num in range(len(export_df.columns)):
-                                        value = export_df.iloc[row_num, col_num]
+                                    # สลับสีเมื่อเปลี่ยนทริป
+                                    if current_trip != trip_num:
+                                        current_trip = trip_num
+                                        use_yellow = not use_yellow
+                                    
+                                    fill = yellow_orange if use_yellow else white_fill
+                                    
+                                    for _, row in trip_data.iterrows():
+                                        branch_code = row.get('Code', '')
+                                        loc = location_map.get(str(branch_code).upper(), {})
                                         
-                                        # จัดการค่า NaN/None
-                                        if pd.isna(value):
-                                            value = ''
-                                        elif isinstance(value, float):
-                                            # ถ้าเป็นทศนิยม ปัดเศษ 2 ตำแหน่ง
-                                            value = round(value, 2)
+                                        data = [
+                                            sep_num,
+                                            row.get('BU', 211),
+                                            branch_code,
+                                            branch_code,
+                                            row.get('Name', ''),
+                                            loc.get('ตำบล', ''),
+                                            loc.get('อำเภอ', ''),
+                                            loc.get('จังหวัด', ''),
+                                            loc.get('Route', ''),
+                                            round(row.get('Cube', 0), 2) if pd.notna(row.get('Cube')) else 0,
+                                            round(row.get('Weight', 0), 2) if pd.notna(row.get('Weight')) else 0,
+                                            row.get('OriginalQty', 0) if pd.notna(row.get('OriginalQty')) else 0,
+                                            int(trip_num),
+                                            trip_no,
+                                        ]
                                         
-                                        worksheet.write(row_num + 1, col_num, value, cell_format)
+                                        for col_idx, value in enumerate(data, 1):
+                                            cell = ws.cell(row=row_num, column=col_idx, value=value)
+                                            cell.fill = fill
+                                            cell.border = thin_border
+                                            if trip_num in failed_trips:
+                                                cell.font = red_font
+                                        
+                                        row_num += 1
+                                        sep_num += 1
                                 
-                                # ปรับความกว้างคอลัมน์
-                                worksheet.set_column('A:A', 12)  # Trip_No
-                                worksheet.set_column('B:B', 15)  # Vehicle_Type
-                                worksheet.set_column('C:C', 8)   # Trip
-                                worksheet.set_column('D:D', 12)  # Code
-                                worksheet.set_column('E:E', 35)  # Name
+                                wb.save(output)
+                                output.seek(0)
+                                
+                            except Exception as e:
+                                st.warning(f"⚠️ ไม่สามารถเขียนทับไฟล์ต้นฉบับได้: {e} - ใช้รูปแบบมาตรฐานแทน")
+                                # Fallback: สร้างไฟล์ใหม่ด้วย xlsxwriter
+                                output = io.BytesIO()
+                                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                                    export_df = result_df.copy()
+                                    export_df['Trip_No'] = export_df['Trip'].map(lambda x: trip_no_map.get(x, ''))
+                                    export_df.to_excel(writer, sheet_name='รายละเอียดทริป', index=False)
+                                    summary.to_excel(writer, sheet_name='สรุปทริป', index=False)
                             
                             col1, col2, col3 = st.columns([1, 2, 1])
                             with col2:
