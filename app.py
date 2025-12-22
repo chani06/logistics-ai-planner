@@ -4220,12 +4220,18 @@ def main():
                 # ==========================================
                 # ตรวจสอบข้อมูลพื้นที่ที่ขาด
                 # ==========================================
-                missing_location_df = df[
-                    (df['Province'].isna() | (df['Province'] == '') | (df['Province'] == 'UNKNOWN'))
-                ]
+                # เช็คว่ามีคอลัมน์ Province หรือไม่
+                if 'Province' in df.columns:
+                    missing_location_df = df[
+                        (df['Province'].isna() | (df['Province'] == '') | (df['Province'] == 'UNKNOWN'))
+                    ]
+                else:
+                    # ถ้าไม่มีคอลัมน์ Province ถือว่าทุกรายการขาดข้อมูล
+                    missing_location_df = df.copy()
+                    df['Province'] = ''
                 
                 if len(missing_location_df) > 0:
-                    with st.expander(f"⚠️ พบ {len(missing_location_df)} สาขาที่ไม่มีข้อมูลพื้นที่ (คลิกเพื่อเพิ่ม)", expanded=True):
+                    with st.expander(f"⚠️ พบ {len(missing_location_df)} สาขาที่ไม่มีข้อมูลพื้นที่ (คลิกเพื่อเพิ่ม)", expanded=False):
                         st.warning("สาขาเหล่านี้ไม่มีข้อมูลจังหวัด/อำเภอ/ตำบล อาจทำให้การจัดทริปไม่เหมาะสม")
                         
                         # แสดงรายการที่ขาด
