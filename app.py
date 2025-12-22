@@ -1,3 +1,66 @@
+import pandas as pd
+
+# =============================
+# ฟังก์ชันอ่านข้อห้ามรถจากไฟล์ Auto planning (1).xlsx
+# =============================
+def load_vehicle_restrictions(filepath='Dc/Auto planning (1).xlsx', sheet='Info'):
+    df = pd.read_excel(filepath, sheet_name=sheet)
+    # แสดงชื่อคอลัมน์จริง
+    print('Columns in file:', list(df.columns))
+    # หาคอลัมน์ที่ตรงกับ LocationNumber และ MaxTruckType แบบไม่สนช่องว่าง/ตัวพิมพ์
+    def find_col(cols, key, must_contain=None):
+        key_norm = key.replace(' ', '').lower()
+        for c in cols:
+            c_norm = c.replace(' ', '').lower()
+            if key_norm in c_norm:
+                if must_contain:
+                    if all(word in c_norm for word in must_contain):
+                        return c
+                else:
+                    return c
+        # ถ้าไม่เจอ ให้ลองหาโดยใช้ must_contain
+        if must_contain:
+            for c in cols:
+                c_norm = c.replace(' ', '').lower()
+                if all(word in c_norm for word in must_contain):
+                    return c
+        raise KeyError(f'Column for {key} not found!')
+    # หา column ที่มีทั้ง 'location' และ 'code' สำหรับรหัสสาขา
+    code_col = find_col(df.columns, 'Location', must_contain=['location','code'])
+    # หา column ที่มี 'maxtrucktype' สำหรับประเภทรถ
+    truck_col = find_col(df.columns, 'MaxTruckType')
+    restrictions = {}
+    for _, row in df.iterrows():
+        code = str(row[code_col]).strip()
+        max_truck = str(row[truck_col]).strip().upper()
+        if max_truck == '4W':
+            allowed = ['4W']
+        elif max_truck == 'JB':
+            allowed = ['4W', 'JB']
+        elif max_truck == '6W':
+            allowed = ['4W', 'JB', '6W']
+        else:
+            allowed = ['4W', 'JB', '6W']
+        restrictions[code] = allowed
+    return restrictions
+
+# =============================
+# ฟังก์ชันเลือกขนาดรถที่เหมาะสมตาม branch/zone
+# =============================
+def get_allowed_vehicle_for_branch(branch_code, zone, restrictions):
+    allowed = restrictions.get(str(branch_code).strip(), ['4W', 'JB', '6W'])
+    if zone == 'CENTRAL' and '6W' in allowed:
+        allowed = [v for v in allowed if v != '6W']
+    for v in ['6W', 'JB', '4W']:
+        if v in allowed:
+            return v
+    return allowed[0]
+
+# =============================
+# ตัวอย่างการใช้งาน (comment ไว้)
+# =============================
+# restrictions = load_vehicle_restrictions('Dc/Auto planning (1).xlsx', 'Info')
+# vehicle = get_allowed_vehicle_for_branch(branch_code, zone, restrictions)
 """
 Logistics Planner 
 """
