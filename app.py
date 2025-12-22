@@ -58,6 +58,24 @@ MAX_BRANCHES_PER_TRIP = 12  # สูงสุด 12 สาขาต่อทร�
 MAX_DETOUR_KM = 12  # ลดจาก 15km เป็น 12km เพื่อประมวลผลเร็วขึ้น
 MAX_MERGE_ITERATIONS = 25  # จำกัดรอบการรวมทริป (ลดจาก 50 เพื่อเร็วขึ้น)
 
+# ==========================================
+# REGION ORDER CONFIG (Far-to-Near Sorting)
+# ==========================================
+# ลำดับการจัด: เหนือ → อีสาน → ใต้ → ตะวันออก → กลาง
+REGION_ORDER = {
+    'เหนือ': 1, 'NORTH': 1,
+    'อีสาน': 2, 'NE': 2,
+    'ใต้': 3, 'SOUTH': 3,
+    'ตะวันออก': 4, 'EAST': 4,
+    'ตะวันตก': 5, 'WEST': 5,
+    'กลาง': 6, 'CENTRAL': 6,
+    'ไม่ระบุ': 99
+}
+
+# ภาคกลาง: ห้ามใช้ 6W (เฉพาะ 4W, JB)
+CENTRAL_REGIONS = ['กลาง', 'CENTRAL']
+CENTRAL_ALLOWED_VEHICLES = ['4W', 'JB']  # NO 6W in Central
+
 # รายการสาขาที่ไม่ต้องการจัดส่ง (ตัดออก)
 EXCLUDE_BRANCHES = ['DC011', 'PTDC', 'PTG DISTRIBUTION CENTER']
 
@@ -1658,12 +1676,29 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     df['_distance_from_dc'] = df['Code'].apply(lambda c: get_location_info(c)['distance_from_dc'])
     
     # ==========================================
-    # Step 3: เรียงลำดับตาม Sum_Code (Sort_Code) จาก Master Dist
-    # 🎯 หัวใจสำคัญ: เรียงตาม sum_code (ภูมิศาสตร์) ก่อน แล้วค่อยเรียงตาม Route และระยะทาง
+    # Step 3: เรียงลำดับแบบ Hierarchical (Region > Province Max Dist > District Max Dist > Distance)
+    # 🎯 หัวใจสำคัญ: เรียงตาม Region Order ก่อน (ไกลมาใกล้)
     # ==========================================
+    
+    # เพิ่ม Region Order สำหรับ sorting
+    df['_region_order'] = df['_region_name'].map(REGION_ORDER).fillna(99)
+    
+    # คำนวณ Province Max Distance (จังหวัดไหนมีจุดไกลสุดมาก่อน)
+    prov_max_dist = df.groupby('_province')['_distance_from_dc'].max().reset_index()
+    prov_max_dist.columns = ['_province', '_prov_max_dist']
+    df = df.merge(prov_max_dist, on='_province', how='left')
+    df['_prov_max_dist'] = df['_prov_max_dist'].fillna(9999)
+    
+    # คำนวณ District Max Distance (อำเภอไหนมีจุดไกลสุดมาก่อน)
+    dist_max_dist = df.groupby(['_province', '_district'])['_distance_from_dc'].max().reset_index()
+    dist_max_dist.columns = ['_province', '_district', '_dist_max_dist']
+    df = df.merge(dist_max_dist, on=['_province', '_district'], how='left')
+    df['_dist_max_dist'] = df['_dist_max_dist'].fillna(9999)
+    
+    # Sort: Region Order (Asc) → Prov Max Dist (Desc) → Dist Max Dist (Desc) → Sum_Code → Distance (Desc)
     df = df.sort_values(
-        ['_sum_code', '_route', '_distance_from_dc'],
-        ascending=[True, True, False]  # Sum_Code ascending, Route ascending, Distance descending (ไกลมาใกล้)
+        ['_region_order', '_prov_max_dist', '_dist_max_dist', '_sum_code', '_route', '_distance_from_dc'],
+        ascending=[True, False, False, True, True, False]  # Region/Province/District ไกลมาก่อน
     ).reset_index(drop=True)
     
     # ==========================================
@@ -1680,17 +1715,24 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     df['_group_key'] = df.apply(get_group_key, axis=1)
     
     # ==========================================
-    # Step 5: หารถที่เหมาะสมจากข้อจำกัดสาขา
+    # Step 5: หารถที่เหมาะสมจากข้อจำกัดสาขา + Central Region Rule
     # ==========================================
     def get_max_vehicle_for_code(code):
         """หารถที่ใหญ่ที่สุดที่สาขาสามารถใช้ได้"""
         max_vehicle = get_max_vehicle_for_branch(code)
         return max_vehicle
     
+    def get_allowed_vehicles_for_region(region_name):
+        """หารถที่ใช้ได้ตามภาค (Central ห้าม 6W)"""
+        if region_name in CENTRAL_REGIONS:
+            return CENTRAL_ALLOWED_VEHICLES  # ['4W', 'JB']
+        return ['4W', 'JB', '6W']  # All vehicles
+    
     df['_max_vehicle'] = df['Code'].apply(get_max_vehicle_for_code)
+    df['_region_allowed_vehicles'] = df['_region_name'].apply(get_allowed_vehicles_for_region)
     
     # ==========================================
-    # Step 6: ตัดเป็นทริปตามน้ำหนัก/คิว (ใช้ BUFFER ตาม BU)
+    # Step 6: ตัดเป็นทริปตามน้ำหนัก/คิว + Central Rule + Punthai Drop Limits
     # ==========================================
     trip_counter = 1
     df['Trip'] = 0
@@ -1699,8 +1741,11 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     current_trip_weight = 0
     current_trip_cube = 0
     current_trip_max_vehicle = '6W'  # เริ่มต้นเป็น 6W (ใหญ่สุด)
+    current_trip_region = None  # เพิ่ม: track region ของทริป
+    current_trip_allowed_vehicles = ['4W', 'JB', '6W']  # เพิ่ม: รถที่ใช้ได้
     current_group_key = None
     current_trip_rows = []  # เก็บ rows เพื่อเช็ค BU
+    current_trip_drops = 0  # เพิ่ม: นับจำนวน drops
     
     vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
     
@@ -1710,13 +1755,20 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         cube = row['Cube']
         group_key = row['_group_key']
         code_max_vehicle = row['_max_vehicle']
+        region_name = row['_region_name']
+        region_allowed = row['_region_allowed_vehicles']  # ['4W', 'JB'] for Central
         
-        # หารถที่จะใช้สำหรับทริปนี้ (ใช้รถที่เล็กที่สุดที่จำกัด)
-        # ถ้าสาขาใหม่จำกัดรถเล็กกว่า → ทริปต้องใช้รถเล็กลง
+        # หารถที่จะใช้สำหรับทริปนี้
+        # 1. ใช้รถที่เล็กที่สุดที่จำกัด (branch constraint)
+        # 2. ตัด 6W ออกถ้าเป็น Central Region
         if vehicle_priority.get(code_max_vehicle, 3) < vehicle_priority.get(current_trip_max_vehicle, 3):
             proposed_max_vehicle = code_max_vehicle
         else:
             proposed_max_vehicle = current_trip_max_vehicle
+        
+        # ถ้า proposed เป็น 6W แต่ region ห้าม → ลดเป็น JB
+        if proposed_max_vehicle == '6W' and '6W' not in region_allowed:
+            proposed_max_vehicle = 'JB'
         
         # ขีดจำกัดของรถที่จะใช้
         limits = LIMITS.get(proposed_max_vehicle, LIMITS['6W'])
@@ -1733,16 +1785,39 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         # ลองเพิ่มสาขานี้เข้าทริป
         new_weight = current_trip_weight + weight
         new_cube = current_trip_cube + cube
+        new_drops = current_trip_drops + 1
         
         # เช็คว่าต้องขึ้นทริปใหม่หรือไม่
         start_new_trip = False
         
-        # ถ้าเกินขีดจำกัด (ตาม BUFFER)
-        max_util_threshold = buffer * 100
-        weight_util = (new_weight / max_weight) * 100
-        cube_util = (new_cube / max_cube) * 100
-        if weight_util > max_util_threshold or cube_util > max_util_threshold:
+        # Rule 0: Region change (ทริปต้องอยู่ภาคเดียวกัน)
+        if current_trip_region and current_trip_region != region_name:
             start_new_trip = True
+        
+        # Rule 1: ถ้าเกินขีดจำกัด Weight/Cube (ตาม BUFFER)
+        if not start_new_trip:
+            max_util_threshold = buffer * 100
+            weight_util = (new_weight / max_weight) * 100
+            cube_util = (new_cube / max_cube) * 100
+            if weight_util > max_util_threshold or cube_util > max_util_threshold:
+                start_new_trip = True
+        
+        # Rule 2: Punthai Drop Limit Check (ถ้าทริปเป็น Punthai ล้วน)
+        if not start_new_trip and current_trip_rows:
+            # เช็คว่าทริปเป็น Punthai ล้วนหรือไม่
+            all_punthai = all(
+                str(r.get('BU', '')).upper() in ['211', 'PUNTHAI'] 
+                for r in current_trip_rows + [row.to_dict()]
+            )
+            if all_punthai:
+                punthai_drop_limit = PUNTHAI_LIMITS.get(proposed_max_vehicle, {}).get('max_drops', 999)
+                if new_drops > punthai_drop_limit:
+                    start_new_trip = True
+        
+        # Rule 3: ถ้า 6W ไม่ได้ใช้แล้ว (Central) แต่ต้องการ 6W
+        if not start_new_trip:
+            if '6W' not in current_trip_allowed_vehicles and proposed_max_vehicle == '6W':
+                start_new_trip = True
         
         if start_new_trip and current_trip_codes:
             # บันทึกทริปปัจจุบัน
@@ -1755,15 +1830,24 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             current_trip_weight = weight
             current_trip_cube = cube
             current_trip_max_vehicle = code_max_vehicle
+            current_trip_region = region_name
+            current_trip_allowed_vehicles = list(region_allowed) if isinstance(region_allowed, list) else ['4W', 'JB', '6W']
             current_group_key = group_key
-            current_trip_rows = [row.to_dict()]  # เริ่มเก็บ rows ใหม่
+            current_trip_rows = [row.to_dict()]
+            current_trip_drops = 1
         else:
             # เพิ่มเข้าทริปปัจจุบัน
             current_trip_codes.append(code)
             current_trip_weight = new_weight
             current_trip_cube = new_cube
             current_trip_max_vehicle = proposed_max_vehicle
-            current_trip_rows.append(row.to_dict())  # เก็บ row เพื่อเช็ค BU
+            current_trip_drops = new_drops
+            current_trip_rows.append(row.to_dict())
+            # Update allowed vehicles (intersection)
+            if isinstance(region_allowed, list):
+                current_trip_allowed_vehicles = list(set(current_trip_allowed_vehicles) & set(region_allowed))
+            if not current_trip_region:
+                current_trip_region = region_name
             if not current_group_key:
                 current_group_key = group_key
     
@@ -1773,7 +1857,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             df.loc[df['Code'] == c, 'Trip'] = trip_counter
     
     # ==========================================
-    # Step 7: สร้าง Summary
+    # Step 7: สร้าง Summary + Central Rule + Punthai Drop Limits
     # ==========================================
     summary_data = []
     
@@ -1785,28 +1869,52 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         total_w = trip_data['Weight'].sum()
         total_c = trip_data['Cube'].sum()
         trip_codes = trip_data['Code'].unique()
+        trip_drops = len(trip_codes)
         
-        # หารถที่เหมาะสม
+        # หาภาคของทริป (ใช้ภาคแรก)
+        trip_region = trip_data['_region_name'].iloc[0] if '_region_name' in trip_data.columns else 'ไม่ระบุ'
+        
+        # หารถที่เหมาะสม (รวม Central Rule)
         max_vehicles = [get_max_vehicle_for_branch(c) for c in trip_codes]
         min_max_size = min(vehicle_priority.get(v, 3) for v in max_vehicles)
         max_allowed_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(min_max_size, '6W')
         
-        # ตรวจ BU ของทริป (ถ้ามี PUNTHAI/211 แม้แต่ 1 สาขา → ใช้ punthai_buffer)
-        is_punthai = False
+        # 🚫 Central Region Rule: ห้าม 6W
+        if trip_region in CENTRAL_REGIONS and max_allowed_vehicle == '6W':
+            max_allowed_vehicle = 'JB'  # ลดเป็น JB
+        
+        # ตรวจ BU ของทริป
+        is_punthai_only_trip = True
         for _, r in trip_data.iterrows():
             bu = str(r.get('BU', '')).upper()
-            if bu in ['211', 'PUNTHAI']:
-                is_punthai = True
+            if bu not in ['211', 'PUNTHAI']:
+                is_punthai_only_trip = False
                 break
         
-        buffer = punthai_buffer if is_punthai else maxmart_buffer
+        buffer = punthai_buffer if is_punthai_only_trip else maxmart_buffer
         buffer_pct = int(buffer * 100)
-        buffer_label = f"🅿️ {buffer_pct}%" if is_punthai else f"🅼 {buffer_pct}%"
-        trip_type = 'punthai' if is_punthai else 'maxmart'
+        buffer_label = f"🅿️ {buffer_pct}%" if is_punthai_only_trip else f"🅼 {buffer_pct}%"
+        trip_type = 'punthai' if is_punthai_only_trip else 'maxmart'
         
         # เลือกรถที่พอดีที่สุด
         suggested = max_allowed_vehicle
         source = "📋 จำกัดสาขา" if min_max_size < 3 else "🤖 อัตโนมัติ"
+        
+        # 🔒 Punthai Drop Limit Check
+        if is_punthai_only_trip:
+            punthai_drop_limit = PUNTHAI_LIMITS.get(suggested, {}).get('max_drops', 999)
+            if trip_drops > punthai_drop_limit:
+                # ต้องเพิ่มขนาดรถเพื่อรองรับ drops
+                if suggested == '4W' and trip_drops <= PUNTHAI_LIMITS['JB']['max_drops']:
+                    suggested = 'JB'
+                    source += " → JB (Drop Limit)"
+                elif suggested == 'JB' or trip_drops > PUNTHAI_LIMITS['JB']['max_drops']:
+                    # ถ้า Central ห้าม 6W → WARNING
+                    if trip_region not in CENTRAL_REGIONS:
+                        suggested = '6W'
+                        source += " → 6W (Drop Limit)"
+                    else:
+                        source += " ⚠️ Drops เกิน!"
         
         # คำนวณ utilization
         max_util_threshold = buffer * 100  # 100% หรือ 110% ตาม BU
@@ -1897,7 +2005,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     df = df.sort_values(['Trip', '_distance_from_dc'], ascending=[True, False]).reset_index(drop=True)
     
     # ลบคอลัมน์ชั่วคราว
-    cols_to_drop = ['_region_code', '_region_name', '_prov_code', '_dist_code', '_subdist_code', '_province', '_district', '_subdistrict', '_route', '_distance_from_dc', '_group_key', '_max_vehicle']
+    cols_to_drop = ['_region_code', '_region_name', '_prov_code', '_dist_code', '_subdist_code', '_province', '_district', '_subdistrict', '_route', '_distance_from_dc', '_group_key', '_max_vehicle', '_region_order', '_prov_max_dist', '_dist_max_dist', '_region_allowed_vehicles']
     df = df.drop(columns=[c for c in cols_to_drop if c in df.columns], errors='ignore')
     
     return df, summary_df
