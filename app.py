@@ -133,7 +133,7 @@ def sync_branch_data_from_sheets():
     # ถ้าไม่มี Google Sheets ให้ใช้ข้อมูลเก่า
     if not SHEETS_AVAILABLE or sh is None:
         if existing_data:
-            print(f"📦 ใช้ข้อมูลเก่าจาก JSON ({len(existing_data)} สาขา)")
+            print(f"⚠️ Google Sheets ไม่พร้อม - ใช้ข้อมูลจาก JSON ({len(existing_data)} สาขา)")
             df = pd.DataFrame.from_dict(existing_data, orient='index')
             # ตรวจสอบว่ามีคอลัมน์ Plan Code หรือไม่
             if 'Plan Code' not in df.columns:
@@ -142,7 +142,9 @@ def sync_branch_data_from_sheets():
             else:
                 df.reset_index(drop=True, inplace=True)
             return df
-        return None
+        else:
+            print("❌ ไม่พบข้อมูล: ไม่มี Google Sheets และไม่มี JSON cache")
+            return pd.DataFrame()  # Return empty DataFrame แทน None
     
     try:
         # ดึงข้อมูลจาก Sheets (GID: 876257177)
@@ -572,17 +574,20 @@ def validate_trip_vehicle(trip_df, assigned_vehicle):
 # ==========================================
 @st.cache_data(ttl=7200)  # Cache 2 ชั่วโมง (เร็วขึ้น)
 def load_master_data():
-    """โหลด Master Data จาก Google Sheets (ผ่าน sync_branch_data_from_sheets)"""
+    """โหลด Master Data จาก Google Sheets หรือ JSON"""
     try:
         # ใช้ข้อมูลจาก Google Sheets ที่ sync มาแล้ว
         df_from_sheets = sync_branch_data_from_sheets()
         
         if df_from_sheets is None or df_from_sheets.empty:
-            print("⚠️ ไม่สามารถโหลดข้อมูลจาก Google Sheets")
+            print("⚠️ ไม่สามารถโหลดข้อมูล - ตรวจสอบ Google Sheets หรือ branch_data.json")
             return pd.DataFrame()
         
         # ตรวจสอบคอลัมน์ที่จำเป็น
-        required_cols = ['Plan Code', 'ตำบล', 'อำเภอ', 'จังหวัด']
+        required_cols = ['Plan Code']
+        missing = [c for c in required_cols if c not in df_from_sheets.columns]
+        if missing:
+            print(f"⚠️ ขาดคอลัมน์: {missing}")
         
         # แปลงชื่อคอลัมน์ที่อาจต่างกัน
         col_mapping = {
@@ -596,7 +601,7 @@ def load_master_data():
             df_from_sheets['Plan Code'] = df_from_sheets['Plan Code'].astype(str).str.strip().str.upper()
             df_from_sheets = df_from_sheets[df_from_sheets['Plan Code'] != '']
         
-        print(f"✅ โหลด MASTER_DATA จาก Google Sheets: {len(df_from_sheets)} สาขา")
+        print(f"✅ โหลด MASTER_DATA: {len(df_from_sheets)} สาขา")
         return df_from_sheets
         
     except Exception as e:
