@@ -886,6 +886,8 @@ def get_logistics_zone(province, district='', subdistrict=''):
     """
     หาโซนโลจิสติกส์จาก จังหวัด/อำเภอ/ตำบล
     
+    หลักการ: ใช้โซนหลัก (ระดับจังหวัด) ก่อน แล้วค่อยใช้โซนย่อย (ระดับอำเภอ/ตำบล)
+    
     Returns:
         zone_name (str): เช่น 'ZONE_A_พะเยา', 'ZONE_NEARBY_กทม', None ถ้าไม่พบ
     """
@@ -896,21 +898,39 @@ def get_logistics_zone(province, district='', subdistrict=''):
     district = str(district).strip() if district else ''
     subdistrict = str(subdistrict).strip() if subdistrict else ''
     
-    # ค้นหาโซนที่มีจังหวัดนี้
+    # 🎯 หลักการ: ใช้โซนหลักก่อน (ไม่มี districts/subdistricts กำหนด)
+    # แล้วค่อยไล่ลงไปโซนย่อย (มี districts/subdistricts กำหนด)
+    
+    main_zones = []  # โซนหลัก (ระดับจังหวัด)
+    sub_zones = []   # โซนย่อย (ระดับอำเภอ/ตำบล)
+    
+    # แยกโซนเป็นหลัก/ย่อย
     for zone_name, zone_info in LOGISTICS_ZONES.items():
-        # เช็คจังหวัด
         if province in zone_info['provinces']:
-            # ถ้ามี districts ใน zone นี้ → เช็คอำเภอด้วย
-            if 'districts' in zone_info and zone_info['districts']:
-                # ถ้ามีอำเภอระบุมา → ต้องตรงกัน
-                if district and district in zone_info['districts']:
-                    return zone_name
-                # ถ้าไม่ได้ระบุอำเภอ → ให้ default zone ของจังหวัดนี้
-                elif not district:
-                    return zone_name
+            # ถ้าไม่มี districts กำหนด = โซนหลัก
+            if 'districts' not in zone_info or not zone_info['districts']:
+                main_zones.append((zone_name, zone_info))
             else:
-                # ไม่มีข้อกำหนดอำเภอ → return zone นี้เลย
-                return zone_name
+                # มี districts กำหนด = โซนย่อย
+                sub_zones.append((zone_name, zone_info))
+    
+    # 1️⃣ ลองหาโซนย่อยก่อน (ถ้ามีอำเภอระบุมา)
+    if district:
+        for zone_name, zone_info in sub_zones:
+            if district in zone_info['districts']:
+                # ถ้ามี subdistricts กำหนดด้วย → เช็คให้แม่นยำยิ่งขึ้น
+                if 'subdistricts' in zone_info and zone_info['subdistricts']:
+                    if subdistrict and subdistrict in zone_info['subdistricts']:
+                        return zone_name
+                else:
+                    # ไม่มี subdistricts กำหนด → return โซนย่อยนี้
+                    return zone_name
+    
+    # 2️⃣ ถ้าไม่เจอโซนย่อย → ใช้โซนหลัก
+    if main_zones:
+        # เลือกโซนแรกที่เจอ (เรียงตาม priority)
+        main_zones_sorted = sorted(main_zones, key=lambda x: x[1].get('priority', 999))
+        return main_zones_sorted[0][0]
     
     return None
 
@@ -2629,16 +2649,17 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     vehicle_priority_map = {'4W': 1, 'JB': 2, '6W': 3}
     df['_vehicle_priority'] = df['_max_vehicle'].map(vehicle_priority_map).fillna(3)
     
-    # 🎯 Sort: Vehicle Priority (4W ก่อน) + LIFO Zone Routing (ไกล→ใกล้)
+    # 🎯 Sort: Vehicle Priority (4W ก่อน) + LIFO Zone Routing (ไกล→ใกล้) + รวมอำเภอเดียวกัน
     # 1. สาขา 4W ก่อน (Priority 1)
     # 2. โซนโลจิสติกส์ไกลก่อน (Zone Priority 1-99)
     # 3. ภาคไกลก่อน (Region Order)
     # 4. จังหวัดที่มีจุดไกลสุดก่อน (Prov Max Dist Desc)
-    # 5. อำเภอที่มีจุดไกลสุดก่อน (Dist Max Dist Desc)
-    # 6. ระยะทางไกลก่อน (Distance Desc)
+    # 5. อำเภอเดียวกันติดกัน (District กลุ่มเดียวกัน)
+    # 6. ตำบลเดียวกันติดกัน (Subdistrict กลุ่มเดียวกัน)
+    # 7. ระยะทางไกลก่อน (Distance Desc)
     df = df.sort_values(
-        ['_vehicle_priority', '_zone_priority', '_region_order', '_prov_max_dist', '_dist_max_dist', '_sum_code', '_route', '_distance_from_dc'],
-        ascending=[True, True, True, False, False, True, True, False]  # 4W + Zone + ไกลมาใกล้
+        ['_vehicle_priority', '_zone_priority', '_region_order', '_prov_max_dist', '_district', '_subdistrict', '_sum_code', '_route', '_distance_from_dc'],
+        ascending=[True, True, True, False, True, True, True, True, False]  # 4W + Zone + อำเภอติดกัน + ไกลมาใกล้
     ).reset_index(drop=True)
     
     # ==========================================
@@ -2692,8 +2713,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         เลือกรถที่เหมาะสมตามโหลดและข้อจำกัด
         
         Logic:
-        1. ถ้ามี 4W → มีข้อจำกัดมาก → เลือกรถเล็กสุดที่พอดี
-        2. ถ้ามีเฉพาะ JB หรือ 6W → ไม่มีข้อจำกัดมาก → เลือก JB
+        1. ถ้ามี 4W → มีข้อจำกัดมาก → เลือกรถเล็กสุดที่พอดี (4W → JB → 6W)
+        2. ถ้าไม่มี 4W → ไม่มีข้อจำกัด → เลือกรถใหญ่ก่อน (6W → JB → 4W) เพื่อ utilization สูง
         """
         buffer_mult = punthai_buffer if is_punthai else maxmart_buffer
         limits_to_use = PUNTHAI_LIMITS if is_punthai else LIMITS
@@ -2705,8 +2726,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             # มี 4W → มีข้อจำกัดมาก → เลือกเล็กไปใหญ่: 4W → JB → 6W
             vehicle_order = ['4W', 'JB', '6W']
         else:
-            # มีเฉพาะ JB/6W → ไม่มีข้อจำกัดมาก → เลือก JB ก่อน: JB → 6W → 4W
-            vehicle_order = ['JB', '6W', '4W']
+            # ไม่มี 4W (เฉพาะ JB/6W) → เลือกรถใหญ่ก่อน: 6W → JB → 4W เพื่อ utilization สูง
+            vehicle_order = ['6W', 'JB', '4W']
         
         for v in vehicle_order:
             if v not in allowed_vehicles:
@@ -3197,8 +3218,12 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                         # ❌ ไม่มีรถที่รับ constraint ทั้งหมดได้ → บังคับแยก
                         force_finalize = True
                         allow_merge = False
+                    elif current_district == district:
+                        # ✅ อำเภอเดียวกัน → รวมต่อเสมอ (ไม่สนใจ utilization) เพื่อให้สาขาในอำเภอเดียวกันไปด้วยกัน
+                        # ไม่ตั้ง force_finalize = True เพื่อให้รวมต่อ
+                        pass
                     elif current_util < (MIN_UTIL_BEFORE_FINALIZE * 100):
-                        # 🚫 Utilization < 75% → บังคับรวมต่อ (ห้ามปิดทริป - ต้องเต็มให้มากขึ้น)
+                        # 🚫 Utilization < 75% และคนละอำเภอ → บังคับรวมต่อ (ห้ามปิดทริป - ต้องเต็มให้มากขึ้น)
                         # ไม่ตั้ง force_finalize = True เพื่อให้รวมต่อ
                         pass
                     else:
