@@ -307,10 +307,6 @@ REGION_ORDER = {
     'ไม่ระบุ': 99
 }
 
-# ภาคกลาง: ห้ามใช้ 6W (เฉพาะ 4W, JB)
-CENTRAL_REGIONS = ['กลาง', 'CENTRAL']
-CENTRAL_ALLOWED_VEHICLES = ['4W', 'JB']  # NO 6W in Central
-
 # รายการสาขาที่ไม่ต้องการจัดส่ง (ตัดออก)
 EXCLUDE_BRANCHES = ['DC011', 'PTDC', 'PTG DISTRIBUTION CENTER']
 
@@ -676,9 +672,6 @@ REGION_CODE = {
     'นราธิวาส': '6D',
 }
 
-# ภาคที่ต้องใช้ 6W เป็นหลัก (ไกลจาก DC)
-REGIONS_REQUIRE_6W = ['4', '5', '6']  # เหนือ, อีสาน, ใต้
-
 # ชื่อภาค
 REGION_NAMES = {
     '1': 'กลาง',
@@ -709,20 +702,13 @@ def get_region_name(province):
     return REGION_NAMES.get(region_prefix, 'ไม่ระบุ')
 
 def get_recommended_vehicle_by_region(province, distance_from_dc=None):
-    """แนะนำรถตามภาค/ระยะทาง"""
-    code = get_region_code(province)
-    region_prefix = code[0] if code != '99' else '9'
-    
-    # ภาคเหนือ, อีสาน, ใต้ → ใช้ 6W
-    if region_prefix in REGIONS_REQUIRE_6W:
-        return '6W'
-    
-    # ถ้ามีระยะทาง และเกิน threshold → ใช้ 6W
+    """แนะนำรถตามระยะทาง (ไม่มีข้อจำกัดตามภาค - ใช้ข้อมูลจาก Master Data)"""
+    # ถ้ามีระยะทาง และเกิน threshold → แนะนำ 6W
     if distance_from_dc and distance_from_dc > DISTANCE_REQUIRE_6W:
         return '6W'
     
-    # ภาคกลาง, ตะวันออก, ตะวันตก → ใช้ 4W/JB ได้
-    return 'JB'  # default เป็น JB
+    # Default: ให้เลือกรถตามข้อมูลจาก Master Data
+    return 'JB'  # default แนะนำ JB
 
 # ==========================================
 # LOGISTICS ZONE FUNCTIONS
@@ -2483,14 +2469,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         max_vehicle = get_max_vehicle_for_branch(code, test_df=test_df)
         return max_vehicle
     
-    def get_allowed_vehicles_for_region(region_name):
-        """หารถที่ใช้ได้ตามภาค (Central ห้าม 6W)"""
-        if region_name in CENTRAL_REGIONS:
-            return CENTRAL_ALLOWED_VEHICLES  # ['4W', 'JB']
-        return ['4W', 'JB', '6W']  # All vehicles
-    
     df['_max_vehicle'] = df['Code'].apply(get_max_vehicle_for_code)
-    df['_region_allowed_vehicles'] = df['_region_name'].apply(get_allowed_vehicles_for_region)
+    # ✅ ใช้รถทั้งหมดที่มี - ไม่มีข้อจำกัดตามภาค (อิงตาม Master Data เท่านั้น)
+    df['_region_allowed_vehicles'] = [['4W', 'JB', '6W']] * len(df)
     
     # 🎯 สร้าง Vehicle Priority: สาขา 4W = 1 (จัดก่อน), JB = 2, 6W = 3 (จัดทีหลัง)
     vehicle_priority_map = {'4W': 1, 'JB': 2, '6W': 3}
@@ -2949,9 +2930,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         subdistrict_drops = len(subdistrict_codes)
         
         # หารถที่ใช้ได้ตามภาค
+        # ✅ ใช้รถทั้งหมดที่มี - ไม่มีข้อจำกัดตามภาค (อิงตาม Master Data เท่านั้น)
         allowed_vehicles = ['4W', 'JB', '6W']
-        if region in CENTRAL_REGIONS:
-            allowed_vehicles = CENTRAL_ALLOWED_VEHICLES.copy()
         
         # ==========================================
         # Rule 0: Region Change → ปิดทริปเก่า + process overflow
@@ -3295,14 +3275,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         # หาภาคของทริป (ใช้ภาคแรก)
         trip_region = trip_data['_region_name'].iloc[0] if '_region_name' in trip_data.columns else 'ไม่ระบุ'
         
-        # หารถที่เหมาะสม (รวม Central Rule)
+        # หารถที่เหมาะสม (อิงตาม Master Data เท่านั้น)
         max_vehicles = [get_max_vehicle_for_branch(c) for c in trip_codes]
         min_max_size = min(vehicle_priority.get(v, 3) for v in max_vehicles)
         max_allowed_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(min_max_size, '6W')
-        
-        # 🚫 Central Region Rule: ห้าม 6W
-        if trip_region in CENTRAL_REGIONS and max_allowed_vehicle == '6W':
-            max_allowed_vehicle = 'JB'  # ลดเป็น JB
         
         # ตรวจ BU ของทริป
         is_punthai_only_trip = True
@@ -3356,12 +3332,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     suggested = 'JB'
                     source += " → JB (Drop Limit)"
                 elif suggested == 'JB' or trip_drops > PUNTHAI_LIMITS['JB']['max_drops']:
-                    # ถ้า Central ห้าม 6W → WARNING
-                    if trip_region not in CENTRAL_REGIONS:
-                        suggested = '6W'
-                        source += " → 6W (Drop Limit)"
-                    else:
-                        source += " ⚠️ Drops เกิน!"
+                    # เพิ่มเป็น 6W เมื่อ drops เกิน
+                    suggested = '6W'
+                    source += " → 6W (Drop Limit)"
         
         # คำนวณ utilization
         max_util_threshold = buffer * 100  # 100% หรือ 110% ตาม BU
@@ -3519,21 +3492,6 @@ def main():
         st.success("✅ เชื่อมต่อ Google Sheets สำเร็จ - ข้อมูลสาขาอัปเดตอัตโนมัติ")
     else:
         st.warning("⚠️ Google Sheets ยังไม่ได้ตั้งค่า - ใช้ข้อมูลจาก branch_data.json (ข้อมูล cache)")
-        if os.path.exists('CREDENTIALS_SETUP.md'):
-            with st.expander("📖 วิธีตั้งค่า Google Sheets (คลิกเพื่อดู)"):
-                st.markdown("""
-                **ขั้นตอนสั้น ๆ:**
-                1. สร้าง Service Account ใน Google Cloud Console
-                2. สร้าง Key (JSON) และดาวน์โหลดมา
-                3. เปลี่ยนชื่อเป็น `credentials.json` วางในโฟลเดอร์นี้
-                4. Share Google Sheet ให้กับ email ใน credentials.json
-                
-                **ดูคู่มือฉบับเต็มได้ที่:** [CREDENTIALS_SETUP.md](https://github.com/chani06/logistics-ai-planner/blob/main/CREDENTIALS_SETUP.md)
-                
-                **หมายเหตุ:** ระบบยังใช้งานได้ปกติด้วยข้อมูล JSON cache
-                """)
-        else:
-            st.info("💡 ดูวิธีตั้งค่า Google Sheets ได้ในไฟล์ CREDENTIALS_SETUP.md")
     
     st.write('**โหลดข้อมูลสาขา** → **จัดเที่ยวแบบ Optimization** → **ดาวน์โหลดผลลัพธ์**')
     
@@ -3740,7 +3698,18 @@ def main():
                             if not low_util_trips.empty:
                                 st.warning(f"⚠️ พบ {len(low_util_trips)} ทริปที่มีการใช้รถต่ำกว่า {MIN_VEHICLE_UTILIZATION*100:.0f}% (เป้าหมาย: รถต้องเต็ม)")
                                 with st.expander("🔍 ดูทริปที่ใช้รถต่ำ"):
-                                    st.dataframe(low_util_trips[['Trip', 'Vehicle', 'Branches', 'Weight_Use%', 'Cube_Use%']], use_container_width=True)
+                                    # เลือกเฉพาะคอลัมน์ที่มีอยู่จริง
+                                    display_cols = ['Trip']
+                                    if 'Vehicle' in low_util_trips.columns:
+                                        display_cols.append('Vehicle')
+                                    if 'Branches' in low_util_trips.columns:
+                                        display_cols.append('Branches')
+                                    if 'Weight_Use%' in low_util_trips.columns:
+                                        display_cols.append('Weight_Use%')
+                                    if 'Cube_Use%' in low_util_trips.columns:
+                                        display_cols.append('Cube_Use%')
+                                    
+                                    st.dataframe(low_util_trips[display_cols], use_container_width=True)
                             else:
                                 st.info(f"✅ ทุกทริปมีการใช้รถ ≥ {MIN_VEHICLE_UTILIZATION*100:.0f}% (บรรลุเป้าหมาย)")
                             
