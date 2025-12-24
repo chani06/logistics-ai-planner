@@ -3332,8 +3332,38 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 province_key = (region, current_province)
                 remaining = province_remaining.get(province_key, 0)
                 if remaining > 0:
-                    # ❌ ยังมีสาขาเหลือในจังหวัดเก่า → ไม่ให้ข้ามจังหวัด (STRICT)
-                    allow_merge = False
+                    # 🌍 เช็คว่าอยู่โซนเดียวกันหรือไม่
+                    current_trip_df_prov_check = df[df['Code'].isin(current_trip['codes'])]
+                    new_trip_df_prov_check = df[df['Code'].isin(subdistrict_codes)]
+                    
+                    same_logistics_zone = False
+                    if not current_trip_df_prov_check.empty and not new_trip_df_prov_check.empty:
+                        current_zones_prov = current_trip_df_prov_check['_logistics_zone'].dropna().unique()
+                        new_zones_prov = new_trip_df_prov_check['_logistics_zone'].dropna().unique()
+                        
+                        if len(current_zones_prov) > 0 and len(new_zones_prov) > 0:
+                            current_zone_prov = current_zones_prov[0]
+                            new_zone_prov = new_zones_prov[0]
+                            # ถ้าโซนเดียวกัน หรือ อยู่บนทางหลวงเดียวกัน
+                            if current_zone_prov == new_zone_prov or can_combine_zones_by_highway(current_zone_prov, new_zone_prov):
+                                same_logistics_zone = True
+                    
+                    if same_logistics_zone:
+                        # ✅ โซนเดียวกัน → เช็ค utilization แทน
+                        current_limits_prov = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
+                        current_w_util_prov = (current_trip['weight'] / current_limits_prov['max_w']) * 100
+                        current_c_util_prov = (current_trip['cube'] / current_limits_prov['max_c']) * 100
+                        current_util_prov = max(current_w_util_prov, current_c_util_prov)
+                        
+                        if current_util_prov < (MIN_UTIL_BEFORE_FINALIZE * 100):
+                            # 🚫 Utilization < 95% + โซนเดียวกัน → อนุญาตข้ามจังหวัดเพื่อเพิ่ม utilization
+                            pass
+                        else:
+                            # ✅ Utilization >= 95% → อนุญาตปิดทริป
+                            allow_merge = False
+                    else:
+                        # ❌ คนละโซน + ยังมีสาขาเหลือในจังหวัดเก่า → ไม่ให้ข้ามจังหวัด (STRICT)
+                        allow_merge = False
                 else:
                     # 🚨 เช็ค NO_CROSS_ZONE_PAIRS (ห้ามข้ามภูเขา/แม่น้ำ)
                     if is_cross_zone_violation(current_province, province):
