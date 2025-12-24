@@ -3221,30 +3221,52 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     test_allowed_cross_sub = get_allowed_from_codes(test_codes_cross_sub, allowed_vehicles)
                     
                     if not test_allowed_cross_sub:
-                        # ❌ ไม่มีรถที่รับ constraint ทั้งหมดได้ → บังคับแยก
+                        # ❌ ไม่มีรถที่รับ constraint ทั้งหมดได้ → บังคับแยก (ยกเว้นจากกฎ 95%)
                         force_finalize = True
                         allow_merge = False
                     elif current_district == district:
                         # ✅ อำเภอเดียวกัน → รวมต่อเสมอ (ไม่สนใจ utilization) เพื่อให้สาขาในอำเภอเดียวกันไปด้วยกัน
                         # ไม่ตั้ง force_finalize = True เพื่อให้รวมต่อ
                         pass
-                    elif current_util < (MIN_UTIL_BEFORE_FINALIZE * 100):
-                        # 🚫 Utilization < 95% และคนละอำเภอ → บังคับรวมต่อ (ห้ามปิดทริป - ต้องเต็มให้มากขึ้น)
-                        # 📍 แต่ต้องเช็คว่าตำบลปัจจุบันหมดแล้วหรือยัง
-                        current_sub_key = (region, current_province, current_district, current_subdistrict)
-                        current_sub_remaining = subdistrict_remaining.get(current_sub_key, 0)
-                        
-                        if current_sub_remaining <= 0:
-                            # ✅ ตำบลปัจจุบันหมดแล้ว → อนุญาตให้รวมตำบลใหม่ต่อเพื่อเพิ่ม utilization
-                            pass
-                        else:
-                            # ❌ ตำบลปัจจุบันยังไม่หมด → ต้องปิดทริป (ตำบลเดียวกันต้องไปด้วยกัน)
-                            force_finalize = True
-                            allow_merge = False
                     else:
-                        # ✅ Utilization >= 95% → อนุญาตให้ปิดทริปได้ แต่ยังพยายามรวมต่อจนเต็ม buffer
-                        # ไม่ตั้ง force_finalize = True เพื่อให้มันเช็ค buffer ต่อใน allow_merge
-                        pass
+                        # 🌍 เช็คโซนโลจิสติกส์ก่อน - ถ้าคนละโซน → ยกเว้นจากกฎ 95%
+                        current_trip_df_zone_check = df[df['Code'].isin(current_trip['codes'])]
+                        new_trip_df_zone_check = df[df['Code'].isin(subdistrict_codes)]
+                        
+                        zone_conflict = False
+                        if not current_trip_df_zone_check.empty and not new_trip_df_zone_check.empty:
+                            current_zones = current_trip_df_zone_check['_logistics_zone'].dropna().unique()
+                            new_zones = new_trip_df_zone_check['_logistics_zone'].dropna().unique()
+                            
+                            if len(current_zones) > 0 and len(new_zones) > 0:
+                                current_zone = current_zones[0]
+                                new_zone = new_zones[0]
+                                if current_zone != new_zone:
+                                    # คนละโซน → เช็คว่าอยู่บนทางหลวงเดียวกันหรือไม่
+                                    if not can_combine_zones_by_highway(current_zone, new_zone):
+                                        zone_conflict = True
+                        
+                        if zone_conflict:
+                            # ❌ คนละโซนโลจิสติกส์ → ยกเว้นจากกฎ 95% (ให้ปิดทริปได้)
+                            # ไม่ตั้ง force_finalize เพราะยังต้องเช็คเงื่อนไขอื่น
+                            pass
+                        elif current_util < (MIN_UTIL_BEFORE_FINALIZE * 100):
+                            # 🚫 Utilization < 95% และไม่มี zone conflict → บังคับรวมต่อ
+                            # 📍 เช็คว่าตำบลปัจจุบันหมดแล้วหรือยัง
+                            current_sub_key = (region, current_province, current_district, current_subdistrict)
+                            current_sub_remaining = subdistrict_remaining.get(current_sub_key, 0)
+                            
+                            if current_sub_remaining <= 0:
+                                # ✅ ตำบลปัจจุบันหมดแล้ว → อนุญาตให้รวมตำบลใหม่ต่อเพื่อเพิ่ม utilization
+                                pass
+                            else:
+                                # ❌ ตำบลปัจจุบันยังไม่หมด → ต้องปิดทริป (ตำบลเดียวกันต้องไปด้วยกัน)
+                                force_finalize = True
+                                allow_merge = False
+                        else:
+                            # ✅ Utilization >= 95% → อนุญาตให้ปิดทริปได้ แต่ยังพยายามรวมต่อจนเต็ม buffer
+                            # ไม่ตั้ง force_finalize = True เพื่อให้มันเช็ค buffer ต่อใน allow_merge
+                            pass
             
             # 2️⃣ ตรวจสอบอำเภอ: ถ้าคนละอำเภอ → เช็คว่าอำเภอเก่าหมดหรือยัง
             if allow_merge and current_district and current_district != district:
