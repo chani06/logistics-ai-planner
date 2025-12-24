@@ -2713,20 +2713,25 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         เลือกรถที่เหมาะสมตามโหลดและข้อจำกัด
         
         Logic:
-        1. ถ้ามี 4W → มีข้อจำกัดมาก → เลือกรถเล็กสุดที่พอดี (4W → JB → 6W)
-        2. ถ้าไม่มี 4W → ไม่มีข้อจำกัด → เลือกรถใหญ่ก่อน (6W → JB → 4W) เพื่อ utilization สูง
+        1. ถ้ามี 4W ในข้อจำกัด → เลือกเล็กไปใหญ่ (4W → JB → 6W)
+        2. ถ้ามี JB ในข้อจำกัด (แต่ไม่มี 4W) → เลือก JB → 6W
+        3. ถ้าไม่มีทั้ง 4W และ JB ในข้อจำกัด (มีแต่ 6W) → เลือกรถใหญ่ก่อน (6W → JB → 4W) เพื่อ utilization สูง
         """
         buffer_mult = punthai_buffer if is_punthai else maxmart_buffer
         limits_to_use = PUNTHAI_LIMITS if is_punthai else LIMITS
         
-        # เช็คว่ามี 4W หรือไม่
+        # เช็คว่ามี 4W หรือ JB ในข้อจำกัดหรือไม่
         has_4w_restriction = ('4W' in allowed_vehicles)
+        has_jb_restriction = ('JB' in allowed_vehicles)
         
         if has_4w_restriction:
             # มี 4W → มีข้อจำกัดมาก → เลือกเล็กไปใหญ่: 4W → JB → 6W
             vehicle_order = ['4W', 'JB', '6W']
+        elif has_jb_restriction:
+            # มี JB (แต่ไม่มี 4W) → เลือก JB → 6W
+            vehicle_order = ['JB', '6W']
         else:
-            # ไม่มี 4W (เฉพาะ JB/6W) → เลือกรถใหญ่ก่อน: 6W → JB → 4W เพื่อ utilization สูง
+            # ไม่มีทั้ง 4W และ JB (มีแต่ 6W) → เลือกรถใหญ่ก่อน: 6W → JB → 4W เพื่อ utilization สูง
             vehicle_order = ['6W', 'JB', '4W']
         
         for v in vehicle_order:
