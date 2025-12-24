@@ -2796,8 +2796,16 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     
     overflow_queue = []  # Queue สำหรับ stores ที่ overflow
     
-    def finalize_current_trip():
-        """ปิดทริปปัจจุบันและบันทึก พร้อมแสดง warning ถ้า utilization ต่ำกว่า 95%"""
+    def finalize_current_trip(force=False):
+        """
+        ปิดทริปปัจจุบันและบันทึก พร้อมแสดง warning ถ้า utilization ต่ำกว่า 95%
+        
+        Args:
+            force (bool): ถ้า True → ปิดทริปไม่ว่า utilization จะต่ำ (สำหรับทริปสุดท้าย)
+        
+        Returns:
+            bool: True ถ้าปิดทริปสำเร็จ, False ถ้า utilization ต่ำเกินไปและไม่ force
+        """
         nonlocal trip_counter
         if current_trip['codes']:
             # 📊 คำนวณ utilization ของทริปที่จะปิด
@@ -2806,13 +2814,20 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             cube_util = (current_trip['cube'] / limits['max_c']) * 100 if limits['max_c'] > 0 else 0
             max_util = max(weight_util, cube_util)
             
-            # 🚨 แสดง warning ถ้า utilization ต่ำกว่า 95% (เป้าหมายใหม่)
+            # 🚨 เช็คว่า utilization ถึงเป้าหมาย 95% หรือไม่
+            if not force and max_util < (MIN_UTIL_BEFORE_FINALIZE * 100):
+                print(f"🚫 ไม่สามารถปิดทริป {trip_counter}: Utilization {max_util:.1f}% < {MIN_UTIL_BEFORE_FINALIZE*100:.0f}%")
+                return False
+            
+            # ✅ ปิดทริผ
             if max_util < (MIN_UTIL_BEFORE_FINALIZE * 100):
                 print(f"⚠️ Trip {trip_counter}: Utilization {max_util:.1f}% ต่ำกว่าเป้าหมาย {MIN_UTIL_BEFORE_FINALIZE*100:.0f}%")
                 print(f"⚠️ Trip {trip_counter}: Utilization {max_util:.1f}% ต่ำกว่าเป้าหมาย {MIN_VEHICLE_UTILIZATION*100:.0f}%")
             
             for c in current_trip['codes']:
                 df.loc[df['Code'] == c, 'Trip'] = trip_counter
+            return True
+        return False
     
     def split_until_fits(allowed_vehicles, region):
         """แยก stores ออกจาก current_trip จนกว่าจะพอดีรถ (ไม่เกิน buffer) - STRICT MODE"""
@@ -3273,9 +3288,19 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 district_key = (region, current_province, current_district)
                 remaining = district_remaining.get(district_key, 0)
                 if remaining > 0:
-                    # ❌ ยังมีสาขาเหลือในอำเภอเก่า → บังคับปิดทริป
-                    force_finalize = True
-                    allow_merge = False
+                    # ❌ ยังมีสาขาเหลือในอำเภอเก่า → เช็ค utilization ก่อนปิดทริป
+                    current_limits_check = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
+                    current_w_util_check = (current_trip['weight'] / current_limits_check['max_w']) * 100
+                    current_c_util_check = (current_trip['cube'] / current_limits_check['max_c']) * 100
+                    current_util_check = max(current_w_util_check, current_c_util_check)
+                    
+                    # เฉพาะเมื่อ utilization >= 95% เท่านั้น
+                    if current_util_check >= (MIN_UTIL_BEFORE_FINALIZE * 100):
+                        force_finalize = True
+                        allow_merge = False
+                    else:
+                        # utilization < 95% → ห้ามปิดทริป (ต้องรวมอำเภอเก่าให้หมดก่อน)
+                        pass
             
             # 3️⃣ ตรวจสอบจังหวัด: ถ้าคนละจังหวัด → เช็ค province completion และ proximity
             if allow_merge and current_province and current_province != province:
@@ -3450,7 +3475,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     # Final: Process remaining overflow และปิดทริปสุดท้าย
     # ==========================================
     process_overflow_queue()
-    finalize_current_trip()
+    finalize_current_trip(force=True)  # ทริปสุดท้าย - บังคับปิด
 
     # ==========================================
     # Step 6.5: เรียงลำดับทริปใหม่ตามระยะทาง (ไกล → ใกล้)
