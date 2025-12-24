@@ -1097,9 +1097,9 @@ def validate_trip_vehicle(trip_df, assigned_vehicle):
 # ==========================================
 # LOAD MASTER DATA
 # ==========================================
-@st.cache_data(ttl=1800)  # Cache 30 นาที (อัปเดตเร็วขึ้น)
+@st.cache_data(ttl=300)  # Cache 5 นาที (auto-sync ทุก 5 นาที)
 def load_master_data():
-    """โหลด Master Data จาก Google Sheets หรือ JSON"""
+    """โหลด Master Data จาก Google Sheets หรือ JSON (auto-sync)"""
     try:
         # ใช้ข้อมูลจาก Google Sheets ที่ sync มาแล้ว
         df_from_sheets = sync_branch_data_from_sheets()
@@ -3692,22 +3692,8 @@ def main():
     
     st.markdown("---")
     
-    # 🔄 ปุ่ม Clear Cache & Sync Master Data
-    col_sync1, col_sync2, col_sync3 = st.columns([2, 2, 6])
-    with col_sync1:
-        if st.button("🔄 Sync Master Data", help="ดึงข้อมูลใหม่จาก Google Sheets"):
-            st.cache_data.clear()
-            global MASTER_DATA
-            MASTER_DATA = load_master_data()
-            st.success(f"✅ Sync เสร็จสิ้น: {len(MASTER_DATA)} สาขา")
-            st.rerun()
-    with col_sync2:
-        if st.button("🗑️ Clear Cache", help="ล้าง Cache ทั้งหมด"):
-            st.cache_data.clear()
-            st.success("✅ ล้าง Cache เรียบร้อย")
-            st.rerun()
-    with col_sync3:
-        st.caption(f"📊 Master Data: **{len(MASTER_DATA)}** สาขา | 🕒 Cache: 30 นาที")
+    # � แสดงสถิติ Master Data (auto-sync ทุก 5 นาที)
+    st.caption(f"📊 Master Data: **{len(MASTER_DATA)}** สาขา | 🔄 Auto-sync ทุก 5 นาที")
     
     st.markdown("---")
     
