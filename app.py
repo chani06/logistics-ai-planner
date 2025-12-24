@@ -2520,34 +2520,38 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     # Helper function: เลือกรถที่เหมาะสม (Optimized)
     def select_vehicle_for_load(weight, cube, drops, is_punthai, allowed_vehicles):
         """
-        เลือกรถที่เหมาะสมตามโหลดและข้อจำกัด
+        เลือกรถที่เหมาะสมตามโหลด - เลือกรถที่ทำให้เต็มที่สุดตาม buffer
         
-        Logic:
-        1. ถ้ามี 4W → มีข้อจำกัดมาก → เลือกรถเล็กสุดที่พอดี
-        2. ถ้ามีเฉพาะ JB หรือ 6W → ไม่มีข้อจำกัดมาก → เลือก JB
+        Logic: เลือกรถที่มี utilization สูงสุด (ใกล้ buffer มากที่สุด) แต่ไม่เกิน buffer
         """
         buffer_mult = punthai_buffer if is_punthai else maxmart_buffer
         limits_to_use = PUNTHAI_LIMITS if is_punthai else LIMITS
         
-        # เช็คว่ามี 4W หรือไม่
-        has_4w_restriction = ('4W' in allowed_vehicles)
+        best_vehicle = None
+        best_util = 0  # ต้องการ utilization สูงสุด
         
-        if has_4w_restriction:
-            # มี 4W → มีข้อจำกัดมาก → เลือกเล็กไปใหญ่: 4W → JB → 6W
-            vehicle_order = ['4W', 'JB', '6W']
-        else:
-            # มีเฉพาะ JB/6W → ไม่มีข้อจำกัดมาก → เลือก JB ก่อน: JB → 6W → 4W
-            vehicle_order = ['JB', '6W', '4W']
-        
-        for v in vehicle_order:
-            if v not in allowed_vehicles:
+        for v in allowed_vehicles:
+            if v not in limits_to_use:
                 continue
+                
             lim = limits_to_use[v]
-            if (weight <= lim['max_w'] * buffer_mult and 
-                cube <= lim['max_c'] * buffer_mult and 
-                drops <= lim.get('max_drops', 12)):
-                return v
-        return None
+            max_w = lim['max_w'] * buffer_mult
+            max_c = lim['max_c'] * buffer_mult
+            max_d = lim.get('max_drops', 12)
+            
+            # เช็คว่าใส่ได้หรือไม่
+            if weight <= max_w and cube <= max_c and drops <= max_d:
+                # คำนวณ utilization (ใช้ค่าสูงสุดระหว่าง weight กับ cube)
+                w_util = (weight / max_w) * 100 if max_w > 0 else 0
+                c_util = (cube / max_c) * 100 if max_c > 0 else 0
+                util = max(w_util, c_util)
+                
+                # เลือกรถที่มี utilization สูงที่สุด (ใกล้ buffer มากที่สุด)
+                if util > best_util:
+                    best_util = util
+                    best_vehicle = v
+        
+        return best_vehicle
     
     # Helper function: เช็ค Geographic Spread ภายในทริป
     def check_intra_trip_spread(trip_codes_list):
@@ -3030,8 +3034,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                         allow_merge = False
                     elif current_util < (MIN_UTIL_BEFORE_FINALIZE * 100):
                         # 🚫 Utilization < 75% → บังคับรวมต่อ (ห้ามปิดทริป - ต้องเต็มให้มากขึ้น)
-                        # ไม่ตั้ง force_finalize = True เพื่อให้รวมต่อ
-                        pass
+                        # บังคับให้รวมต่อ ไม่ว่าจะตำบลใหม่หรือไม่
+                        force_finalize = False
+                        allow_merge = True  # บังคับให้พยายามรวมต่อ
                     else:
                         # ✅ Utilization >= 75% → อนุญาตให้ปิดทริปได้ แต่ยังพยายามรวมต่อจนเต็ม buffer
                         # ไม่ตั้ง force_finalize = True เพื่อให้มันเช็ค buffer ต่อใน allow_merge
