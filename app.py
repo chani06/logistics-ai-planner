@@ -1097,7 +1097,7 @@ def validate_trip_vehicle(trip_df, assigned_vehicle):
 # ==========================================
 # LOAD MASTER DATA
 # ==========================================
-@st.cache_data(ttl=7200)  # Cache 2 ชั่วโมง (เร็วขึ้น)
+@st.cache_data(ttl=1800)  # Cache 30 นาที (อัปเดตเร็วขึ้น)
 def load_master_data():
     """โหลด Master Data จาก Google Sheets หรือ JSON"""
     try:
@@ -3692,6 +3692,25 @@ def main():
     
     st.markdown("---")
     
+    # 🔄 ปุ่ม Clear Cache & Sync Master Data
+    col_sync1, col_sync2, col_sync3 = st.columns([2, 2, 6])
+    with col_sync1:
+        if st.button("🔄 Sync Master Data", help="ดึงข้อมูลใหม่จาก Google Sheets"):
+            st.cache_data.clear()
+            global MASTER_DATA
+            MASTER_DATA = load_master_data()
+            st.success(f"✅ Sync เสร็จสิ้น: {len(MASTER_DATA)} สาขา")
+            st.rerun()
+    with col_sync2:
+        if st.button("🗑️ Clear Cache", help="ล้าง Cache ทั้งหมด"):
+            st.cache_data.clear()
+            st.success("✅ ล้าง Cache เรียบร้อย")
+            st.rerun()
+    with col_sync3:
+        st.caption(f"📊 Master Data: **{len(MASTER_DATA)}** สาขา | 🕒 Cache: 30 นาที")
+    
+    st.markdown("---")
+    
     # โหลดโมเดล
     model_data = load_model()
     
@@ -3779,11 +3798,17 @@ def main():
                     if filled_count > 0:
                         st.info(f"📍 เติมข้อมูลพื้นที่จาก Master แล้ว {filled_count} รายการ")
                 
-                # ตรวจสอบว่ายังมีข้อมูลที่ขาดหรือไม่ (แสดงแค่จำนวน)
+                # ตรวจสอบว่ายังมีข้อมูลที่ขาดหรือไม่ (แสดงรายละเอียด)
                 if 'Province' in df.columns:
-                    missing_count = len(df[(df['Province'].isna()) | (df['Province'] == '') | (df['Province'] == 'UNKNOWN')])
-                    if missing_count > 0:
-                        st.warning(f"⚠️ ยังมี {missing_count} สาขาที่ไม่พบข้อมูลพื้นที่ใน Master")
+                    missing_df = df[(df['Province'].isna()) | (df['Province'] == '') | (df['Province'] == 'UNKNOWN')]
+                    if len(missing_df) > 0:
+                        st.warning(f"⚠️ ยังมี {len(missing_df)} สาขาที่ไม่พบข้อมูลพื้นที่ใน Master")
+                        with st.expander("📋 ดูรายละเอียดสาขาที่ขาดข้อมูล"):
+                            missing_codes = missing_df['Code'].tolist()
+                            st.write(f"**รหัสสาขา:** {', '.join(map(str, missing_codes))}")
+                            if 'Name' in missing_df.columns:
+                                for idx, row in missing_df.iterrows():
+                                    st.write(f"- {row['Code']}: {row.get('Name', 'N/A')}")
                 
                 st.markdown("---")
                 
