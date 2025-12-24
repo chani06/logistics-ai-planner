@@ -2412,8 +2412,16 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     df['_lat'] = df['Code'].apply(lambda c: get_location_info(c)['lat'])
     df['_lon'] = df['Code'].apply(lambda c: get_location_info(c)['lon'])
     
+    # 🚨 เพิ่ม Logistics Zone สำหรับ routing ตามทางหลวง
+    df['_logistics_zone'] = df.apply(
+        lambda row: get_logistics_zone(row['_province'], row['_district'], row['_subdistrict']),
+        axis=1
+    )
+    df['_zone_priority'] = df['_logistics_zone'].apply(get_zone_priority)
+    df['_zone_highway'] = df['_logistics_zone'].apply(get_zone_highway)
+    
     # ==========================================
-    # Step 3: เรียงลำดับแบบ Hierarchical (Region > Province Max Dist > District Max Dist > Distance)
+    # Step 3: เรียงลำดับแบบ Hierarchical (Zone Priority > Region > Province Max Dist > District Max Dist > Distance)
     # 🎯 หัวใจสำคัญ: เรียงตาม Region Order ก่อน (ไกลมาใกล้)
     # ==========================================
     
@@ -2432,12 +2440,12 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     df = df.merge(dist_max_dist, on=['_province', '_district'], how='left')
     df['_dist_max_dist'] = df['_dist_max_dist'].fillna(9999)
     
-    # 🎯 Sort: Far-to-Near (ไกลมาใกล้)
-    # Region Order (Asc) → Province Max Dist (Desc - ไกลก่อน) → District Max Dist (Desc - ไกลก่อน) → 
-    # Sum_Code → Route → Distance (Desc - ไกลก่อน)
+    # 🎯 Sort: LIFO (Last In First Out) - ไกลส่งก่อน, ใกล้ส่งทีหลัง
+    # Zone Priority (Asc - 1=ไกลสุด, 99=ใกล้สุด) → Region Order → Province Max Dist → District Max Dist → 
+    # Sum_Code → Route → Distance (Desc - ไกลก่อนในโซนเดียวกัน)
     df = df.sort_values(
-        ['_region_order', '_prov_max_dist', '_dist_max_dist', '_sum_code', '_route', '_distance_from_dc'],
-        ascending=[True, False, False, True, True, False]  # ไกลมาใกล้: Prov/Dist ใช้ Desc, Distance ใช้ Desc
+        ['_zone_priority', '_region_order', '_prov_max_dist', '_dist_max_dist', '_sum_code', '_route', '_distance_from_dc'],
+        ascending=[True, True, False, False, True, True, False]  # Zone Priority + ไกลมาใกล้
     ).reset_index(drop=True)
     
     # ==========================================
@@ -2474,15 +2482,16 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     vehicle_priority_map = {'4W': 1, 'JB': 2, '6W': 3}
     df['_vehicle_priority'] = df['_max_vehicle'].map(vehicle_priority_map).fillna(3)
     
-    # 🎯 Sort: Vehicle Priority (4W ก่อน) + Far-to-Near (ไกลก่อนใกล้)
+    # 🎯 Sort: Vehicle Priority (4W ก่อน) + LIFO Zone Routing (ไกล→ใกล้)
     # 1. สาขา 4W ก่อน (Priority 1)
-    # 2. ภาคไกลก่อน (Region Order)
-    # 3. จังหวัดที่มีจุดไกลสุดก่อน (Prov Max Dist Desc)
-    # 4. อำเภอที่มีจุดไกลสุดก่อน (Dist Max Dist Desc)
-    # 5. ระยะทางไกลก่อน (Distance Desc)
+    # 2. โซนโลจิสติกส์ไกลก่อน (Zone Priority 1-99)
+    # 3. ภาคไกลก่อน (Region Order)
+    # 4. จังหวัดที่มีจุดไกลสุดก่อน (Prov Max Dist Desc)
+    # 5. อำเภอที่มีจุดไกลสุดก่อน (Dist Max Dist Desc)
+    # 6. ระยะทางไกลก่อน (Distance Desc)
     df = df.sort_values(
-        ['_vehicle_priority', '_region_order', '_prov_max_dist', '_dist_max_dist', '_sum_code', '_route', '_distance_from_dc'],
-        ascending=[True, True, False, False, True, True, False]  # 4W ก่อน + ไกลมาใกล้
+        ['_vehicle_priority', '_zone_priority', '_region_order', '_prov_max_dist', '_dist_max_dist', '_sum_code', '_route', '_distance_from_dc'],
+        ascending=[True, True, True, False, False, True, True, False]  # 4W + Zone + ไกลมาใกล้
     ).reset_index(drop=True)
     
     # ==========================================
@@ -2678,28 +2687,72 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             
             # ลองเพิ่มเข้า current_trip
             if current_trip['codes']:
-                test_codes = current_trip['codes'] + [code]
-                test_weight = current_trip['weight'] + weight
-                test_cube = current_trip['cube'] + cube
-                test_drops = current_trip['drops'] + 1
-                test_punthai = is_all_punthai_codes(test_codes)
-                test_allowed = get_allowed_from_codes(test_codes, allowed_vehicles)
+                # 🚨 เช็ค Logistics Zone และ Cross-Zone Violation ก่อน
+                current_trip_df_check = df[df['Code'].isin(current_trip['codes'])]
+                new_code_df_check = df[df['Code'] == code]
                 
-                vehicle = select_vehicle_for_load(test_weight, test_cube, test_drops, test_punthai, test_allowed)
+                can_add = True
                 
-                if vehicle:
-                    # พอดี! เพิ่มเข้า
-                    current_trip['codes'].append(code)
-                    current_trip['weight'] = test_weight
-                    current_trip['cube'] = test_cube
-                    current_trip['drops'] = test_drops
-                    current_trip['is_punthai'] = test_punthai
-                    current_trip['allowed_vehicles'] = test_allowed
+                # เช็ค NO_CROSS_ZONE_PAIRS
+                if not current_trip_df_check.empty and not new_code_df_check.empty:
+                    current_provinces = current_trip_df_check['_province'].unique()
+                    new_province = new_code_df_check['_province'].iloc[0]
                     
-                    # Double check
-                    split_until_fits(allowed_vehicles, region)
+                    for curr_prov in current_provinces:
+                        if is_cross_zone_violation(curr_prov, new_province):
+                            can_add = False
+                            break
+                
+                # เช็ค Logistics Zone
+                if can_add and not current_trip_df_check.empty and not new_code_df_check.empty:
+                    current_zones = current_trip_df_check['_logistics_zone'].dropna().unique()
+                    new_zone = new_code_df_check['_logistics_zone'].iloc[0] if pd.notna(new_code_df_check['_logistics_zone'].iloc[0]) else None
+                    
+                    if len(current_zones) > 0 and new_zone:
+                        current_zone = current_zones[0]
+                        if current_zone != new_zone:
+                            # คนละโซน → เช็คว่าอยู่บนทางหลวงเดียวกันหรือไม่
+                            if not can_combine_zones_by_highway(current_zone, new_zone):
+                                can_add = False
+                
+                if can_add:
+                    test_codes = current_trip['codes'] + [code]
+                    test_weight = current_trip['weight'] + weight
+                    test_cube = current_trip['cube'] + cube
+                    test_drops = current_trip['drops'] + 1
+                    test_punthai = is_all_punthai_codes(test_codes)
+                    test_allowed = get_allowed_from_codes(test_codes, allowed_vehicles)
+                    
+                    vehicle = select_vehicle_for_load(test_weight, test_cube, test_drops, test_punthai, test_allowed)
+                    
+                    if vehicle:
+                        # พอดี! เพิ่มเข้า
+                        current_trip['codes'].append(code)
+                        current_trip['weight'] = test_weight
+                        current_trip['cube'] = test_cube
+                        current_trip['drops'] = test_drops
+                        current_trip['is_punthai'] = test_punthai
+                        current_trip['allowed_vehicles'] = test_allowed
+                        
+                        # Double check
+                        split_until_fits(allowed_vehicles, region)
+                    else:
+                        # ไม่พอดี → ปิดทริปเก่า, เริ่มใหม่
+                        finalize_current_trip()
+                        trip_counter += 1
+                        new_allowed = get_allowed_from_codes([code], allowed_vehicles)
+                        current_trip = {
+                            'codes': [code],
+                            'weight': weight,
+                            'cube': cube,
+                            'drops': 1,
+                            'region': region,
+                            'allowed_vehicles': new_allowed,
+                            'district': None,
+                            'is_punthai': branch_bu_cache.get(code, False)
+                        }
                 else:
-                    # ไม่พอดี → ปิดทริปเก่า, เริ่มใหม่
+                    # ❌ ไม่ผ่าน Zone/Cross-Zone Check → ปิดทริปเก่า, เริ่มใหม่
                     finalize_current_trip()
                     trip_counter += 1
                     new_allowed = get_allowed_from_codes([code], allowed_vehicles)
@@ -3014,8 +3067,28 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     # ❌ ยังมีสาขาเหลือในจังหวัดเก่า → ไม่ให้ข้ามจังหวัด (STRICT)
                     allow_merge = False
                 else:
-                    # ✅ จังหวัดเก่าหมดแล้ว → เช็ค proximity
-                    allow_merge = check_geographic_proximity(current_trip_df, subdistrict_df)
+                    # 🚨 เช็ค NO_CROSS_ZONE_PAIRS (ห้ามข้ามภูเขา/แม่น้ำ)
+                    if is_cross_zone_violation(current_province, province):
+                        allow_merge = False
+                    else:
+                        # ✅ จังหวัดเก่าหมดแล้ว → เช็ค proximity
+                        allow_merge = check_geographic_proximity(current_trip_df, subdistrict_df)
+            
+            # 4️⃣ ตรวจสอบ Logistics Zone: ห้ามข้ามโซนโลจิสติกส์ (ยกเว้นอยู่บนทางหลวงเดียวกัน)
+            if allow_merge and current_trip['codes']:
+                current_trip_zones = df[df['Code'].isin(current_trip['codes'])]['_logistics_zone'].dropna().unique()
+                subdistrict_zones = subdistrict_df['_logistics_zone'].dropna().unique()
+                
+                if len(current_trip_zones) > 0 and len(subdistrict_zones) > 0:
+                    current_zone = current_trip_zones[0]
+                    new_zone = subdistrict_zones[0]
+                    
+                    # ถ้าคนละโซน → เช็คว่าอยู่บนทางหลวงเดียวกันหรือไม่
+                    if current_zone != new_zone:
+                        # ถ้าอยู่บนทางหลวงเดียวกัน → อนุญาตให้รวมได้
+                        if not can_combine_zones_by_highway(current_zone, new_zone):
+                            # ❌ คนละทางหลวง → ห้ามรวม
+                            allow_merge = False
             
             if allow_merge:
                 test_codes = current_trip['codes'] + subdistrict_codes
