@@ -80,20 +80,33 @@ import json
 try:
     import gspread
     from oauth2client.service_account import ServiceAccountCredentials
-    SHEETS_AVAILABLE = True
     
-    # เชื่อมต่อ Google Sheets
-    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-    try:
-        creds = ServiceAccountCredentials.from_json_keyfile_name('credentials_template.json', scope)
-        gc = gspread.authorize(creds)
-        SPREADSHEET_ID = '12DmIfECwVpsWfl8rl2r1A_LB4_5XMrmnmwlPUHKNU-o'
-        sh = gc.open_by_key(SPREADSHEET_ID)
-    except Exception as e:
+    # ตรวจสอบว่ามีไฟล์ credentials.json หรือไม่
+    credentials_file = 'credentials.json'
+    if not os.path.exists(credentials_file):
+        print(f"⚠️ ไม่พบ {credentials_file} - ระบบจะใช้ข้อมูลจาก branch_data.json")
+        print(f"💡 ดูวิธีตั้งค่าได้ที่: CREDENTIALS_SETUP.md")
         SHEETS_AVAILABLE = False
         gc = None
         sh = None
+    else:
+        # เชื่อมต่อ Google Sheets
+        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        try:
+            creds = ServiceAccountCredentials.from_json_keyfile_name(credentials_file, scope)
+            gc = gspread.authorize(creds)
+            SPREADSHEET_ID = '12DmIfECwVpsWfl8rl2r1A_LB4_5XMrmnmwlPUHKNU-o'
+            sh = gc.open_by_key(SPREADSHEET_ID)
+            SHEETS_AVAILABLE = True
+            print("✅ เชื่อมต่อ Google Sheets สำเร็จ")
+        except Exception as e:
+            print(f"⚠️ Google Sheets Error: {e}")
+            print(f"💡 ตรวจสอบไฟล์ {credentials_file} หรือดูคู่มือที่ CREDENTIALS_SETUP.md")
+            SHEETS_AVAILABLE = False
+            gc = None
+            sh = None
 except ImportError:
+    print("⚠️ ไม่พบ gspread library - ติดตั้งด้วย: pip install gspread oauth2client")
     SHEETS_AVAILABLE = False
     gc = None
     sh = None
@@ -277,7 +290,8 @@ MAX_MERGE_ITERATIONS = 25  # จำกัดรอบการรวมทริ
 
 # 🌍 Geographic Clustering Config
 MAX_DISTRICT_DISTANCE_KM = 50  # อำเภอที่ห่างกันเกิน 50km ไม่ควรอยู่ทริปเดียวกัน (เว้นแต่จังหวัดเดียวกัน)
-MIN_VEHICLE_UTILIZATION = 0.7  # รถต้องใช้อย่างน้อย 70% ไม่ให้ต่ำกว่ามาตรฐาน
+MIN_VEHICLE_UTILIZATION = 0.80  # 🎯 รถต้องใช้อย่างน้อย 80% - บังคับให้ทริปเต็ม (เพิ่มจาก 70%)
+MIN_UTIL_BEFORE_FINALIZE = 0.75  # ต้องมี utilization อย่างน้อย 75% ก่อนจะปิดทริป (เพิ่มจาก 60%)
 
 # ==========================================
 # REGION ORDER CONFIG (Far-to-Near Sorting)
@@ -2624,9 +2638,19 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     overflow_queue = []  # Queue สำหรับ stores ที่ overflow
     
     def finalize_current_trip():
-        """ปิดทริปปัจจุบันและบันทึก"""
+        """ปิดทริปปัจจุบันและบันทึก พร้อมแสดง warning ถ้า utilization ต่ำ"""
         nonlocal trip_counter
         if current_trip['codes']:
+            # 📊 คำนวณ utilization ของทริปที่จะปิด
+            limits = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
+            weight_util = (current_trip['weight'] / limits['max_w']) * 100 if limits['max_w'] > 0 else 0
+            cube_util = (current_trip['cube'] / limits['max_c']) * 100 if limits['max_c'] > 0 else 0
+            max_util = max(weight_util, cube_util)
+            
+            # 🚨 แสดง warning ถ้า utilization ต่ำกว่า threshold (สำหรับ debug)
+            if max_util < (MIN_VEHICLE_UTILIZATION * 100):
+                print(f"⚠️ Trip {trip_counter}: Utilization {max_util:.1f}% ต่ำกว่าเป้าหมาย {MIN_VEHICLE_UTILIZATION*100:.0f}%")
+            
             for c in current_trip['codes']:
                 df.loc[df['Code'] == c, 'Trip'] = trip_counter
     
@@ -3041,12 +3065,12 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                         # ❌ ไม่มีรถที่รับ constraint ทั้งหมดได้ → บังคับแยก
                         force_finalize = True
                         allow_merge = False
-                    elif current_util < 60:
-                        # 🚫 Utilization < 60% → บังคับรวมต่อ (ห้ามปิดทริป)
+                    elif current_util < (MIN_UTIL_BEFORE_FINALIZE * 100):
+                        # 🚫 Utilization < 75% → บังคับรวมต่อ (ห้ามปิดทริป - ต้องเต็มให้มากขึ้น)
                         # ไม่ตั้ง force_finalize = True เพื่อให้รวมต่อ
                         pass
                     else:
-                        # ✅ Utilization >= 60% → อนุญาตให้ปิดทริปได้ แต่ยังพยายามรวมต่อจนเต็ม buffer
+                        # ✅ Utilization >= 75% → อนุญาตให้ปิดทริปได้ แต่ยังพยายามรวมต่อจนเต็ม buffer
                         # ไม่ตั้ง force_finalize = True เพื่อให้มันเช็ค buffer ต่อใน allow_merge
                         pass
             
@@ -3492,9 +3516,24 @@ def main():
     
     # แสดงสถานะ Google Sheets
     if SHEETS_AVAILABLE:
-        st.success("✅ เชื่อมต่อ Google Sheets สำเร็จ")
+        st.success("✅ เชื่อมต่อ Google Sheets สำเร็จ - ข้อมูลสาขาอัปเดตอัตโนมัติ")
     else:
-        st.warning("⚠️ Google Sheets ยังไม่ได้ตั้งค่า - ใช้ข้อมูลจาก JSON")
+        st.warning("⚠️ Google Sheets ยังไม่ได้ตั้งค่า - ใช้ข้อมูลจาก branch_data.json (ข้อมูล cache)")
+        if os.path.exists('CREDENTIALS_SETUP.md'):
+            with st.expander("📖 วิธีตั้งค่า Google Sheets (คลิกเพื่อดู)"):
+                st.markdown("""
+                **ขั้นตอนสั้น ๆ:**
+                1. สร้าง Service Account ใน Google Cloud Console
+                2. สร้าง Key (JSON) และดาวน์โหลดมา
+                3. เปลี่ยนชื่อเป็น `credentials.json` วางในโฟลเดอร์นี้
+                4. Share Google Sheet ให้กับ email ใน credentials.json
+                
+                **ดูคู่มือฉบับเต็มได้ที่:** [CREDENTIALS_SETUP.md](https://github.com/chani06/logistics-ai-planner/blob/main/CREDENTIALS_SETUP.md)
+                
+                **หมายเหตุ:** ระบบยังใช้งานได้ปกติด้วยข้อมูล JSON cache
+                """)
+        else:
+            st.info("💡 ดูวิธีตั้งค่า Google Sheets ได้ในไฟล์ CREDENTIALS_SETUP.md")
     
     st.write('**โหลดข้อมูลสาขา** → **จัดเที่ยวแบบ Optimization** → **ดาวน์โหลดผลลัพธ์**')
     
@@ -3695,6 +3734,15 @@ def main():
                             with col4:
                                 avg_util = summary['Cube_Use%'].mean() if len(summary) > 0 else 0
                                 st.metric("📈 การใช้รถเฉลี่ย", f"{avg_util:.0f}%")
+                            
+                            # 🚨 แสดง warning ถ้า utilization ต่ำกว่า threshold
+                            low_util_trips = summary[summary['Cube_Use%'] < (MIN_VEHICLE_UTILIZATION * 100)] if 'Cube_Use%' in summary.columns else pd.DataFrame()
+                            if not low_util_trips.empty:
+                                st.warning(f"⚠️ พบ {len(low_util_trips)} ทริปที่มีการใช้รถต่ำกว่า {MIN_VEHICLE_UTILIZATION*100:.0f}% (เป้าหมาย: รถต้องเต็ม)")
+                                with st.expander("🔍 ดูทริปที่ใช้รถต่ำ"):
+                                    st.dataframe(low_util_trips[['Trip', 'Vehicle', 'Branches', 'Weight_Use%', 'Cube_Use%']], use_container_width=True)
+                            else:
+                                st.info(f"✅ ทุกทริปมีการใช้รถ ≥ {MIN_VEHICLE_UTILIZATION*100:.0f}% (บรรลุเป้าหมาย)")
                             
                             st.markdown("---")
                             
