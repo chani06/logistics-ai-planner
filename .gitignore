@@ -1,4 +1,24 @@
+# Sensitive credentials
+credentials.json
+
+# Data files
 *.csv
+*.xlsx
+!ตัวอย่างไฟล์_Upload_*.xlsx
+
+# Python cache
 __pycache__/
+*.pyc
+
+# IDE & History
 .history/
+.vscode/
+
+# Temp files
 ~$*
+*_backup*.py
+*_before_*.py
+*_temp*.py
+
+# Data cache
+branch_data.json
