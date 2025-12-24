@@ -85,7 +85,7 @@ try:
     # เชื่อมต่อ Google Sheets
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     try:
-        creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
+        creds = ServiceAccountCredentials.from_json_keyfile_name('credentials_template.json', scope)
         gc = gspread.authorize(creds)
         SPREADSHEET_ID = '12DmIfECwVpsWfl8rl2r1A_LB4_5XMrmnmwlPUHKNU-o'
         sh = gc.open_by_key(SPREADSHEET_ID)
