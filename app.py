@@ -2871,29 +2871,33 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             print(f"  → Fallback สุดท้าย: ใช้ 6W")
         return '6W'
     
-    # Helper function: เช็ค Geographic Spread ภายในทริป
+    # Helper function: เช็ค Geographic Spread ภายในทริป (OPTIMIZED)
     def check_intra_trip_spread(trip_codes_list):
         """ตรวจสอบว่าสาขาในทริปไม่กระจายทางภูมิศาสตร์เกินไป (ห้ามคนละทิศ)"""
         if len(trip_codes_list) < 2:
             return True  # 1 สาขา = OK
         
         trip_df = df[df['Code'].isin(trip_codes_list)]
-        if trip_df.empty:
+        if trip_df.empty or len(trip_df) < 2:
             return True
         
-        # คำนวณ centroid ของทริป
-        trip_lat_mean = trip_df['_lat'].mean()
-        trip_lon_mean = trip_df['_lon'].mean()
+        # กรอง branch ที่มีพิกัด (vectorized)
+        valid_coords = trip_df[(trip_df['_lat'] > 0) & (trip_df['_lon'] > 0)]
+        if len(valid_coords) < 2:
+            return True
         
-        # เช็คว่าทุกสาขาห่างจาก centroid ไม่เกิน 80km
-        max_dist_from_center = 0
-        for _, row in trip_df.iterrows():
-            if row['_lat'] > 0 and row['_lon'] > 0:
-                dist = haversine_distance(trip_lat_mean, trip_lon_mean, row['_lat'], row['_lon'])
-                max_dist_from_center = max(max_dist_from_center, dist)
+        # คำนวณ centroid
+        center_lat = valid_coords['_lat'].mean()
+        center_lon = valid_coords['_lon'].mean()
         
-        # ถ้า spread เกิน 80km ถือว่ากระจายเกินไป (คนละทิศ)
-        return max_dist_from_center <= 80
+        # Vectorized distance calculation (เร็วกว่า iterrows)
+        distances = valid_coords.apply(
+            lambda row: haversine_distance(center_lat, center_lon, row['_lat'], row['_lon']),
+            axis=1
+        )
+        
+        # ถ้า spread เกิน 80km ถือว่ากระจายเกินไป
+        return distances.max() <= 80
     
     # Helper function: เช็คว่าเป็น Punthai ล้วนหรือไม่ (Optimized - ใช้ cache)
     def is_all_punthai_codes(codes):
@@ -2913,6 +2917,19 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 result.discard('6W')
                 result.discard('JB')
         return list(result)
+    
+    # 🚀 CACHE: Trip metadata cache (ลดการคำนวณซ้ำ)
+    trip_metadata_cache = {}
+    
+    def get_trip_metadata_cached(codes_list, base_allowed):
+        """Get trip metadata with caching"""
+        codes_key = tuple(sorted(codes_list))
+        if codes_key not in trip_metadata_cache:
+            trip_metadata_cache[codes_key] = {
+                'is_punthai': is_all_punthai_codes(codes_list),
+                'allowed': get_allowed_from_codes(codes_list, base_allowed)
+            }
+        return trip_metadata_cache[codes_key]
     
     # Current trip state
     current_trip = {
@@ -2982,11 +2999,12 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         return False
     
     def split_until_fits(allowed_vehicles, region):
-        """แยก stores ออกจาก current_trip จนกว่าจะพอดีรถ (ไม่เกิน buffer) - STRICT MODE"""
+        """แยก stores ออกจาก current_trip จนกว่าจะพอดีรถ (ไม่เกิน buffer) - OPTIMIZED"""
         nonlocal trip_counter, overflow_queue
         
-        max_iterations = 100  # ป้องกัน infinite loop
+        max_iterations = 20  # ลดจาก 100 → 20 (เพียงพอแล้ว)
         iteration = 0
+        prev_codes_count = len(current_trip['codes'])
         
         while iteration < max_iterations:
             iteration += 1
@@ -3001,30 +3019,35 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             max_util_check = max(weight_util_check, cube_util_check)
             
             # 🚫 STRICT: เช็คว่าเกิน buffer หรือไม่
-            # 1. น้ำหนักต้องไม่เกิน 100% (Hard Limit)
-            # 2. max(weight, cube) ต้องไม่เกิน buffer
             weight_ok = weight_util_check <= 100.0
             util_ok = max_util_check <= (buffer_mult * 100)
             drops_ok = current_trip['drops'] <= limits['max_d']
             
+            # Early exit ถ้าผ่านเงื่อนไข
             if weight_ok and util_ok and drops_ok:
                 break
             
+            # Early exit ถ้าเหลือ 1 สาขา
             if len(current_trip['codes']) <= 1:
-                # ถ้าเหลือ 1 สาขาแต่ยังเกิน → ยอมรับ (ไม่มีทางแยกได้)
                 break
             
             # ตัด store สุดท้ายออก
             overflow_code = current_trip['codes'].pop()
-            overflow_weight = df.loc[df['Code'] == overflow_code, 'Weight'].iloc[0]
-            overflow_cube = df.loc[df['Code'] == overflow_code, 'Cube'].iloc[0]
+            branch_data = df[df['Code'] == overflow_code]
+            if branch_data.empty:
+                continue  # Skip if not found
+            
+            overflow_weight = branch_data['Weight'].iloc[0]
+            overflow_cube = branch_data['Cube'].iloc[0]
             current_trip['weight'] -= overflow_weight
             current_trip['cube'] -= overflow_cube
             current_trip['drops'] -= 1
             
-            # Update is_punthai และ allowed_vehicles
-            current_trip['is_punthai'] = is_all_punthai_codes(current_trip['codes'])
-            current_trip['allowed_vehicles'] = get_allowed_from_codes(current_trip['codes'], allowed_vehicles)
+            # Update metadata เฉพาะเมื่อ codes เปลี่ยน
+            if len(current_trip['codes']) != prev_codes_count:
+                current_trip['is_punthai'] = is_all_punthai_codes(current_trip['codes'])
+                current_trip['allowed_vehicles'] = get_allowed_from_codes(current_trip['codes'], allowed_vehicles)
+                prev_codes_count = len(current_trip['codes'])
             
             overflow_queue.append({
                 'code': overflow_code,
