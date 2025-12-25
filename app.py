@@ -247,6 +247,9 @@ PUNTHAI_LIMITS = {
 #  Geographic Clustering Config
 MAX_DISTRICT_DISTANCE_KM = 30  # คนละจังหวัด: ห่างกันเกิน 30km ไม่ควรรวมทริป (จังหวัดเดียวกันสามารถ 80km)
 
+# Utilization Config
+MIN_UTIL_BEFORE_FINALIZE = 0.9  # ต้องมี utilization อย่างน้อย 90% ก่อนจะปิดทริป
+
 # ==========================================
 # REGION ORDER CONFIG (Far-to-Near Sorting)
 # ==========================================
