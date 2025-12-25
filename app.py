@@ -3009,13 +3009,24 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         if is_punthai_only_trip:
             punthai_drop_limit = PUNTHAI_LIMITS.get(suggested, {}).get('max_drops', 999)
             if trip_drops > punthai_drop_limit:
-                # ต้องเพิ่มขนาดรถเพื่อรองรับ drops
+                # ต้องเพิ่มขนาดรถเพื่อรองรับ drops - แต่ห้ามเกินข้อจำกัดสาขา!
                 if suggested == '4W' and trip_drops <= PUNTHAI_LIMITS['JB']['max_drops']:
-                    suggested = 'JB'
-                    source += " → JB (Drop Limit)"
+                    # เช็คว่าสาขาอนุญาต JB ไหม
+                    if min_max_size >= 2:  # JB หรือ 6W
+                        suggested = 'JB'
+                        source += " → JB (Drop Limit)"
+                    else:
+                        # สาขาจำกัดแค่ 4W - ไม่สามารถ upgrade ได้!
+                        source += " ⚠️ Drop เกิน (แต่สาขาจำกัด 4W)"
                 elif suggested == 'JB' or trip_drops > PUNTHAI_LIMITS['JB']['max_drops']:
-                    suggested = '6W'
-                    source += " → 6W (Drop Limit)"
+                    # เช็คว่าสาขาอนุญาต 6W ไหม
+                    if min_max_size >= 3:  # 6W
+                        suggested = '6W'
+                        source += " → 6W (Drop Limit)"
+                    else:
+                        # 🚫 สาขาจำกัดไม่เกิน JB - ห้ามใช้ 6W!
+                        suggested = max_allowed_vehicle  # ใช้รถตามข้อจำกัดสาขา (JB หรือ 4W)
+                        source += f" ⚠️ Drop เกิน (แต่สาขาจำกัด {max_allowed_vehicle})"
         
         # คำนวณ utilization
         max_util_threshold = buffer * 100  # 100% หรือ 110% ตาม BU
