@@ -1246,10 +1246,10 @@ MASTER_DIST_DATA = load_master_dist_data()
 # ==========================================
 
 def get_max_vehicle_for_branch(branch_code, test_df=None, debug=False):
-    """ดึงรถใหญ่สุดที่สาขานี้รองรับ - อ่านจาก Master Data (Google Sheets) เป็นหลัก"""
+    """ดึงรถใหญ่สุดที่สาขานี้รองรับ - อ่านจาก MASTER_DATA (Google Sheets) เท่านั้น"""
     branch_code_str = str(branch_code).strip().upper()
     
-    # 🎯 อ่านจาก MASTER_DATA (Google Sheets) เป็นหลัก - ข้อมูลล่าสุด
+    # 🎯 อ่านจาก MASTER_DATA (Google Sheets) เท่านั้น - ไม่มี fallback
     if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
         branch_row = MASTER_DATA[MASTER_DATA['Plan Code'].str.strip().str.upper() == branch_code_str]
         if not branch_row.empty:
@@ -1261,18 +1261,6 @@ def get_max_vehicle_for_branch(branch_code, test_df=None, debug=False):
                     if max_truck in ['4W', 'JB', '6W']:
                         if debug:
                             print(f"✅ Branch {branch_code_str}: Max Vehicle = {max_truck} (from Master Data column '{col}')")
-                        return max_truck
-    
-    # 🔄 Fallback: อ่านจาก test_df (Excel upload) ถ้าไม่เจอใน Master
-    if test_df is not None and not test_df.empty:
-        branch_row = test_df[test_df['Code'].str.strip().str.upper() == branch_code_str]
-        if not branch_row.empty:
-            # ลองหาคอลัมน์ข้อจำกัดรถหลายชื่อ
-            possible_cols = ['MaxTruckType', 'Max Truck Type', 'MaxVehicle', 'Max Vehicle', 'รถสูงสุด', 'Max_Truck_Type']
-            for col in possible_cols:
-                if col in branch_row.columns and pd.notna(branch_row.iloc[0][col]):
-                    max_truck = str(branch_row.iloc[0][col]).strip().upper()
-                    if max_truck in ['4W', 'JB', '6W']:
                         return max_truck
     
     # Default: ไม่มีข้อจำกัด = ใช้รถใหญ่ได้
@@ -3712,6 +3700,7 @@ def main():
                                             # วนลูปแต่ละทริป
                                             for idx, trip_id in enumerate(sorted(valid_coords['Trip'].unique())):
                                                 trip_data = valid_coords[valid_coords['Trip'] == trip_id].copy()
+                                                # เรียงตามระยะทาง (ไกล → ใกล้)
                                                 trip_data = trip_data.sort_values('_distance_from_dc', ascending=False).reset_index(drop=True)
                                                 
                                                 trip_color = colors[idx % len(colors)]
@@ -3719,66 +3708,66 @@ def main():
                                                 # ดึงชื่อรถจาก summary
                                                 truck_info = summary[summary['Trip'] == trip_id]['Truck'].iloc[0] if trip_id in summary['Trip'].values else 'N/A'
                                                 
-                                                # เพิ่ม DC เป็นจุดเริ่มต้น
-                                                points = [[14.5942, 100.6039]]  # DC Wang Noi
-                                                point_names = ['🏭 DC Wang Noi']
+                                                # เก็บพิกัดสาขา (ไม่รวม DC)
+                                                points = []
+                                                point_names = []
                                                 
-                                                # เพิ่มสาขาแต่ละแห่ง
                                                 for _, row in trip_data.iterrows():
-                                                    points.append([row['_lat'], row['_lon']])
-                                                    point_names.append(f"{row.get('Name', row.get('Code', 'Unknown'))}")
+                                                    if row['_lat'] > 0 and row['_lon'] > 0:
+                                                        points.append([row['_lat'], row['_lon']])
+                                                        point_names.append(f"{row.get('Name', row.get('Code', 'Unknown'))}")
                                                 
-                                                # กลับ DC
-                                                points.append([14.5942, 100.6039])
-                                                point_names.append('🏭 DC Wang Noi (กลับ)')
+                                                if len(points) < 2:
+                                                    # มีแค่จุดเดียว → ปักหมุดอย่างเดียว
+                                                    for i, (point, name) in enumerate(zip(points, point_names)):
+                                                        folium.Marker(
+                                                            location=point,
+                                                            popup=folium.Popup(f"<b>Trip {trip_id}</b><br>{name}<br>รถ: {truck_info}", max_width=200),
+                                                            tooltip=name,
+                                                            icon=folium.Icon(color=trip_color, icon='store', prefix='fa')
+                                                        ).add_to(m)
+                                                    continue
                                                 
-                                                # วาดเส้นทาง (เลือกได้ระหว่างเส้นตรงหรือเส้นทางจริง)
-                                                for i in range(len(points) - 1):
-                                                    start = points[i]
-                                                    end = points[i+1]
-                                                    
-                                                    if use_real_route:
-                                                        # ดึงเส้นทางจริงจาก OSRM (ช้ากว่า)
-                                                        try:
-                                                            osrm_url = f"http://router.project-osrm.org/route/v1/driving/{start[1]},{start[0]};{end[1]},{end[0]}?overview=full&geometries=geojson"
-                                                            response = requests.get(osrm_url, timeout=3)
-                                                            if response.status_code == 200:
-                                                                route_data = response.json()
-                                                                if route_data.get('code') == 'Ok' and route_data.get('routes'):
-                                                                    coords = route_data['routes'][0]['geometry']['coordinates']
-                                                                    road_path = [[c[1], c[0]] for c in coords]
-                                                                else:
-                                                                    road_path = [start, end]
+                                                # 🚀 ใช้ OSRM batch request (รวมทุกจุดในครั้งเดียว - เร็วมาก)
+                                                if use_real_route and len(points) >= 2:
+                                                    try:
+                                                        # สร้าง waypoints string
+                                                        waypoints = ';'.join([f"{p[1]},{p[0]}" for p in points])
+                                                        osrm_url = f"http://router.project-osrm.org/route/v1/driving/{waypoints}?overview=full&geometries=geojson"
+                                                        response = requests.get(osrm_url, timeout=5)
+                                                        if response.status_code == 200:
+                                                            route_data = response.json()
+                                                            if route_data.get('code') == 'Ok' and route_data.get('routes'):
+                                                                coords = route_data['routes'][0]['geometry']['coordinates']
+                                                                road_path = [[c[1], c[0]] for c in coords]
+                                                                # วาดเส้นทางทั้งหมดในครั้งเดียว
+                                                                folium.PolyLine(
+                                                                    road_path,
+                                                                    color=trip_color,
+                                                                    weight=4,
+                                                                    opacity=0.8,
+                                                                    popup=f"Trip {trip_id}: {len(points)} สาขา"
+                                                                ).add_to(m)
                                                             else:
-                                                                road_path = [start, end]
-                                                        except:
-                                                            road_path = [start, end]
-                                                    else:
-                                                        # เส้นตรง (เร็ว)
-                                                        road_path = [start, end]
-                                                    
-                                                    # วาดเส้น
-                                                    folium.PolyLine(
-                                                        road_path,
-                                                        color=trip_color,
-                                                        weight=4,
-                                                        opacity=0.7,
-                                                        popup=f"Trip {trip_id}: {point_names[i]} → {point_names[i+1]}"
-                                                    ).add_to(m)
+                                                                # Fallback เส้นตรง
+                                                                folium.PolyLine(points, color=trip_color, weight=3, opacity=0.6).add_to(m)
+                                                        else:
+                                                            folium.PolyLine(points, color=trip_color, weight=3, opacity=0.6).add_to(m)
+                                                    except:
+                                                        folium.PolyLine(points, color=trip_color, weight=3, opacity=0.6).add_to(m)
+                                                else:
+                                                    # เส้นตรง (เร็ว)
+                                                    folium.PolyLine(points, color=trip_color, weight=3, opacity=0.6).add_to(m)
                                                 
-                                                # ปักหมุดแต่ละจุด
+                                                # ปักหมุดแต่ละจุด (ไม่มี DC)
                                                 for i, (point, name) in enumerate(zip(points, point_names)):
-                                                    if i == 0 or i == len(points) - 1:
-                                                        # DC (จุดเริ่มต้นและสิ้นสุด)
-                                                        icon_config = folium.Icon(color='black', icon='home', prefix='fa')
-                                                    else:
-                                                        # สาขา
-                                                        icon_config = folium.Icon(color=trip_color, icon='store', prefix='fa')
+                                                    # สาขา
+                                                    icon_config = folium.Icon(color=trip_color, icon='store', prefix='fa')
                                                     
                                                     folium.Marker(
                                                         location=point,
-                                                        popup=folium.Popup(f"<b>Trip {trip_id}</b><br>{name}<br>รถ: {truck_info}", max_width=200),
-                                                        tooltip=name,
+                                                        popup=folium.Popup(f"<b>Trip {trip_id}</b><br>{i+1}. {name}<br>รถ: {truck_info}", max_width=200),
+                                                        tooltip=f"{i+1}. {name}",
                                                         icon=icon_config
                                                     ).add_to(m)
                                             
