@@ -2481,23 +2481,18 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     force_finalize = True
                     allow_merge = False
             
-            # 1️⃣ ตรวจสอบตำบล: ถ้าคนละตำบล → เช็คว่าตำบลเก่าหมดหรือยัง
+            # 1️⃣ ตรวจสอบตำบล: ถ้าคนละตำบล → ไม่บังคับปิดทริป แต่ให้ลองรวมต่อ
+            # 🔥 เปลี่ยนจากเดิม: เมื่อก่อนปิดทริปทันทีเมื่อเปลี่ยนตำบล ทำให้ utilization ต่ำ
+            # ตอนนี้: รวมต่อจนกว่าจะเกิน buffer
             if current_subdistrict and current_subdistrict != subdistrict:
                 subdistrict_key = (region, current_province, current_district, current_subdistrict)
                 remaining = subdistrict_remaining.get(subdistrict_key, 0)
                 if remaining > 0:
-                    # ❌ ยังมีสาขาเหลือในตำบลเก่า → บังคับปิดทริป (ตำบลเดียวกันต้องไปด้วยกัน)
-                    force_finalize = True
-                    allow_merge = False
+                    # ยังมีสาขาเหลือในตำบลเก่า แต่ไม่ปิดทริปทันที
+                    # ให้ select_vehicle_for_load() ตัดสินตาม buffer
+                    pass  # ไม่ตั้ง force_finalize เพื่อให้รวมต่อ
                 else:
-                    # ✅ ตำบลเก่าหมดแล้ว → เช็ค utilization + constraint
-                    # 📊 คำนวณ utilization ปัจจุบัน
-                    current_limits = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
-                    current_w_util = (current_trip['weight'] / current_limits['max_w']) * 100
-                    current_c_util = (current_trip['cube'] / current_limits['max_c']) * 100
-                    current_util = max(current_w_util, current_c_util)
-                    
-                    # 🎯 เช็ค vehicle constraint ก่อน
+                    # ✅ ตำบลเก่าหมดแล้ว → รวมต่อจนถึง buffer
                     test_codes_cross_sub = current_trip['codes'] + subdistrict_codes
                     test_allowed_cross_sub = get_allowed_from_codes(test_codes_cross_sub, allowed_vehicles)
                     
@@ -2505,19 +2500,12 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                         # ❌ ไม่มีรถที่รับ constraint ทั้งหมดได้ → บังคับแยก
                         force_finalize = True
                         allow_merge = False
-                    else:
-                        # ✅ ตำบลเก่าหมดแล้ว + มีรถรับได้ → รวมต่อจนถึง buffer (ไม่ fix utilization ตายตัว)
-                        # ให้ select_vehicle_for_load() ตัดสินตาม buffer ที่ตั้งหน้าเว็บ
-                        pass
             
-            # 2️⃣ ตรวจสอบอำเภอ: ถ้าคนละอำเภอ → เช็คว่าอำเภอเก่าหมดหรือยัง
+            # 2️⃣ ตรวจสอบอำเภอ: ถ้าคนละอำเภอ → ไม่บังคับปิดทริป แต่ให้ลองรวมต่อ
             if allow_merge and current_district and current_district != district:
                 district_key = (region, current_province, current_district)
                 remaining = district_remaining.get(district_key, 0)
-                if remaining > 0:
-                    # ❌ ยังมีสาขาเหลือในอำเภอเก่า → บังคับปิดทริป
-                    force_finalize = True
-                    allow_merge = False
+                # ไม่บังคับปิดทริป - ให้รวมต่อจนกว่าจะเกิน buffer
             
             # 3️⃣ ตรวจสอบจังหวัด: ถ้าคนละจังหวัด → 🚫 ห้ามข้ามจนกว่าจะหมดสาขาในจังหวัดเก่า
             if allow_merge and current_province and current_province != province:
@@ -2906,13 +2894,17 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         else:
             w_util = c_util = 0
         
-        # คำนวณระยะทางรวม
+        # คำนวณระยะทางรวม - ใช้พิกัดจาก DataFrame โดยตรง
         total_distance = 0
         branch_coords = []
         for code in trip_codes:
-            loc = location_map.get(str(code).upper(), {})
-            if loc.get('lat') and loc.get('lon'):
-                branch_coords.append((loc['lat'], loc['lon']))
+            # ดึงพิกัดจาก df (มีคอลัมน์ _lat, _lon)
+            branch_data = df[df['Code'] == code]
+            if not branch_data.empty:
+                lat = branch_data.iloc[0].get('_lat', 0)
+                lon = branch_data.iloc[0].get('_lon', 0)
+                if lat > 0 and lon > 0:
+                    branch_coords.append((lat, lon))
         
         if branch_coords:
             # DC → สาขาแรก
