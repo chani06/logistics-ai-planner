@@ -1454,10 +1454,6 @@ PUNTHAI_PATTERNS = load_punthai_reference()
 # ==========================================
 # HELPER FUNCTIONS
 # ==========================================
-def normalize(val):
-    """ทำให้รหัสสาขาเป็นมาตรฐาน"""
-    return str(val).strip().upper().replace(" ", "").replace(".0", "")
-
 def check_branch_vehicle_compatibility(branch_code, vehicle_type):
     """ตรวจสอบว่าสาขานี้ใช้รถประเภทนี้ได้ไหม (รวม Booking + Punthai)"""
     branch_code_str = str(branch_code).strip()
