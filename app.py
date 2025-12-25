@@ -3680,6 +3680,11 @@ def main():
                                     else:
                                         # สร้างแผนที่
                                         with st.spinner("🗺️ กำลังสร้างแผนที่..."):
+                                            # 🚀 Route Cache - เก็บเส้นทางไว้ใน session_state
+                                            if 'route_cache' not in st.session_state:
+                                                st.session_state['route_cache'] = {}
+                                            route_cache = st.session_state['route_cache']
+                                            
                                             # หาจุดกึ่งกลาง
                                             center_lat = valid_coords['_lat'].mean()
                                             center_lon = valid_coords['_lon'].mean()
@@ -3728,33 +3733,49 @@ def main():
                                                         ).add_to(m)
                                                     continue
                                                 
-                                                # 🚀 ใช้ OSRM batch request (รวมทุกจุดในครั้งเดียว - เร็วมาก)
+                                                # 🚀 ใช้ Route Cache - ไม่ต้องเรียก OSRM ทุกครั้ง
+                                                # สร้าง cache key จากพิกัดทั้งหมด
+                                                cache_key = f"trip_{trip_id}_" + "_".join([f"{p[0]:.4f},{p[1]:.4f}" for p in points])
+                                                
                                                 if use_real_route and len(points) >= 2:
-                                                    try:
-                                                        # สร้าง waypoints string
-                                                        waypoints = ';'.join([f"{p[1]},{p[0]}" for p in points])
-                                                        osrm_url = f"http://router.project-osrm.org/route/v1/driving/{waypoints}?overview=full&geometries=geojson"
-                                                        response = requests.get(osrm_url, timeout=5)
-                                                        if response.status_code == 200:
-                                                            route_data = response.json()
-                                                            if route_data.get('code') == 'Ok' and route_data.get('routes'):
-                                                                coords = route_data['routes'][0]['geometry']['coordinates']
-                                                                road_path = [[c[1], c[0]] for c in coords]
-                                                                # วาดเส้นทางทั้งหมดในครั้งเดียว
-                                                                folium.PolyLine(
-                                                                    road_path,
-                                                                    color=trip_color,
-                                                                    weight=4,
-                                                                    opacity=0.8,
-                                                                    popup=f"Trip {trip_id}: {len(points)} สาขา"
-                                                                ).add_to(m)
+                                                    # เช็ค cache ก่อน
+                                                    if cache_key in route_cache:
+                                                        # ✅ มี cache - ใช้เลย (เร็วมาก!)
+                                                        road_path = route_cache[cache_key]
+                                                        folium.PolyLine(
+                                                            road_path,
+                                                            color=trip_color,
+                                                            weight=4,
+                                                            opacity=0.8,
+                                                            popup=f"Trip {trip_id}: {len(points)} สาขา (cached)"
+                                                        ).add_to(m)
+                                                    else:
+                                                        # ❌ ไม่มี cache - เรียก OSRM แล้วเก็บ cache
+                                                        try:
+                                                            waypoints = ';'.join([f"{p[1]},{p[0]}" for p in points])
+                                                            osrm_url = f"http://router.project-osrm.org/route/v1/driving/{waypoints}?overview=full&geometries=geojson"
+                                                            response = requests.get(osrm_url, timeout=5)
+                                                            if response.status_code == 200:
+                                                                route_data = response.json()
+                                                                if route_data.get('code') == 'Ok' and route_data.get('routes'):
+                                                                    coords = route_data['routes'][0]['geometry']['coordinates']
+                                                                    road_path = [[c[1], c[0]] for c in coords]
+                                                                    # 💾 เก็บ cache
+                                                                    route_cache[cache_key] = road_path
+                                                                    st.session_state['route_cache'] = route_cache
+                                                                    folium.PolyLine(
+                                                                        road_path,
+                                                                        color=trip_color,
+                                                                        weight=4,
+                                                                        opacity=0.8,
+                                                                        popup=f"Trip {trip_id}: {len(points)} สาขา"
+                                                                    ).add_to(m)
+                                                                else:
+                                                                    folium.PolyLine(points, color=trip_color, weight=3, opacity=0.6).add_to(m)
                                                             else:
-                                                                # Fallback เส้นตรง
                                                                 folium.PolyLine(points, color=trip_color, weight=3, opacity=0.6).add_to(m)
-                                                        else:
+                                                        except:
                                                             folium.PolyLine(points, color=trip_color, weight=3, opacity=0.6).add_to(m)
-                                                    except:
-                                                        folium.PolyLine(points, color=trip_color, weight=3, opacity=0.6).add_to(m)
                                                 else:
                                                     # เส้นตรง (เร็ว)
                                                     folium.PolyLine(points, color=trip_color, weight=3, opacity=0.6).add_to(m)
