@@ -2807,13 +2807,13 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     df['Trip'] = df['Trip'].map(lambda x: trip_mapping.get(x, x) if x > 0 else x)
 
     # ==========================================
-    # Step 6.6: 🔄 TRIP MERGE - รวมทริปที่ไม่เต็ม buffer เข้าด้วยกัน
-    # หลักการ: เริ่มจากทริปไกลสุด ถ้ายังไม่เต็ม ดึงสาขาจากทริปถัดไปที่ใกล้กันมารวม
+    # Step 6.6: 🔄 BRANCH-LEVEL MERGE - ดึงสาขาจากทริปถัดไปมาเติมทริปปัจจุบัน
+    # หลักการ: เริ่มจากทริปไกลสุด ถ้ายังไม่เต็ม ดึงสาขาที่ใกล้จากทริปถัดไปมาทีละสาขา
     # ==========================================
-    print("🔄 กำลังรวมทริปที่ไม่เต็ม buffer...")
+    print("🔄 กำลังเติมทริปที่ไม่เต็ม buffer ด้วยสาขาใกล้เคียง...")
     
-    def get_trip_info(trip_num):
-        """คำนวณข้อมูลทริป"""
+    def get_trip_capacity(trip_num):
+        """คำนวณความจุที่เหลือของทริป"""
         trip_data = df[df['Trip'] == trip_num]
         if len(trip_data) == 0:
             return None
@@ -2834,80 +2834,133 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         limits = PUNTHAI_LIMITS if is_punthai else LIMITS
         max_w = limits[allowed_vehicle]['max_w'] * buffer
         max_c = limits[allowed_vehicle]['max_c'] * buffer
+        max_drops = limits[allowed_vehicle]['max_drops']
         
         return {
             'weight': total_w,
             'cube': total_c,
             'codes': codes,
+            'drops': len(codes),
             'max_w': max_w,
             'max_c': max_c,
+            'max_drops': max_drops,
             'is_punthai': is_punthai,
             'allowed_vehicle': allowed_vehicle,
-            'avg_lat': trip_data['_lat'].mean(),
-            'avg_lon': trip_data['_lon'].mean(),
-            'avg_dist': trip_data['_distance_from_dc'].mean()
+            'min_priority': min_priority,
+            'centroid_lat': trip_data['_lat'].mean(),
+            'centroid_lon': trip_data['_lon'].mean()
         }
+    
+    def can_add_branch_to_trip(branch_row, trip_capacity):
+        """เช็คว่าสามารถเพิ่มสาขานี้เข้าทริปได้หรือไม่"""
+        branch_code = branch_row['Code']
+        branch_w = branch_row['Weight']
+        branch_c = branch_row['Cube']
+        branch_bu = branch_bu_cache.get(branch_code, False)
+        branch_vehicle = branch_max_vehicle_cache.get(branch_code, '6W')
+        branch_priority = vehicle_priority.get(branch_vehicle, 3)
+        
+        # 1. เช็ค BU ต้องตรงกัน
+        if branch_bu != trip_capacity['is_punthai']:
+            return False, "BU ไม่ตรง"
+        
+        # 2. เช็คข้อจำกัดรถ - สาขาใหม่ต้องไม่ต้องการรถใหญ่กว่าที่ทริปรับได้
+        if branch_priority < trip_capacity['min_priority']:
+            # สาขาต้องการรถเล็กกว่า (เช่น 4W) แต่ทริปมีสาขา JB อยู่แล้ว → ไม่ได้
+            # จริงๆ แล้วนี่ OK เพราะ JB รับ 4W ได้
+            pass
+        
+        # 3. เช็คน้ำหนัก/ปริมาตร
+        new_w = trip_capacity['weight'] + branch_w
+        new_c = trip_capacity['cube'] + branch_c
+        new_drops = trip_capacity['drops'] + 1
+        
+        if new_w > trip_capacity['max_w']:
+            return False, "น้ำหนักเกิน"
+        if new_c > trip_capacity['max_c']:
+            return False, "ปริมาตรเกิน"
+        if new_drops > trip_capacity['max_drops']:
+            return False, "Drop เกิน"
+        
+        return True, "OK"
     
     # วนลูปทริปจากไกลสุด (1) ไปใกล้สุด
     all_trips = sorted(df[df['Trip'] > 0]['Trip'].unique())
-    merged_count = 0
+    moved_branches = 0
     
     for i, current_trip in enumerate(all_trips[:-1]):  # ไม่รวมทริปสุดท้าย
-        current_info = get_trip_info(current_trip)
-        if not current_info:
+        trip_cap = get_trip_capacity(current_trip)
+        if not trip_cap:
             continue
         
-        # เช็คว่าทริปนี้ยังมีที่เหลือไหม (ต่ำกว่า 80% ของ buffer)
-        w_util = current_info['weight'] / current_info['max_w']
-        c_util = current_info['cube'] / current_info['max_c']
+        # เช็คว่าทริปนี้ยังมีที่เหลือไหม
+        w_util = trip_cap['weight'] / trip_cap['max_w']
+        c_util = trip_cap['cube'] / trip_cap['max_c']
         
-        if max(w_util, c_util) >= 0.80:  # ถ้าเต็มแล้วไม่ต้องรวม
+        if max(w_util, c_util) >= 0.95:  # ถ้าเต็มแล้วไม่ต้องเติม
             continue
         
-        # หาทริปถัดไปที่ใกล้กัน (ต่อเนื่องกัน)
+        # หาสาขาจากทริปถัดไปที่ใกล้กับทริปนี้
         for next_trip in all_trips[i+1:]:
-            next_info = get_trip_info(next_trip)
-            if not next_info:
+            next_trip_data = df[df['Trip'] == next_trip].copy()
+            if len(next_trip_data) == 0:
                 continue
             
-            # เช็คว่าทั้งสองทริปอยู่ใกล้กัน (< 50 km)
-            dist = haversine_distance(
-                current_info['avg_lat'], current_info['avg_lon'],
-                next_info['avg_lat'], next_info['avg_lon']
+            # คำนวณระยะห่างของแต่ละสาขาใน next_trip จาก centroid ของ current_trip
+            next_trip_data['_dist_to_current'] = next_trip_data.apply(
+                lambda row: haversine_distance(
+                    trip_cap['centroid_lat'], trip_cap['centroid_lon'],
+                    row['_lat'], row['_lon']
+                ) if row['_lat'] > 0 and row['_lon'] > 0 else 999,
+                axis=1
             )
             
-            if dist > 50:  # ไกลเกิน 50km ไม่รวม
-                continue
+            # เรียงตามระยะใกล้สุดก่อน
+            next_trip_data = next_trip_data.sort_values('_dist_to_current')
             
-            # เช็คว่า BU เข้ากันได้หรือไม่
-            if current_info['is_punthai'] != next_info['is_punthai']:
-                continue  # Punthai กับ Maxmart ไม่รวมกัน
-            
-            # เช็คว่ารวมแล้วไม่เกิน buffer
-            combined_w = current_info['weight'] + next_info['weight']
-            combined_c = current_info['cube'] + next_info['cube']
-            
-            if combined_w <= current_info['max_w'] and combined_c <= current_info['max_c']:
-                # ✅ รวมได้! ย้ายสาขาจาก next_trip มา current_trip
-                df.loc[df['Trip'] == next_trip, 'Trip'] = current_trip
-                merged_count += 1
-                print(f"   ✅ รวม Trip {next_trip} → Trip {current_trip} (ระยะห่าง {dist:.1f} km)")
+            # ดึงสาขาที่ใกล้และเข้ากันได้
+            for _, branch_row in next_trip_data.iterrows():
+                dist_to_trip = branch_row['_dist_to_current']
                 
-                # อัพเดต current_info สำหรับรอบถัดไป
-                current_info['weight'] = combined_w
-                current_info['cube'] = combined_c
-                current_info['codes'].extend(next_info['codes'])
+                # ไกลเกิน 80 km ไม่ดึง
+                if dist_to_trip > 80:
+                    continue
                 
-                # เช็คอีกครั้งว่าเต็มหรือยัง
-                w_util = current_info['weight'] / current_info['max_w']
-                c_util = current_info['cube'] / current_info['max_c']
-                if max(w_util, c_util) >= 0.90:
-                    break  # เต็มแล้ว หยุดรวม
-    
-    if merged_count > 0:
-        print(f"🔄 รวมทริปเสร็จ: รวม {merged_count} ทริป")
+                # อัพเดต trip_cap เพราะอาจมีการเพิ่มสาขาแล้ว
+                trip_cap = get_trip_capacity(current_trip)
+                if not trip_cap:
+                    break
+                
+                # เช็คว่าเต็มหรือยัง
+                w_util = trip_cap['weight'] / trip_cap['max_w']
+                c_util = trip_cap['cube'] / trip_cap['max_c']
+                if max(w_util, c_util) >= 0.95:
+                    break  # เต็มแล้ว หยุด
+                
+                # เช็คว่าเพิ่มสาขานี้ได้ไหม
+                can_add, reason = can_add_branch_to_trip(branch_row, trip_cap)
+                
+                if can_add:
+                    # ✅ ย้ายสาขานี้มาทริปปัจจุบัน
+                    branch_code = branch_row['Code']
+                    df.loc[df['Code'] == branch_code, 'Trip'] = current_trip
+                    moved_branches += 1
+                    print(f"   ✅ ย้าย {branch_code} จาก Trip {next_trip} → Trip {current_trip} (ห่าง {dist_to_trip:.1f} km)")
         
-        # Renumber ทริปใหม่หลังรวม
+        # หลังจากเติมเสร็จ เช็คอีกครั้ง
+        trip_cap = get_trip_capacity(current_trip)
+        if trip_cap:
+            w_util = trip_cap['weight'] / trip_cap['max_w']
+            c_util = trip_cap['cube'] / trip_cap['max_c']
+            print(f"   📊 Trip {current_trip}: {max(w_util, c_util)*100:.1f}% ({len(trip_cap['codes'])} สาขา)")
+    
+    if moved_branches > 0:
+        print(f"🔄 ย้ายสาขาเสร็จ: ย้าย {moved_branches} สาขา")
+        
+        # ลบทริปที่ว่างเปล่า
+        empty_trips = [t for t in df['Trip'].unique() if t > 0 and len(df[df['Trip'] == t]) == 0]
+        
+        # Renumber ทริปใหม่หลังย้าย
         remaining_trips = sorted(df[df['Trip'] > 0]['Trip'].unique())
         trip_renumber = {old: new for new, old in enumerate(remaining_trips, start=1)}
         df['Trip'] = df['Trip'].map(lambda x: trip_renumber.get(x, x) if x > 0 else x)
