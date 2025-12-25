@@ -3238,60 +3238,60 @@ def main():
                         # สร้าง Trip_No map
                         trip_no_map = {}
                         vehicle_counts = {'4W': 0, '4WJ': 0, '6W': 0}
+                        
+                        # เรียง trip ตาม Zone Order + Province Max Dist + District Max Dist (เหมือนตอนจัดทริป)
+                        ZONE_ORDER_EXPORT = {'NORTH': 1, 'NE': 2, 'SOUTH': 3, 'EAST': 4, 'WEST': 5, 'CENTRAL': 6}
+                        trip_sort_keys = {}
+                        
+                        for trip_num in result_df['Trip'].unique():
+                            if trip_num == 0:
+                                continue
+                            trip_data = result_df[result_df['Trip'] == trip_num]
                             
-                            # เรียง trip ตาม Zone Order + Province Max Dist + District Max Dist (เหมือนตอนจัดทริป)
-                            ZONE_ORDER_EXPORT = {'NORTH': 1, 'NE': 2, 'SOUTH': 3, 'EAST': 4, 'WEST': 5, 'CENTRAL': 6}
-                            trip_sort_keys = {}
+                            # หา Region Order
+                            region = trip_data['Region'].iloc[0] if 'Region' in trip_data.columns else 'ไม่ระบุ'
+                            region_order = ZONE_ORDER_EXPORT.get(region, 99)
                             
-                            for trip_num in result_df['Trip'].unique():
-                                if trip_num == 0:
-                                    continue
-                                trip_data = result_df[result_df['Trip'] == trip_num]
-                                
-                                # หา Region Order
-                                region = trip_data['Region'].iloc[0] if 'Region' in trip_data.columns else 'ไม่ระบุ'
-                                region_order = ZONE_ORDER_EXPORT.get(region, 99)
-                                
-                                # หา Province Max Distance และ District Max Distance
-                                prov_max_dist = 0
-                                dist_max_dist = 0
-                                
-                                for code in trip_data['Code'].unique():
-                                    loc = location_map.get(str(code).upper(), {})
-                                    # ดึงระยะทางจาก MASTER_DATA
-                                    if not MASTER_DATA.empty:
-                                        master_row = MASTER_DATA[MASTER_DATA['Plan Code'].astype(str).str.upper() == str(code).upper()]
-                                        if len(master_row) > 0:
-                                            dist_km = master_row.iloc[0].get('Distance from DC (km)', 0)
-                                            if pd.notna(dist_km):
-                                                prov_max_dist = max(prov_max_dist, float(dist_km))
-                                                dist_max_dist = max(dist_max_dist, float(dist_km))
-                                
-                                # Sort key: Region Order (Asc), Prov Max Dist (Desc), Dist Max Dist (Desc)
-                                # ใช้ค่าลบเพื่อให้ sort Desc
-                                trip_sort_keys[trip_num] = (region_order, -prov_max_dist, -dist_max_dist)
+                            # หา Province Max Distance และ District Max Distance
+                            prov_max_dist = 0
+                            dist_max_dist = 0
                             
-                            # Sort: Zone Order → Province Max Dist (ไกลก่อน) → District Max Dist (ไกลก่อน)
-                            sorted_trips = sorted(
-                                [t for t in result_df['Trip'].unique() if t != 0],
-                                key=lambda t: trip_sort_keys.get(t, (99, 0, 0))
-                            )
+                            for code in trip_data['Code'].unique():
+                                loc = location_map.get(str(code).upper(), {})
+                                # ดึงระยะทางจาก MASTER_DATA
+                                if not MASTER_DATA.empty:
+                                    master_row = MASTER_DATA[MASTER_DATA['Plan Code'].astype(str).str.upper() == str(code).upper()]
+                                    if len(master_row) > 0:
+                                        dist_km = master_row.iloc[0].get('Distance from DC (km)', 0)
+                                        if pd.notna(dist_km):
+                                            prov_max_dist = max(prov_max_dist, float(dist_km))
+                                            dist_max_dist = max(dist_max_dist, float(dist_km))
                             
-                            for trip_num in sorted_trips:
-                                trip_summary = summary[summary['Trip'] == trip_num]
-                                if len(trip_summary) > 0:
-                                    truck_info = trip_summary.iloc[0]['Truck']
-                                    vehicle_type = truck_info.split()[0] if truck_info else '6W'
-                                    # JB ใช้ prefix 4WJ
-                                    if vehicle_type == 'JB':
-                                        vehicle_type = '4WJ'
-                                    vehicle_counts[vehicle_type] = vehicle_counts.get(vehicle_type, 0) + 1
-                                    trip_no = f"{vehicle_type}{vehicle_counts[vehicle_type]:03d}"
-                                    trip_no_map[trip_num] = trip_no
-                            
-                            try:
-                                # โหลด workbook ต้นฉบับ
-                                wb = load_workbook(io.BytesIO(st.session_state.get('original_file_content', b'')))
+                            # Sort key: Region Order (Asc), Prov Max Dist (Desc), Dist Max Dist (Desc)
+                            # ใช้ค่าลบเพื่อให้ sort Desc
+                            trip_sort_keys[trip_num] = (region_order, -prov_max_dist, -dist_max_dist)
+                        
+                        # Sort: Zone Order → Province Max Dist (ไกลก่อน) → District Max Dist (ไกลก่อน)
+                        sorted_trips = sorted(
+                            [t for t in result_df['Trip'].unique() if t != 0],
+                            key=lambda t: trip_sort_keys.get(t, (99, 0, 0))
+                        )
+                        
+                        for trip_num in sorted_trips:
+                            trip_summary = summary[summary['Trip'] == trip_num]
+                            if len(trip_summary) > 0:
+                                truck_info = trip_summary.iloc[0]['Truck']
+                                vehicle_type = truck_info.split()[0] if truck_info else '6W'
+                                # JB ใช้ prefix 4WJ
+                                if vehicle_type == 'JB':
+                                    vehicle_type = '4WJ'
+                                vehicle_counts[vehicle_type] = vehicle_counts.get(vehicle_type, 0) + 1
+                                trip_no = f"{vehicle_type}{vehicle_counts[vehicle_type]:03d}"
+                                trip_no_map[trip_num] = trip_no
+                        
+                        try:
+                            # โหลด workbook ต้นฉบับ
+                            wb = load_workbook(io.BytesIO(st.session_state.get('original_file_content', b'')))
                                 
                                 # หาชีตเป้าหมาย (2.Punthai)
                                 target_sheet = None
