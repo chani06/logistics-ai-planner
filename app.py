@@ -2882,7 +2882,8 @@ def main():
     if AUTOREFRESH_AVAILABLE:
         now = datetime.now()
         # คำนวณเวลาถึงเที่ยงคืน (00:00:00)
-        midnight = datetime.combine(now.date(), time(0, 0, 0))
+        from datetime import time as datetime_time
+        midnight = datetime.combine(now.date(), datetime_time(0, 0, 0))
         
         # ถ้ายังไม่ถึงเที่ยงคืน เอาเที่ยงคืนวันถัดไป
         if now < midnight:
