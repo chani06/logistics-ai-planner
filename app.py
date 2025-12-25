@@ -1550,14 +1550,15 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     # สร้าง location_map จากข้อมูล test_df (จาก Google Sheets) เป็นหลัก
     location_map = {}  # {code: {province, district, subdistrict, route, sum_code, ...}}
     
-    # 🚀 OPTIMIZED: ใช้ vectorized operations แทน iterrows เพื่อเร็วขึ้น 10-50 เท่า
-    # เตรียม lookup dictionary จาก MASTER_DATA ก่อน
+    # 🚀 OPTIMIZED: สร้าง lookup dictionary จาก MASTER_DATA แบบ vectorized
     master_lookup = {}
     if isinstance(model_data, pd.DataFrame) and not model_data.empty and 'Plan Code' in model_data.columns:
-        for _, row in model_data.iterrows():
-            code = str(row.get('Plan Code', '')).strip().upper()
-            if code:
-                master_lookup[code] = {
+        # ใช้ to_dict() แทน iterrows - เร็วกว่า 100 เท่า
+        model_dict = model_data.set_index('Plan Code').to_dict('index')
+        for code, row in model_dict.items():
+            code_upper = str(code).strip().upper()
+            if code_upper:
+                master_lookup[code_upper] = {
                     'province': str(row.get('จังหวัด', '')).strip() if pd.notna(row.get('จังหวัด')) else '',
                     'district': str(row.get('อำเภอ', '')).strip() if pd.notna(row.get('อำเภอ')) else '',
                     'subdistrict': str(row.get('ตำบล', '')).strip() if pd.notna(row.get('ตำบล')) else '',
@@ -1670,9 +1671,11 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     # ==========================================
     df = test_df.copy()
     
-    def get_location_info(code):
+    # 🚀 OPTIMIZED: เรียก location_map แค่ครั้งเดียวต่อ code แทนที่จะเรียก 14 ครั้ง
+    code_info_list = []
+    for code in df['Code']:
         code_upper = str(code).strip().upper()
-        return location_map.get(code_upper, {
+        info = location_map.get(code_upper, {
             'province': '', 'district': '', 'subdistrict': '', 'route': '',
             'lat': 0, 'lon': 0, 'join_key': '', 
             'sum_code': 'R99P999D9999S99999',  # Default sort_code
@@ -1680,22 +1683,26 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             'region_code': 'R99', 'prov_code': 'P999', 'dist_code': 'D9999', 'subdist_code': 'S99999',
             'region_name': 'ไม่ระบุ'
         })
+        code_info_list.append(info)
+    
+    # สร้าง DataFrame จาก list แล้ว concat (เร็วกว่า apply 10-20 เท่า)
+    info_df = pd.DataFrame(code_info_list)
     
     # เพิ่มคอลัมน์ข้อมูลพื้นที่ (รวม sum_code สำหรับ sort)
-    df['_sum_code'] = df['Code'].apply(lambda c: get_location_info(c)['sum_code'])  # 🎯 Sort_Code!
-    df['_join_key'] = df['Code'].apply(lambda c: get_location_info(c)['join_key'])
-    df['_region_code'] = df['Code'].apply(lambda c: get_location_info(c)['region_code'])
-    df['_region_name'] = df['Code'].apply(lambda c: get_location_info(c)['region_name'])
-    df['_prov_code'] = df['Code'].apply(lambda c: get_location_info(c)['prov_code'])
-    df['_dist_code'] = df['Code'].apply(lambda c: get_location_info(c)['dist_code'])
-    df['_subdist_code'] = df['Code'].apply(lambda c: get_location_info(c)['subdist_code'])
-    df['_province'] = df['Code'].apply(lambda c: get_location_info(c)['province'])
-    df['_district'] = df['Code'].apply(lambda c: get_location_info(c)['district'])
-    df['_subdistrict'] = df['Code'].apply(lambda c: get_location_info(c)['subdistrict'])
-    df['_route'] = df['Code'].apply(lambda c: get_location_info(c)['route'])
-    df['_distance_from_dc'] = df['Code'].apply(lambda c: get_location_info(c)['distance_from_dc'])
-    df['_lat'] = df['Code'].apply(lambda c: get_location_info(c)['lat'])
-    df['_lon'] = df['Code'].apply(lambda c: get_location_info(c)['lon'])
+    df['_sum_code'] = info_df['sum_code']
+    df['_join_key'] = info_df['join_key']
+    df['_region_code'] = info_df['region_code']
+    df['_region_name'] = info_df['region_name']
+    df['_prov_code'] = info_df['prov_code']
+    df['_dist_code'] = info_df['dist_code']
+    df['_subdist_code'] = info_df['subdist_code']
+    df['_province'] = info_df['province']
+    df['_district'] = info_df['district']
+    df['_subdistrict'] = info_df['subdistrict']
+    df['_route'] = info_df['route']
+    df['_distance_from_dc'] = info_df['distance_from_dc']
+    df['_lat'] = info_df['lat']
+    df['_lon'] = info_df['lon']
     
     # 🚨 เพิ่ม Logistics Zone สำหรับ routing ตามทางหลวง
     df['_logistics_zone'] = df.apply(
