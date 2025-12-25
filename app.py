@@ -1205,17 +1205,29 @@ MASTER_DIST_DATA = load_master_dist_data()
 # ==========================================
 
 def get_max_vehicle_for_branch(branch_code, test_df=None):
-    """ดึงรถใหญ่สุดที่สาขานี้รองรับ - อ่านจาก Master Data (Google Sheets)"""
+    """ดึงรถใหญ่สุดที่สาขานี้รองรับ - อ่านจาก Master Data (Google Sheets) เป็นหลัก"""
     branch_code_str = str(branch_code).strip().upper()
     
-    # อ่านจาก test_df (Google Sheets Master Data) - ข้อมูลล่าสุด
+    # 🎯 อ่านจาก MASTER_DATA (Google Sheets) เป็นหลัก - ข้อมูลล่าสุด
+    if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+        branch_row = MASTER_DATA[MASTER_DATA['Plan Code'].str.strip().str.upper() == branch_code_str]
+        if not branch_row.empty:
+            # ลองหาคอลัมน์ข้อจำกัดรถหลายชื่อ
+            possible_cols = ['MaxTruckType', 'Max Truck Type', 'MaxVehicle', 'Max Vehicle', 'รถสูงสุด', 'Max_Truck_Type']
+            for col in possible_cols:
+                if col in branch_row.columns and pd.notna(branch_row.iloc[0][col]):
+                    max_truck = str(branch_row.iloc[0][col]).strip().upper()
+                    if max_truck in ['4W', 'JB', '6W']:
+                        return max_truck
+    
+    # 🔄 Fallback: อ่านจาก test_df (Excel upload) ถ้าไม่เจอใน Master
     if test_df is not None and not test_df.empty:
         branch_row = test_df[test_df['Code'].str.strip().str.upper() == branch_code_str]
         if not branch_row.empty:
             # ลองหาคอลัมน์ข้อจำกัดรถหลายชื่อ
-            possible_cols = ['MaxTruckType', 'Max Truck Type', 'MaxVehicle', 'Max Vehicle', 'รถสูงสุด']
+            possible_cols = ['MaxTruckType', 'Max Truck Type', 'MaxVehicle', 'Max Vehicle', 'รถสูงสุด', 'Max_Truck_Type']
             for col in possible_cols:
-                if col in branch_row.columns:
+                if col in branch_row.columns and pd.notna(branch_row.iloc[0][col]):
                     max_truck = str(branch_row.iloc[0][col]).strip().upper()
                     if max_truck in ['4W', 'JB', '6W']:
                         return max_truck
