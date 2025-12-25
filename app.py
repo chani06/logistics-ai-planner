@@ -2892,8 +2892,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     # ==========================================
     df = df.sort_values(['Trip', '_distance_from_dc'], ascending=[True, False]).reset_index(drop=True)
     
-    # ลบคอลัมน์ชั่วคราว (เก็บ _province, _district, _subdistrict, _max_vehicle ไว้สำหรับตรวจสอบ)
-    cols_to_drop = ['_region_code', '_region_name', '_prov_code', '_dist_code', '_subdist_code', '_route', '_distance_from_dc', '_group_key', '_region_order', '_prov_max_dist', '_dist_max_dist', '_region_allowed_vehicles', '_vehicle_priority', '_lat', '_lon']
+    # ลบคอลัมน์ชั่วคราว (เก็บ _province, _district, _subdistrict, _max_vehicle, _lat, _lon ไว้สำหรับแผนที่)
+    cols_to_drop = ['_region_code', '_region_name', '_prov_code', '_dist_code', '_subdist_code', '_route', '_distance_from_dc', '_group_key', '_region_order', '_prov_max_dist', '_dist_max_dist', '_region_allowed_vehicles', '_vehicle_priority']
     df = df.drop(columns=[c for c in cols_to_drop if c in df.columns], errors='ignore')
     
     return df, summary_df
@@ -3384,8 +3384,6 @@ def main():
                         else:
                             st.info("💡 ติดตั้ง `folium` และ `streamlit-folium` เพื่อดูแผนที่เส้นทาง\n```\npip install folium streamlit-folium\n```")
                         
-                        st.markdown("---")
-                        
                         # ดาวน์โหลด - เขียนทับชีต 2.Punthai ในไฟล์ต้นฉบับ พร้อมสลับสีเหลืองโทนส้ม-ขาว
                         from openpyxl import load_workbook
                         from openpyxl.styles import PatternFill, Font, Border, Side
@@ -3589,6 +3587,10 @@ def main():
                                 export_df.to_excel(writer, sheet_name='รายละเอียดทริป', index=False)
                                 summary.to_excel(writer, sheet_name='สรุปทริป', index=False)
                         
+                        st.markdown("---")
+                        
+                        # 📥 ดาวน์โหลดผลลัพธ์
+                        st.markdown("### 📥 ดาวน์โหลดผลลัพธ์")
                         col1, col2, col3 = st.columns([1, 2, 1])
                         with col2:
                             st.download_button(
