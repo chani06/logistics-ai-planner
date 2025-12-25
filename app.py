@@ -81,19 +81,38 @@ try:
     import gspread
     from oauth2client.service_account import ServiceAccountCredentials
     
-    # ตรวจสอบว่ามีไฟล์ credentials.json หรือไม่
+    # ตรวจสอบว่ามีไฟล์ credentials.json หรือ Streamlit secrets
     credentials_file = 'credentials.json'
-    if not os.path.exists(credentials_file):
-        print(f"⚠️ ไม่พบ {credentials_file} - ระบบจะใช้ข้อมูลจาก branch_data.json")
-        print(f"💡 ดูวิธีตั้งค่าได้ที่: CREDENTIALS_SETUP.md")
-        SHEETS_AVAILABLE = False
-        gc = None
-        sh = None
-    else:
-        # เชื่อมต่อ Google Sheets
-        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+    
+    creds = None
+    
+    # 1️⃣ ลองใช้ Streamlit Secrets ก่อน (สำหรับ Streamlit Cloud)
+    try:
+        if hasattr(st, 'secrets') and 'gcp_service_account' in st.secrets:
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(
+                dict(st.secrets['gcp_service_account']), 
+                scope
+            )
+            print("✅ ใช้ credentials จาก Streamlit Secrets")
+    except Exception as e:
+        print(f"⚠️ Streamlit Secrets ไม่พร้อมใช้งาน: {e}")
+    
+    # 2️⃣ ถ้าไม่มี secrets ให้ใช้ไฟล์ local
+    if creds is None:
+        if os.path.exists(credentials_file):
+            try:
+                creds = ServiceAccountCredentials.from_json_keyfile_name(credentials_file, scope)
+                print(f"✅ ใช้ credentials จาก {credentials_file}")
+            except Exception as e:
+                print(f"⚠️ ไม่สามารถอ่านไฟล์ {credentials_file}: {e}")
+        else:
+            print(f"⚠️ ไม่พบ {credentials_file} และไม่มี Streamlit Secrets")
+            print(f"💡 ดูวิธีตั้งค่าได้ที่: CREDENTIALS_SETUP.md")
+    
+    # เชื่อมต่อ Google Sheets
+    if creds:
         try:
-            creds = ServiceAccountCredentials.from_json_keyfile_name(credentials_file, scope)
             gc = gspread.authorize(creds)
             SPREADSHEET_ID = '12DmIfECwVpsWfl8rl2r1A_LB4_5XMrmnmwlPUHKNU-o'
             sh = gc.open_by_key(SPREADSHEET_ID)
@@ -101,10 +120,15 @@ try:
             print("✅ เชื่อมต่อ Google Sheets สำเร็จ")
         except Exception as e:
             print(f"⚠️ Google Sheets Error: {e}")
-            print(f"💡 ตรวจสอบไฟล์ {credentials_file} หรือดูคู่มือที่ CREDENTIALS_SETUP.md")
+            print(f"💡 ตรวจสอบ credentials หรือดูคู่มือที่ CREDENTIALS_SETUP.md")
             SHEETS_AVAILABLE = False
             gc = None
             sh = None
+    else:
+        SHEETS_AVAILABLE = False
+        gc = None
+        sh = None
+        
 except ImportError:
     print("⚠️ ไม่พบ gspread library - ติดตั้งด้วย: pip install gspread oauth2client")
     SHEETS_AVAILABLE = False
