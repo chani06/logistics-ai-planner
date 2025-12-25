@@ -234,21 +234,7 @@ PUNTHAI_LIMITS = {
     '6W': {'max_w': 6000, 'max_c': 20.0, 'max_drops': 999}
 }
 
-# 🎯 Minimum utilization ต่อประเภทรถ (สำหรับ balancing)
-MIN_UTIL = {
-    '4W': 70,   # 4W ต้องใช้อย่างน้อย 70%
-    'JB': 80,   # JB ต้องใช้อย่างน้อย 80%
-    '6W': 90    # 6W ต้องใช้อย่างน้อย 90%
-}
-
-# จำนวนสาขาต่อทริป - ใช้กับ 4W/JB เท่านั้น (6W ไม่จำกัด)
-MAX_BRANCHES_PER_TRIP = 12  # สูงสุด 12 สาขาต่อทริปสำหรับ 4W/JB (6W ไม่จำกัด)
-
-# Performance Config
-MAX_DETOUR_KM = 12  # ลดจาก 15km เป็น 12km เพื่อประมวลผลเร็วขึ้น
-MAX_MERGE_ITERATIONS = 25  # จำกัดรอบการรวมทริป (ลดจาก 50 เพื่อเร็วขึ้น)
-
-# 🌍 Geographic Clustering Config
+#  Geographic Clustering Config
 MAX_DISTRICT_DISTANCE_KM = 50  # อำเภอที่ห่างกันเกิน 50km ไม่ควรอยู่ทริปเดียวกัน (เว้นแต่จังหวัดเดียวกัน)
 MIN_VEHICLE_UTILIZATION = 0.70  # 🎯 รถต้องใช้อย่างน้อย 70% - optimize รถให้เต็มประสิทธิภาพ
 
@@ -275,9 +261,6 @@ EXCLUDE_NAMES = ['Distribution Center', 'PTG Distribution', 'บ.พีทีจ
 # พิกัด DC วังน้อย (จุดกลาง)
 DC_WANG_NOI_LAT = 14.179394
 DC_WANG_NOI_LON = 100.648149
-
-# ระยะทางที่ต้องใช้รถ 6W (กม.)
-DISTANCE_REQUIRE_6W = 100  # ถ้าห่างจาก DC เกิน 100 กม. ต้องใช้ 6W
 
 # ==========================================
 # 🚛 HIGHWAY-BASED LOGISTICS ROUTES & ZONES
@@ -854,15 +837,6 @@ def get_region_name(province):
     region_prefix = code[0]
     return REGION_NAMES.get(region_prefix, 'ไม่ระบุ')
 
-def get_recommended_vehicle_by_region(province, distance_from_dc=None):
-    """แนะนำรถตามระยะทาง (ไม่มีข้อจำกัดตามภาค - ใช้ข้อมูลจาก Master Data)"""
-    # ถ้ามีระยะทาง และเกิน threshold → แนะนำ 6W
-    if distance_from_dc and distance_from_dc > DISTANCE_REQUIRE_6W:
-        return '6W'
-    
-    # Default: ให้เลือกรถตามข้อมูลจาก Master Data
-    return 'JB'  # default แนะนำ JB
-
 # ==========================================
 # LOGISTICS ZONE FUNCTIONS
 # ==========================================
@@ -1069,15 +1043,6 @@ def check_trip_route_spread(trip_df):
     
     return route_range, is_spread, provinces
 
-def validate_trip_vehicle(trip_df, assigned_vehicle):
-    """
-    ตรวจสอบว่ารถที่จัดให้ทริปเหมาะสมหรือไม่ (อิงตาม Master Data เท่านั้น)
-    คืนค่า: (is_valid, recommended_vehicle, reason)
-    """
-    # ✅ ไม่มีข้อจำกัดตามภาค - อนุญาตให้ใช้รถทุกประเภทในทุกพื้นที่
-    # ให้ระบบตัดสินใจตามข้อมูลจาก Master Data เท่านั้น
-    return True, assigned_vehicle, ''
-
 # ==========================================
 # LOAD MASTER DATA
 # ==========================================
@@ -1232,252 +1197,15 @@ MASTER_DIST_DATA = load_master_dist_data()
 
 # ==========================================
 # PUNTHAI/MAXMART BUFFER FUNCTIONS (REMOVED - ใช้โลจิกใหม่แล้ว)
-# is_punthai_only() และ get_punthai_drop_limit() ถูกลบออก
-# ระบบใช้ buffer จากหน้าเว็บแทน
-# ==========================================
-
-@st.cache_data(ttl=3600)  # Cache 1 ชั่วโมง
-def load_booking_history_restrictions():
-    """โหลดประวัติการจัดส่งจาก Booking History - ข้อมูลจริง 3,053 booking (Optimized)"""
-    try:
-        # ลองหาไฟล์ Booking History (อาจมีชื่อหลายแบบ)
-        possible_files = [
-            'Dc/ประวัติงานจัดส่ง DC วังน้อย(1).xlsx',
-            'Dc/ประวัติงานจัดส่ง DC วังน้อย.xlsx',
-            'branch_vehicle_restrictions_from_booking.xlsx'
-        ]
-        
-        file_path = None
-        for path in possible_files:
-            if os.path.exists(path):
-                file_path = path
-                break
-        
-        if not file_path:
-            # ถ้าไม่มีไฟล์ ใช้ข้อมูลที่เคยเรียนรู้ (fallback)
-            return load_learned_restrictions_fallback()
-        
-        df = pd.read_excel(file_path)
-        
-        # แปลงประเภทรถ
-        vehicle_mapping = {
-            '4 ล้อ จัมโบ้ ตู้ทึบ': 'JB',
-            '6 ล้อ ตู้ทึบ': '6W',
-            '4 ล้อ ตู้ทึบ': '4W'
-        }
-        df['Vehicle_Type'] = df['ประเภทรถ'].map(vehicle_mapping)
-        
-        # วิเคราะห์ความสัมพันธ์สาขา-รถ
-        branch_vehicle_history = {}
-        booking_groups = df.groupby('Booking No')
-        
-        for booking_no, booking_data in booking_groups:
-            vehicle_types = booking_data['Vehicle_Type'].dropna().unique()
-            if len(vehicle_types) > 0:
-                vehicle = booking_data['Vehicle_Type'].mode()[0] if len(booking_data['Vehicle_Type'].mode()) > 0 else vehicle_types[0]
-                for branch_code in booking_data['รหัสสาขา'].dropna().unique():
-                    if branch_code not in branch_vehicle_history:
-                        branch_vehicle_history[branch_code] = []
-                    branch_vehicle_history[branch_code].append(vehicle)
-        
-        # สร้าง restrictions
-        branch_restrictions = {}
-        vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
-        
-        for branch_code, vehicle_list in branch_vehicle_history.items():
-            vehicles_used = set(vehicle_list)
-            vehicle_counts = pd.Series(vehicle_list).value_counts().to_dict()
-            
-            if len(vehicles_used) == 1:
-                # STRICT - ใช้รถเดียว
-                vehicle = list(vehicles_used)[0]
-                branch_restrictions[str(branch_code)] = {
-                    'max_vehicle': vehicle,
-                    'allowed': [vehicle],
-                    'total_bookings': len(vehicle_list),
-                    'restriction_type': 'STRICT'
-                }
-            else:
-                # FLEXIBLE - ใช้ได้หลายประเภท
-                max_vehicle = max(vehicles_used, key=lambda v: vehicle_sizes.get(v, 0))
-                branch_restrictions[str(branch_code)] = {
-                    'max_vehicle': max_vehicle,
-                    'allowed': list(vehicles_used),
-                    'total_bookings': len(vehicle_list),
-                    'restriction_type': 'FLEXIBLE'
-                }
-        
-        stats = {
-            'total_branches': len(branch_restrictions),
-            'strict': len([b for b, r in branch_restrictions.items() if r['restriction_type'] == 'STRICT']),
-            'flexible': len([b for b, r in branch_restrictions.items() if r['restriction_type'] == 'FLEXIBLE']),
-            'total_bookings': len(booking_groups)
-        }
-        
-        return {
-            'branch_restrictions': branch_restrictions,
-            'stats': stats
-        }
-    except Exception as e:
-        # ถ้าเกิด error ใช้ข้อมูลที่เคยเรียนรู้แทน
-        return load_learned_restrictions_fallback()
-
-def load_learned_restrictions_fallback():
-    """
-    ข้อมูลที่เรียนรู้จาก Booking History (backup)
-    ใช้เมื่อไม่สามารถโหลดไฟล์ได้
-    
-    จากการวิเคราะห์ 3,053 bookings, 2,790 สาขา:
-    - JB: รถกลาง (ใช้มากที่สุด 54.7%)
-    - 6W: รถใหญ่ (30.1%)
-    - 4W: รถเล็ก (0.2%)
-    
-    กลยุทธ์: ถ้าไม่มีข้อมูล default เป็น JB (รถกลาง ใช้ได้กับสาขาส่วนใหญ่)
-    """
-    return {
-        'branch_restrictions': {},
-        'stats': {
-            'total_branches': 0,
-            'strict': 0,
-            'flexible': 0,
-            'total_bookings': 0,
-            'fallback': True,
-            'message': 'ใช้ Punthai เป็นหลัก (ไม่พบไฟล์ Booking History)'
-        }
-    }
-
-@st.cache_data(ttl=3600)  # Cache 1 ชั่วโมง
-def load_punthai_reference():
-    """โหลดไฟล์ Punthai Maxmart เพื่อเรียนรู้หลักการจัดทริป (Location patterns - Optimized)"""
-    try:
-        file_path = 'Dc/แผนงาน Punthai Maxmart รอบสั่ง 24หยิบ 25พฤศจิกายน 2568 To.เฟิ(1) - สำเนา.xlsx'
-        df = pd.read_excel(file_path, sheet_name='2.Punthai', header=1)
-        
-        # กรองเฉพาะแถวที่มี Trip และไม่ใช่ DC/Distribution Center
-        df_clean = df[df['Trip'].notna()].copy()
-        df_clean = df_clean[~df_clean['BranchCode'].isin(['DC011', 'PTDC', 'PTG Distribution Center'])].copy()
-        
-        # Extract vehicle type from Trip no (เช่น 4W009 → 4W)
-        df_clean['Vehicle_Type'] = df_clean['Trip no'].apply(
-            lambda x: str(x)[:2] if pd.notna(x) else 'Unknown'
-        )
-        
-        # Merge กับ MASTER_DATA (จาก Google Sheets) เพื่อได้ข้อมูลตำบล/อำเภอ/จังหวัด
-        try:
-            if not MASTER_DATA.empty:
-                merge_cols = ['Plan Code', 'ตำบล', 'อำเภอ', 'จังหวัด']
-                available_cols = [col for col in merge_cols if col in MASTER_DATA.columns]
-                if available_cols:
-                    df_clean = df_clean.merge(
-                        MASTER_DATA[available_cols],
-                        left_on='BranchCode',
-                        right_on='Plan Code',
-                        how='left'
-                    )
-        except Exception as e:
-            print(f"⚠️ Cannot merge with MASTER_DATA: {e}")
-        
-        # เรียนรู้ข้อจำกัดรถจาก Punthai (แผน) - สำหรับสาขาที่ไม่มีใน Booking
-        punthai_restrictions = {}
-        vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
-        
-        for branch_code in df_clean['BranchCode'].unique():
-            branch_data = df_clean[df_clean['BranchCode'] == branch_code]
-            vehicles_used = set(branch_data['Vehicle_Type'].dropna().tolist())
-            vehicles_used = {v for v in vehicles_used if v in ['4W', 'JB', '6W']}
-            
-            if vehicles_used:
-                if len(vehicles_used) == 1:
-                    vehicle = list(vehicles_used)[0]
-                    punthai_restrictions[str(branch_code)] = {
-                        'max_vehicle': vehicle,
-                        'allowed': [vehicle],
-                        'source': 'PUNTHAI'
-                    }
-                else:
-                    max_vehicle = max(vehicles_used, key=lambda v: vehicle_sizes.get(v, 0))
-                    punthai_restrictions[str(branch_code)] = {
-                        'max_vehicle': max_vehicle,
-                        'allowed': list(vehicles_used),
-                        'source': 'PUNTHAI'
-                    }
-        
-        # สร้าง dictionary: Trip → ข้อมูล (location patterns)
-        trip_patterns = {}
-        location_stats = {
-            'same_province': 0,
-            'mixed_province': 0,
-            'avg_branches': 0
-        }
-        
-        for trip_num in df_clean['Trip'].unique():
-            trip_data = df_clean[df_clean['Trip'] == trip_num]
-            
-            # Get location info
-            provinces = set(trip_data['จังหวัด'].dropna().tolist()) if 'จังหวัด' in trip_data.columns else set()
-            
-            # Count same vs mixed province
-            if len(provinces) == 1:
-                location_stats['same_province'] += 1
-            elif len(provinces) > 1:
-                location_stats['mixed_province'] += 1
-            
-            trip_patterns[int(trip_num)] = {
-                'branches': len(trip_data),
-                'codes': trip_data['BranchCode'].tolist(),
-                'weight': trip_data['TOTALWGT'].sum() if 'TOTALWGT' in trip_data.columns else 0,
-                'cube': trip_data['TOTALCUBE'].sum() if 'TOTALCUBE' in trip_data.columns else 0,
-                'provinces': list(provinces),
-                'same_province': len(provinces) == 1
-            }
-        
-        # Calculate stats
-        if trip_patterns:
-            location_stats['avg_branches'] = sum(t['branches'] for t in trip_patterns.values()) / len(trip_patterns)
-            total = location_stats['same_province'] + location_stats['mixed_province']
-            location_stats['same_province_pct'] = (location_stats['same_province'] / total * 100) if total > 0 else 0
-        
-        return {
-            'patterns': trip_patterns, 
-            'stats': location_stats,
-            'punthai_restrictions': punthai_restrictions
-        }
-    except:
-        return {'patterns': {}, 'stats': {}, 'punthai_restrictions': {}}
-
-# โหลด Booking History (ข้อจำกัดรถ)
-BOOKING_RESTRICTIONS = load_booking_history_restrictions()
-
-# โหลด Punthai Reference (location patterns)
-PUNTHAI_PATTERNS = load_punthai_reference()
-
 # ==========================================
 # HELPER FUNCTIONS
 # ==========================================
-def check_branch_vehicle_compatibility(branch_code, vehicle_type):
-    """ตรวจสอบว่าสาขานี้ใช้รถประเภทนี้ได้ไหม (รวม Booking + Punthai)"""
-    branch_code_str = str(branch_code).strip()
-    
-    # 1. ลองหาจาก Booking History ก่อน (ข้อมูลจริง)
-    booking_restrictions = BOOKING_RESTRICTIONS.get('branch_restrictions', {})
-    if branch_code_str in booking_restrictions:
-        allowed = booking_restrictions[branch_code_str].get('allowed', [])
-        return vehicle_type in allowed
-    
-    # 2. ถ้าไม่มี ลองหาจาก Punthai (แผน)
-    punthai_restrictions = PUNTHAI_PATTERNS.get('punthai_restrictions', {})
-    if branch_code_str in punthai_restrictions:
-        allowed = punthai_restrictions[branch_code_str].get('allowed', [])
-        return vehicle_type in allowed
-    
-    # 3. ถ้าไม่มีข้อมูล = ยืดหยุ่น
-    return True
 
 def get_max_vehicle_for_branch(branch_code, test_df=None):
-    """ดึงรถใหญ่สุดที่สาขานี้รองรับ - อ่านจาก Sheets ก่อน"""
+    """ดึงรถใหญ่สุดที่สาขานี้รองรับ - อ่านจาก Master Data (Google Sheets)"""
     branch_code_str = str(branch_code).strip().upper()
     
-    # 🎯 Priority 1: อ่านจาก test_df (Google Sheets) - ข้อมูลล่าุสุด
+    # อ่านจาก test_df (Google Sheets Master Data) - ข้อมูลล่าสุด
     if test_df is not None and not test_df.empty:
         branch_row = test_df[test_df['Code'].str.strip().str.upper() == branch_code_str]
         if not branch_row.empty:
@@ -1488,16 +1216,6 @@ def get_max_vehicle_for_branch(branch_code, test_df=None):
                     max_truck = str(branch_row.iloc[0][col]).strip().upper()
                     if max_truck in ['4W', 'JB', '6W']:
                         return max_truck
-    
-    # Priority 2: ลองหาจาก Booking History (ข้อมูลจริง)
-    booking_restrictions = BOOKING_RESTRICTIONS.get('branch_restrictions', {})
-    if branch_code_str in booking_restrictions:
-        return booking_restrictions[branch_code_str].get('max_vehicle', '6W')
-    
-    # Priority 3: ลองหาจาก Punthai (แผน)
-    punthai_restrictions = PUNTHAI_PATTERNS.get('punthai_restrictions', {})
-    if branch_code_str in punthai_restrictions:
-        return punthai_restrictions[branch_code_str].get('max_vehicle', '6W')
     
     # Default: ไม่มีข้อจำกัด = ใช้รถใหญ่ได้
     return '6W'
@@ -1593,41 +1311,6 @@ def get_region_type(province):
     
     # จังหวัดอื่นๆ = ไกล
     return 'far'
-
-def is_nearby_province(prov1, prov2):
-    """เช็คว่าจังหวัดใกล้เคียงกันหรือไม่ (จากไฟล์ประวัติ)"""
-    if pd.isna(prov1) or pd.isna(prov2):
-        return False
-    
-    if prov1 == prov2:
-        return True
-    
-    # จัดกลุ่มจังหวัดตามภาคย่อย (จากไฟล์ประวัติ)
-    province_groups = {
-        'กรุงเทพ': ['กรุงเทพมหานคร', 'กรุงเทพ'],
-        'ปริมณฑล': ['นครปฐม', 'นนทบุรี', 'ปทุมธานี', 'สมุทรปราการ', 'สมุทรสาคร'],
-        'กลางตอนบน': ['ชัยนาท', 'พระนครศรีอยุธยา', 'ลพบุรี', 'สระบุรี', 'สิงห์บุรี', 'อ่างทอง', 'อยุธยา'],
-        'กลางตอนล่าง': ['สมุทรสงคราม', 'สุพรรณบุรี'],
-        'ภาคตะวันตก': ['กาญจนบุรี', 'ประจวบคีรีขันธ์', 'ราชบุรี', 'เพชรบุรี'],
-        'ภาคตะวันออก': ['จันทบุรี', 'ชลบุรี', 'ตราด', 'นครนายก', 'ปราจีนบุรี', 'ระยอง', 'สระแก้ว', 'ฉะเชิงเทรา'],
-        'อีสานเหนือ': ['นครพนม', 'บึงกาฬ', 'มุกดาหาร', 'สกลนคร', 'หนองคาย', 'หนองบัวลำภู', 'อุดรธานี', 'เลย'],
-        'อีสานกลาง': ['กาฬสินธุ์', 'ขอนแก่น', 'ชัยภูมิ', 'มหาสารคาม', 'ร้อยเอ็ด'],
-        'อีสานใต้': ['นครราชสีมา', 'โคราช', 'บุรีรัมย์', 'ยโสธร', 'ศรีสะเกษ', 'สุรินทร์', 'อำนาจเจริญ', 'อุบลราชธานี'],
-        'เหนือตอนบน': ['น่าน', 'พะเยา', 'ลำปาง', 'ลำพูน', 'เชียงราย', 'เชียงใหม่', 'แพร่', 'แม่ฮ่องสอน'],
-        'เหนือตอนล่าง': ['กำแพงเพชร', 'ตาก', 'นครสวรรค์', 'พิจิตร', 'พิษณุโลก', 'สุโขทัย', 'อุตรดิตถ์', 'อุทัยธานี', 'เพชรบูรณ์'],
-        'ใต้ฝั่งอันดามัน': ['กระบี่', 'ตรัง', 'พังงา', 'ภูเก็ต', 'ระนอง', 'สตูล'],
-        'ใต้ฝั่งอ่าวไทย': ['ชุมพร', 'นครศรีธรรมราช', 'พัทลุง', 'ยะลา', 'สงขลา', 'สุราษฎร์ธานี', 'ปัตตานี', 'นราธิวาส']
-    }
-    
-    # หาว่าจังหวัดทั้ง 2 อยู่กลุ่มเดียวกันหรือไม่
-    for group, provinces in province_groups.items():
-        in_group_1 = any(p in str(prov1) for p in provinces)
-        in_group_2 = any(p in str(prov2) for p in provinces)
-        
-        if in_group_1 and in_group_2:
-            return True
-    
-    return False
 
 def load_model():
     """โหลดโมเดลที่เทรนไว้"""
