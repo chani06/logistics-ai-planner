@@ -1232,7 +1232,7 @@ MASTER_DIST_DATA = load_master_dist_data()
 # HELPER FUNCTIONS
 # ==========================================
 
-def get_max_vehicle_for_branch(branch_code, test_df=None):
+def get_max_vehicle_for_branch(branch_code, test_df=None, debug=False):
     """ดึงรถใหญ่สุดที่สาขานี้รองรับ - อ่านจาก Master Data (Google Sheets) เป็นหลัก"""
     branch_code_str = str(branch_code).strip().upper()
     
@@ -1246,6 +1246,8 @@ def get_max_vehicle_for_branch(branch_code, test_df=None):
                 if col in branch_row.columns and pd.notna(branch_row.iloc[0][col]):
                     max_truck = str(branch_row.iloc[0][col]).strip().upper()
                     if max_truck in ['4W', 'JB', '6W']:
+                        if debug:
+                            print(f"✅ Branch {branch_code_str}: Max Vehicle = {max_truck} (from Master Data column '{col}')")
                         return max_truck
     
     # 🔄 Fallback: อ่านจาก test_df (Excel upload) ถ้าไม่เจอใน Master
@@ -2884,8 +2886,32 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     # เพิ่มคอลัมน์ MaxVehicle constraint
     df['MaxVehicle'] = df['_max_vehicle']
     
-    # เพิ่มคอลัมน์เช็ครถ
-    df['VehicleCheck'] = '✅ ใช้ได้'
+    # 🚨 เพิ่มคอลัมน์เช็ครถ - ตรวจสอบว่ารถที่จัดตรงกับข้อจำกัดหรือไม่
+    def check_vehicle_compliance(row):
+        """ตรวจสอบว่ารถที่จัดไปตรงกับข้อจำกัดหรือไม่"""
+        if row['Trip'] == 0:
+            return '⚠️ ไม่ได้จัด'
+        
+        max_allowed = row['_max_vehicle']
+        truck_assigned = str(row.get('Truck', '')).split()[0] if pd.notna(row.get('Truck')) else ''
+        
+        # แปลง JB เป็น 4WJ ถ้าจำเป็น
+        if truck_assigned == '4WJ':
+            truck_assigned = 'JB'
+        
+        # Vehicle hierarchy: 4W < JB < 6W
+        vehicle_rank = {'4W': 1, 'JB': 2, '6W': 3}
+        
+        if max_allowed not in vehicle_rank or truck_assigned not in vehicle_rank:
+            return '✅ ใช้ได้'
+        
+        # ตรวจสอบว่ารถที่จัดเล็กกว่าหรือเท่ากับรถที่อนุญาต
+        if vehicle_rank[truck_assigned] <= vehicle_rank[max_allowed]:
+            return '✅ ใช้ได้'
+        else:
+            return f'❌ เกินข้อจำกัด (Max: {max_allowed}, ใช้: {truck_assigned})'
+    
+    df['VehicleCheck'] = df.apply(check_vehicle_compliance, axis=1)
     
     # ==========================================
     # Step 9: เรียงทริปใหม่ให้ทริปติดกัน (สำหรับ export)
@@ -3103,6 +3129,46 @@ def main():
                     
                     st.markdown("---")
                     
+                    # 📊 แสดงสรุปข้อมูลข้อจำกัดรถจาก Master Data
+                    st.markdown("### 📋 สรุปข้อจำกัดรถจาก Master Data")
+                    
+                    # นับจำนวนสาขาแต่ละประเภทรถ
+                    vehicle_restrictions = {}
+                    for _, row in df.iterrows():
+                        code = row['Code']
+                        max_vehicle = get_max_vehicle_for_branch(code)
+                        vehicle_restrictions[code] = max_vehicle
+                    
+                    restriction_counts = pd.Series(vehicle_restrictions).value_counts()
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        total_branches = len(df)
+                        st.metric("📍 สาขาทั้งหมด", f"{total_branches}")
+                    with col2:
+                        four_w_count = restriction_counts.get('4W', 0)
+                        st.metric("🚗 จำกัด 4W", f"{four_w_count}", 
+                                 delta=f"{(four_w_count/total_branches*100):.1f}%" if total_branches > 0 else "0%")
+                    with col3:
+                        jb_count = restriction_counts.get('JB', 0)
+                        st.metric("🚚 จำกัด JB", f"{jb_count}",
+                                 delta=f"{(jb_count/total_branches*100):.1f}%" if total_branches > 0 else "0%")
+                    with col4:
+                        six_w_count = restriction_counts.get('6W', 0)
+                        st.metric("🚛 ใช้ 6W ได้", f"{six_w_count}",
+                                 delta=f"{(six_w_count/total_branches*100):.1f}%" if total_branches > 0 else "0%")
+                    
+                    # แสดงรายละเอียดสาขาที่มีข้อจำกัด
+                    if four_w_count > 0 or jb_count > 0:
+                        with st.expander(f"🔍 ดูรายละเอียดสาขาที่มีข้อจำกัด ({four_w_count + jb_count} สาขา)"):
+                            restricted_branches = df[df['Code'].isin([k for k, v in vehicle_restrictions.items() if v in ['4W', 'JB']])].copy()
+                            restricted_branches['MaxVehicle'] = restricted_branches['Code'].map(vehicle_restrictions)
+                            display_restricted = restricted_branches[['Code', 'Name', 'MaxVehicle']].copy()
+                            display_restricted.columns = ['รหัสสาขา', 'ชื่อสาขา', 'รถสูงสุด']
+                            st.dataframe(display_restricted.sort_values('รถสูงสุด'), use_container_width=True, height=300)
+                    
+                    st.markdown("---")
+                    
                     # ปุ่มจัดทริป
                     if st.button("🚀 เริ่มจัดเที่ยว", type="primary", use_container_width=True):
                         # สร้าง status container แบบ popup
@@ -3249,14 +3315,22 @@ def main():
                                 height=400
                             )
                         
-                        # แสดงสาขาที่มีคำเตือน
-                        warning_branches = result_df[result_df['VehicleCheck'].str.contains('⚠️', na=False)]
+                        # แสดงสาขาที่มีคำเตือน - รวมทั้ง ⚠️ และ ❌
+                        warning_branches = result_df[result_df['VehicleCheck'].str.contains('⚠️|❌', na=False, regex=True)]
                         if len(warning_branches) > 0:
-                            with st.expander(f"⚠️ สาขาที่ใช้รถต่างจากปกติ ({len(warning_branches)} สาขา)"):
-                                st.warning("สาขาเหล่านี้ปกติใช้รถประเภทอื่น แต่ถูกจัดให้ใช้รถประเภทที่ต่างออกไป")
-                                display_cols_warn = ['Trip', 'Code', 'Name', 'Truck', 'VehicleCheck']
+                            # นับจำนวนแต่ละประเภท
+                            error_count = len(result_df[result_df['VehicleCheck'].str.contains('❌', na=False)])
+                            warning_count = len(result_df[result_df['VehicleCheck'].str.contains('⚠️', na=False)])
+                            
+                            with st.expander(f"🚨 สาขาที่มีปัญหา ({len(warning_branches)} สาขา: ❌ {error_count} ข้อจำกัด, ⚠️ {warning_count} อื่นๆ)", expanded=(error_count > 0)):
+                                if error_count > 0:
+                                    st.error(f"❌ มี {error_count} สาขาที่ใช้รถเกินข้อจำกัดจาก Master Data!")
+                                if warning_count > 0:
+                                    st.warning(f"⚠️ มี {warning_count} สาขาที่มีคำเตือนอื่นๆ")
+                                
+                                display_cols_warn = ['Trip', 'Code', 'Name', 'MaxVehicle', 'Truck', 'VehicleCheck']
                                 display_warn_df = warning_branches[display_cols_warn].copy()
-                                display_warn_df.columns = ['ทริป', 'รหัส', 'ชื่อสาขา', 'รถที่จัด', 'ประวัติการใช้รถ']
+                                display_warn_df.columns = ['ทริป', 'รหัส', 'ชื่อสาขา', 'รถ Max', 'รถที่จัด', 'สถานะ']
                                 st.dataframe(display_warn_df, use_container_width=True)
                         
                         st.markdown("---")
