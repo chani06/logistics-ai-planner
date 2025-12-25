@@ -1705,12 +1705,14 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     df['_lon'] = info_df['lon']
     
     # 🚨 เพิ่ม Logistics Zone สำหรับ routing ตามทางหลวง
-    df['_logistics_zone'] = df.apply(
-        lambda row: get_logistics_zone(row['_province'], row['_district'], row['_subdistrict']),
-        axis=1
-    )
-    df['_zone_priority'] = df['_logistics_zone'].apply(get_zone_priority)
-    df['_zone_highway'] = df['_logistics_zone'].apply(get_zone_highway)
+    # 🚀 OPTIMIZED: Use zip instead of apply with axis=1
+    zones = []
+    for prov, dist, subdist in zip(df['_province'], df['_district'], df['_subdistrict']):
+        zones.append(get_logistics_zone(prov, dist, subdist))
+    
+    df['_logistics_zone'] = zones
+    df['_zone_priority'] = [get_zone_priority(z) for z in zones]
+    df['_zone_highway'] = [get_zone_highway(z) for z in zones]
     
     # ==========================================
     # Step 3: เรียงลำดับแบบ Hierarchical (Zone Priority > Region > Province Max Dist > District Max Dist > Distance)
@@ -1744,24 +1746,21 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     # Step 4: จับกลุ่ม Route เดียวกัน รวมน้ำหนัก
     # ==========================================
     # สร้าง grouping key จาก route (ถ้ามี) หรือ ตำบล+อำเภอ+จังหวัด
-    def get_group_key(row):
-        route = row['_route']
-        if route and route.strip():
+    def get_group_key(route, subdist_code, dist_code, prov_code):
+        if route and str(route).strip():
             return f"R_{route}"
         # ถ้าไม่มี route ใช้ รหัสตำบล (เรียงตามระยะทาง)
-        return f"L_{row['_subdist_code']}_{row['_dist_code']}_{row['_prov_code']}"
+        return f"L_{subdist_code}_{dist_code}_{prov_code}"
     
-    df['_group_key'] = df.apply(get_group_key, axis=1)
+    # 🚀 OPTIMIZED: Use list comprehension
+    df['_group_key'] = [get_group_key(r, s, d, p) for r, s, d, p in 
+                        zip(df['_route'], df['_subdist_code'], df['_dist_code'], df['_prov_code'])]
     
     # ==========================================
     # Step 5: หารถที่เหมาะสมจากข้อจำกัดสาขา + Central Region Rule
     # ==========================================
-    def get_max_vehicle_for_code(code):
-        """หารถที่ใหญ่ที่สุดที่สาขาสามารถใช้ได้ - อ่านจาก Sheets"""
-        max_vehicle = get_max_vehicle_for_branch(code, test_df=test_df)
-        return max_vehicle
-    
-    df['_max_vehicle'] = df['Code'].apply(get_max_vehicle_for_code)
+    # 🚀 OPTIMIZED: Use list comprehension instead of apply
+    df['_max_vehicle'] = [get_max_vehicle_for_branch(code, test_df=test_df) for code in df['Code']]
     # ✅ ใช้รถทั้งหมดที่มี - ไม่มีข้อจำกัดตามภาค (อิงตาม Master Data เท่านั้น)
     df['_region_allowed_vehicles'] = [['4W', 'JB', '6W']] * len(df)
     
@@ -1791,16 +1790,12 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     
     vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
     
-    # 🚀 CACHE: Pre-compute branch constraints และ BU type จาก Excel upload
-    branch_max_vehicle_cache = {}
+    # 🚀 OPTIMIZED: Pre-compute branch constraints และ BU type ด้วย vectorized operations
+    branch_max_vehicle_cache = dict(zip(df['Code'], df['_max_vehicle']))
+    
+    # 📊 ดึง BU จากไฟล์ Excel ที่ upload มา (คอลัมน์ BU)
     branch_bu_cache = {}
-    for _, row in df.iterrows():
-        code = row['Code']
-        branch_max_vehicle_cache[code] = row['_max_vehicle']
-        
-        # 📊 ดึง BU จากไฟล์ Excel ที่ upload มา (คอลัมน์ BU)
-        bu = row.get('BU', None)  # อ่านค่าจริงจาก Excel
-        
+    for code, bu, name in zip(df['Code'], df.get('BU', [None]*len(df)), df.get('Name', ['']*len(df))):
         # เช็คว่าเป็น Punthai หรือไม่
         is_punthai = False
         if bu is not None:
@@ -1809,8 +1804,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             is_punthai = bu_str in ['211', 'PUNTHAI']
         else:
             # ถ้าไม่มีคอลัมน์ BU → ลองเช็คจากชื่อสาขา (fallback)
-            name = str(row.get('Name', '')).upper()
-            is_punthai = 'PUNTHAI' in name or 'PUN-' in name
+            name_upper = str(name).upper()
+            is_punthai = 'PUNTHAI' in name_upper or 'PUN-' in name_upper
         
         branch_bu_cache[code] = is_punthai
     
