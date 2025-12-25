@@ -251,6 +251,7 @@ MAX_DISTRICT_DISTANCE_KM = 30  # คนละจังหวัด: ห่าง
 # Utilization Config
 MIN_UTIL_BEFORE_FINALIZE = 0.95  # ต้องมี utilization อย่างน้อย 95% ก่อนจะปิดทริป
 MIN_UTIL_FLEXIBLE = 0.85  # ถ้า utilization >= 85% ของ buffer และเกิน buffer → ปิดได้
+MIN_VEHICLE_UTILIZATION = 0.80  # เป้าหมาย: รถต้องใช้อย่างน้อย 80% (แสดง warning ถ้าต่ำกว่า)
 
 # ==========================================
 # REGION ORDER CONFIG (Far-to-Near Sorting)
