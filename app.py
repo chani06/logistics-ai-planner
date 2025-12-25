@@ -1126,81 +1126,6 @@ def load_master_data():
 MASTER_DATA = load_master_data()
 
 # ==========================================
-# DEBUG: ตรวจสอบข้อมูลข้อจำกัดรถใน MASTER_DATA
-# ==========================================
-def debug_master_data_vehicle_restrictions(show_details=False):
-    """
-    ตรวจสอบและแสดงข้อมูลข้อจำกัดรถจาก MASTER_DATA
-    เพื่อดูว่าข้อมูลใน Google Sheets/JSON ถูกโหลดถูกต้องหรือไม่
-    """
-    if MASTER_DATA.empty:
-        print("❌ MASTER_DATA ว่างเปล่า - ไม่มีข้อมูล")
-        return None
-    
-    print("\n" + "="*80)
-    print("🔍 ตรวจสอบข้อมูลข้อจำกัดรถใน MASTER_DATA")
-    print("="*80)
-    
-    # แสดงคอลัมน์ทั้งหมด
-    print(f"\n📊 คอลัมน์ทั้งหมดใน MASTER_DATA ({len(MASTER_DATA.columns)} คอลัมน์):")
-    for i, col in enumerate(MASTER_DATA.columns, 1):
-        print(f"  {i}. {col}")
-    
-    # หาคอลัมน์ที่เกี่ยวข้องกับรถ
-    vehicle_cols = []
-    possible_names = ['max', 'truck', 'vehicle', 'รถ', 'constraint', 'limit', 'restrict']
-    for col in MASTER_DATA.columns:
-        if any(name.lower() in col.lower() for name in possible_names):
-            vehicle_cols.append(col)
-    
-    print(f"\n🚚 คอลัมน์ที่อาจเกี่ยวข้องกับข้อจำกัดรถ ({len(vehicle_cols)} คอลัมน์):")
-    if vehicle_cols:
-        for col in vehicle_cols:
-            print(f"  - {col}")
-    else:
-        print("  ⚠️ ไม่พบคอลัมน์ที่เกี่ยวข้องกับรถ!")
-    
-    # ตรวจสอบคอลัมน์ที่ระบบใช้งาน
-    print(f"\n🎯 คอลัมน์ที่ระบบต้องการ (ตามลำดับความสำคัญ):")
-    expected_cols = ['MaxTruckType', 'Max Truck Type', 'MaxVehicle', 'Max Vehicle', 'รถสูงสุด', 'Max_Truck_Type']
-    found_col = None
-    for col in expected_cols:
-        exists = col in MASTER_DATA.columns
-        symbol = "✅" if exists else "❌"
-        print(f"  {symbol} {col}")
-        if exists and found_col is None:
-            found_col = col
-    
-    if found_col:
-        print(f"\n✅ พบคอลัมน์ข้อจำกัดรถ: '{found_col}'")
-        
-        # นับจำนวนแต่ละประเภท
-        vehicle_counts = MASTER_DATA[found_col].value_counts(dropna=False)
-        print(f"\n📈 สถิติข้อจำกัดรถจากคอลัมน์ '{found_col}':")
-        for value, count in vehicle_counts.items():
-            if pd.isna(value):
-                print(f"  - (ว่าง/NaN): {count} สาขา")
-            else:
-                print(f"  - {value}: {count} สาขา")
-        
-        # แสดงตัวอย่างข้อมูล
-        if show_details:
-            print(f"\n📋 ตัวอย่างข้อมูล (10 สาขาแรก):")
-            sample_df = MASTER_DATA[['Plan Code', found_col]].head(10)
-            for _, row in sample_df.iterrows():
-                code = row['Plan Code']
-                max_v = row[found_col] if pd.notna(row[found_col]) else '(ว่าง)'
-                print(f"  - {code}: {max_v}")
-    else:
-        print(f"\n❌ ไม่พบคอลัมน์ข้อจำกัดรถที่ระบบรองรับ!")
-        print(f"\n💡 แนะนำ: เพิ่มคอลัมน์ใดคอลัมน์หนึ่งต่อไปนี้ใน Google Sheets:")
-        for col in expected_cols:
-            print(f"  - {col}")
-    
-    print("\n" + "="*80 + "\n")
-    return found_col
-
-# ==========================================
 # CLEAN NAME FUNCTION (สำหรับทำ Join_Key)
 # ==========================================
 def clean_name(text):
@@ -3484,9 +3409,207 @@ def main():
                                 display_warn_df.columns = ['ทริป', 'รหัส', 'ชื่อสาขา', 'รถ Max', 'รถที่จัด', 'สถานะ']
                                 st.dataframe(display_warn_df, use_container_width=True)
                         
+                        # 📥 ดาวน์โหลดผลลัพธ์ (อยู่หลังตาราง ก่อนแผนที่)
+                        from openpyxl import load_workbook
+                        from openpyxl.styles import PatternFill, Font, Border, Side
+                        
+                        output = io.BytesIO()
+                        
+                        # สร้าง location_map จาก MASTER_DATA
+                        location_map = {}
+                        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                            for _, row in MASTER_DATA.iterrows():
+                                code = str(row.get('Plan Code', '')).strip().upper()
+                                if code:
+                                    location_map[code] = {
+                                        'ตำบล': row.get('ตำบล', ''),
+                                        'อำเภอ': row.get('อำเภอ', ''),
+                                        'จังหวัด': row.get('จังหวัด', ''),
+                                        'Route': row.get('Reference', '')
+                                    }
+                        
+                        # สร้าง Trip_No map
+                        trip_no_map = {}
+                        vehicle_counts = {'4W': 0, '4WJ': 0, '6W': 0}
+                        
+                        # เรียง trip ตาม Zone Order + Province Max Dist + District Max Dist
+                        ZONE_ORDER_EXPORT = {'NORTH': 1, 'NE': 2, 'SOUTH': 3, 'EAST': 4, 'WEST': 5, 'CENTRAL': 6}
+                        trip_sort_keys = {}
+                        
+                        for trip_num in result_df['Trip'].unique():
+                            if trip_num == 0:
+                                continue
+                            trip_data = result_df[result_df['Trip'] == trip_num]
+                            
+                            region = trip_data['Region'].iloc[0] if 'Region' in trip_data.columns else 'ไม่ระบุ'
+                            region_order = ZONE_ORDER_EXPORT.get(region, 99)
+                            
+                            prov_max_dist = 0
+                            dist_max_dist = 0
+                            
+                            for code in trip_data['Code'].unique():
+                                if not MASTER_DATA.empty:
+                                    master_row = MASTER_DATA[MASTER_DATA['Plan Code'].astype(str).str.upper() == str(code).upper()]
+                                    if len(master_row) > 0:
+                                        dist_km = master_row.iloc[0].get('Distance from DC (km)', 0)
+                                        if pd.notna(dist_km):
+                                            prov_max_dist = max(prov_max_dist, float(dist_km))
+                                            dist_max_dist = max(dist_max_dist, float(dist_km))
+                            
+                            trip_sort_keys[trip_num] = (region_order, -prov_max_dist, -dist_max_dist)
+                        
+                        sorted_trips = sorted(
+                            [t for t in result_df['Trip'].unique() if t != 0],
+                            key=lambda t: trip_sort_keys.get(t, (99, 0, 0))
+                        )
+                        
+                        for trip_num in sorted_trips:
+                            trip_summary = summary[summary['Trip'] == trip_num]
+                            if len(trip_summary) > 0:
+                                truck_info = trip_summary.iloc[0]['Truck']
+                                vehicle_type = truck_info.split()[0] if truck_info else '6W'
+                                if vehicle_type == 'JB':
+                                    vehicle_type = '4WJ'
+                                vehicle_counts[vehicle_type] = vehicle_counts.get(vehicle_type, 0) + 1
+                                trip_no = f"{vehicle_type}{vehicle_counts[vehicle_type]:03d}"
+                                trip_no_map[trip_num] = trip_no
+                        
+                        try:
+                            wb = load_workbook(io.BytesIO(st.session_state.get('original_file_content', b'')))
+                            
+                            target_sheet = None
+                            for sheet_name in wb.sheetnames:
+                                if 'punthai' in sheet_name.lower() or '2.' in sheet_name.lower():
+                                    target_sheet = sheet_name
+                                    break
+                            
+                            if not target_sheet:
+                                target_sheet = '2.Punthai'
+                                if target_sheet not in wb.sheetnames:
+                                    wb.create_sheet(target_sheet)
+                            
+                            ws = wb[target_sheet]
+                            
+                            header_row = 1
+                            for row_idx in range(1, min(5, ws.max_row + 1)):
+                                for col_idx in range(1, min(15, ws.max_column + 1)):
+                                    cell_val = str(ws.cell(row=row_idx, column=col_idx).value or '')
+                                    if 'รหัสสาขา' in cell_val or 'Trip' in cell_val.upper():
+                                        header_row = row_idx
+                                        break
+                            
+                            if ws.max_row > header_row:
+                                ws.delete_rows(header_row + 1, ws.max_row - header_row)
+                            
+                            new_headers = ['Sep.', 'BU', 'รหัสสาขา', 'รหัส WMS', 'สาขา', 'ตำบล', 'อำเภอ', 'จังหวัด', 'Route',
+                                          'Total Cube', 'Total Wgt', 'Original QTY', 'Trip', 'Trip no']
+                            for col_idx, header_val in enumerate(new_headers, 1):
+                                ws.cell(row=header_row, column=col_idx, value=header_val)
+                            
+                            yellow_orange = PatternFill(start_color='FFE699', end_color='FFE699', fill_type='solid')
+                            white_fill = PatternFill(start_color='FFFFFF', end_color='FFFFFF', fill_type='solid')
+                            thin_border = Border(
+                                left=Side(style='thin'), right=Side(style='thin'),
+                                top=Side(style='thin'), bottom=Side(style='thin')
+                            )
+                            red_font = Font(color='FF0000', bold=True)
+                            
+                            failed_trips = set()
+                            vehicle_limits = {'4W': {'max_w': 2500, 'max_c': 5.0}, 'JB': {'max_w': 3500, 'max_c': 7.0}, '6W': {'max_w': 6000, 'max_c': 20.0}}
+                            for t in result_df['Trip'].unique():
+                                if t == 0:
+                                    continue
+                                trip_data = result_df[result_df['Trip'] == t]
+                                trip_cube = trip_data['Cube'].sum()
+                                trip_weight = trip_data['Weight'].sum()
+                                trip_no = trip_no_map.get(t, '6W001')
+                                veh_type = 'JB' if trip_no.startswith('4WJ') else ('4W' if trip_no.startswith('4W') else '6W')
+                                limits = vehicle_limits.get(veh_type, vehicle_limits['6W'])
+                                max_util = max((trip_cube / limits['max_c']) * 100, (trip_weight / limits['max_w']) * 100)
+                                if max_util > 105 or max_util < 50:
+                                    failed_trips.add(t)
+                            
+                            current_trip = None
+                            use_yellow = True
+                            row_num = header_row + 1
+                            sep_num = 1
+                            
+                            for trip_num in sorted_trips:
+                                trip_data = result_df[result_df['Trip'] == trip_num].copy()
+                                
+                                trip_data['_sort_sub'] = trip_data['Code'].apply(lambda c: location_map.get(str(c).upper(), {}).get('ตำบล', ''))
+                                trip_data['_sort_dist'] = trip_data['Code'].apply(lambda c: location_map.get(str(c).upper(), {}).get('อำเภอ', ''))
+                                trip_data['_sort_prov'] = trip_data['Code'].apply(lambda c: location_map.get(str(c).upper(), {}).get('จังหวัด', ''))
+                                trip_data = trip_data.sort_values(['_sort_prov', '_sort_dist', '_sort_sub', 'Code'])
+                                
+                                trip_no = trip_no_map.get(trip_num, '')
+                                
+                                if current_trip != trip_num:
+                                    current_trip = trip_num
+                                    use_yellow = not use_yellow
+                                
+                                fill = yellow_orange if use_yellow else white_fill
+                                
+                                for _, row in trip_data.iterrows():
+                                    branch_code = row.get('Code', '')
+                                    loc = location_map.get(str(branch_code).upper(), {})
+                                    
+                                    data = [
+                                        sep_num,
+                                        row.get('BU', 211),
+                                        branch_code,
+                                        branch_code,
+                                        row.get('Name', ''),
+                                        loc.get('ตำบล', ''),
+                                        loc.get('อำเภอ', ''),
+                                        loc.get('จังหวัด', ''),
+                                        loc.get('Route', ''),
+                                        round(row.get('Cube', 0), 2) if pd.notna(row.get('Cube')) else 0,
+                                        round(row.get('Weight', 0), 2) if pd.notna(row.get('Weight')) else 0,
+                                        row.get('OriginalQty', 0) if pd.notna(row.get('OriginalQty')) else 0,
+                                        int(trip_num),
+                                        trip_no,
+                                    ]
+                                    
+                                    for col_idx, value in enumerate(data, 1):
+                                        cell = ws.cell(row=row_num, column=col_idx, value=value)
+                                        cell.fill = fill
+                                        cell.border = thin_border
+                                        if trip_num in failed_trips:
+                                            cell.font = red_font
+                                    
+                                    row_num += 1
+                                    sep_num += 1
+                            
+                            wb.save(output)
+                            output.seek(0)
+                            
+                        except Exception as e:
+                            st.warning(f"⚠️ ไม่สามารถเขียนทับไฟล์ต้นฉบับได้: {e} - ใช้รูปแบบมาตรฐานแทน")
+                            output = io.BytesIO()
+                            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                                export_df = result_df.copy()
+                                export_df['Trip_No'] = export_df['Trip'].map(lambda x: trip_no_map.get(x, ''))
+                                export_df.to_excel(writer, sheet_name='รายละเอียดทริป', index=False)
+                                summary.to_excel(writer, sheet_name='สรุปทริป', index=False)
+                        
                         st.markdown("---")
                         
-                        # 🗺️ แสดงแผนที่เส้นทาง
+                        # 📥 ดาวน์โหลดผลลัพธ์
+                        st.markdown("### 📥 ดาวน์โหลดผลลัพธ์")
+                        col1, col2, col3 = st.columns([1, 2, 1])
+                        with col2:
+                            st.download_button(
+                                label="📥 ดาวน์โหลดผลลัพธ์ (Excel)",
+                                data=output.getvalue(),
+                                file_name=f"ผลจัดทริป_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True
+                            )
+                        
+                        st.markdown("---")
+                        
+                        # 🗺️ แสดงแผนที่เส้นทาง (อยู่หลังปุ่มดาวน์โหลด)
                         if FOLIUM_AVAILABLE:
                             st.markdown("### 🗺️ แผนที่เส้นทางแต่ละทริป")
                             st.info("💡 เลือกทริปและประเภทรถเพื่อดูเส้นทางบนแผนที่ (ใช้ข้อมูลจาก OpenStreetMap)")
@@ -3567,13 +3690,13 @@ def main():
                                                 points.append([14.5942, 100.6039])
                                                 point_names.append('🏭 DC Wang Noi (กลับ)')
                                                 
-                                                # วาดเส้นทางตามถนนจริง (OSRM)
+                                                # วาดเส้นทางแบบเส้นตรง (เร็วกว่า OSRM มาก)
                                                 for i in range(len(points) - 1):
                                                     start = points[i]
                                                     end = points[i+1]
                                                     
-                                                    # ขอเส้นทางจาก OSRM
-                                                    road_path = get_route_osrm(start[0], start[1], end[0], end[1])
+                                                    # ใช้เส้นตรงแทน OSRM (โหลดเร็วมาก)
+                                                    road_path = [start, end]
                                                     
                                                     # วาดเส้น
                                                     folium.PolyLine(
