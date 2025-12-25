@@ -1,7 +1,8 @@
 import pandas as pd
 
 """
-Logistics Planner 
+Logistics Planner
+Version: 2024-12-25-v2 (Master data only, buffer enforcement)
 """
 
 import streamlit as st
