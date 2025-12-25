@@ -1104,8 +1104,16 @@ def load_master_data():
         
         print(f"✅ โหลด MASTER_DATA: {len(df_from_sheets)} สาขา")
         
-        # 🔍 Debug: แสดงคอลัมน์ที่เกี่ยวข้องกับรถ
-        vehicle_cols = ['MaxTruckType', 'Max Truck Type', 'MaxVehicle', 'Max Vehicle', 'รถสูงสุด', 'Max_Truck_Type']
+        # 🔍 Debug: แสดงคอลัมน์ทั้งหมดที่มี
+        print(f"📋 คอลัมน์ทั้งหมด ({len(df_from_sheets.columns)}): {', '.join(df_from_sheets.columns.tolist())}")
+        
+        # 🔍 Debug: แสดงคอลัมน์ที่เกี่ยวข้องกับรถ (ค้นหาแบบยืดหยุ่น)
+        vehicle_cols = [
+            'MaxTruckType', 'Max Truck Type', 'MaxVehicle', 'Max Vehicle', 
+            'รถสูงสุด', 'Max_Truck_Type', 'max_truck', 'MaxTruck',
+            'ข้อจำกัดรถ', 'Truck', 'truck_type', 'TruckType',
+            'ประเภทรถ', 'Vehicle', 'vehicle_type', 'VehicleType'
+        ]
         found_vehicle_cols = [col for col in vehicle_cols if col in df_from_sheets.columns]
         if found_vehicle_cols:
             print(f"✅ พบคอลัมน์ข้อจำกัดรถ: {', '.join(found_vehicle_cols)}")
@@ -1114,7 +1122,11 @@ def load_master_data():
                 vehicle_counts = df_from_sheets[col].value_counts(dropna=False)
                 print(f"   - {col}: {dict(vehicle_counts)}")
         else:
-            print(f"⚠️ ไม่พบคอลัมน์ข้อจำกัดรถ! คอลัมน์ที่มี: {', '.join(df_from_sheets.columns.tolist()[:10])}...")
+            print(f"⚠️ ไม่พบคอลัมน์ข้อจำกัดรถ!")
+            # ค้นหาคอลัมน์ที่อาจเกี่ยวข้อง
+            for col in df_from_sheets.columns:
+                if 'truck' in col.lower() or 'vehicle' in col.lower() or 'รถ' in col:
+                    print(f"   💡 คอลัมน์ที่อาจเกี่ยวข้อง: '{col}'")
         
         return df_from_sheets
         
@@ -1253,15 +1265,26 @@ def get_max_vehicle_for_branch(branch_code, test_df=None, debug=False):
     if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
         branch_row = MASTER_DATA[MASTER_DATA['Plan Code'].str.strip().str.upper() == branch_code_str]
         if not branch_row.empty:
-            # ลองหาคอลัมน์ข้อจำกัดรถหลายชื่อ
-            possible_cols = ['MaxTruckType', 'Max Truck Type', 'MaxVehicle', 'Max Vehicle', 'รถสูงสุด', 'Max_Truck_Type']
+            # ลองหาคอลัมน์ข้อจำกัดรถหลายชื่อ (เพิ่มแบบยืดหยุ่นมากขึ้น)
+            possible_cols = [
+                'MaxTruckType', 'Max Truck Type', 'MaxVehicle', 'Max Vehicle', 
+                'รถสูงสุด', 'Max_Truck_Type', 'max_truck', 'MaxTruck',
+                'ข้อจำกัดรถ', 'Truck', 'truck_type', 'TruckType',
+                'ประเภทรถ', 'Vehicle', 'vehicle_type', 'VehicleType'
+            ]
             for col in possible_cols:
                 if col in branch_row.columns and pd.notna(branch_row.iloc[0][col]):
                     max_truck = str(branch_row.iloc[0][col]).strip().upper()
-                    if max_truck in ['4W', 'JB', '6W']:
+                    # แปลงชื่อรถหลายแบบ
+                    if max_truck in ['4W', '4 W', '4-W']:
+                        return '4W'
+                    elif max_truck in ['JB', 'J B', 'J-B', '4WJ', '4WJ ']:
+                        return 'JB'
+                    elif max_truck in ['6W', '6 W', '6-W']:
+                        return '6W'
+                    elif max_truck and max_truck not in ['', 'NAN', 'NONE', '-']:
                         if debug:
-                            print(f"✅ Branch {branch_code_str}: Max Vehicle = {max_truck} (from Master Data column '{col}')")
-                        return max_truck
+                            print(f"⚠️ Branch {branch_code_str}: ค่าข้อจำกัดรถไม่รู้จัก '{max_truck}' จากคอลัมน์ '{col}'")
     
     # Default: ไม่มีข้อจำกัด = ใช้รถใหญ่ได้
     return '6W'
@@ -3780,16 +3803,16 @@ def main():
                                                     # เส้นตรง (เร็ว)
                                                     folium.PolyLine(points, color=trip_color, weight=3, opacity=0.6).add_to(m)
                                                 
-                                                # ปักหมุดแต่ละจุด (ไม่มี DC)
+                                                # ปักหมุดแต่ละจุด (ไม่มี DC) - ใส่เลขทริปที่ icon
                                                 for i, (point, name) in enumerate(zip(points, point_names)):
-                                                    # สาขา
-                                                    icon_config = folium.Icon(color=trip_color, icon='store', prefix='fa')
+                                                    # ใช้ DivIcon เพื่อแสดงเลขทริปชัดเจน
+                                                    trip_label = f'<div style="background-color:{trip_color};color:white;border-radius:50%;width:24px;height:24px;text-align:center;line-height:24px;font-weight:bold;font-size:12px;border:2px solid white;box-shadow:2px 2px 4px rgba(0,0,0,0.3);">T{trip_id}</div>'
                                                     
                                                     folium.Marker(
                                                         location=point,
-                                                        popup=folium.Popup(f"<b>Trip {trip_id}</b><br>{i+1}. {name}<br>รถ: {truck_info}", max_width=200),
-                                                        tooltip=f"{i+1}. {name}",
-                                                        icon=icon_config
+                                                        popup=folium.Popup(f"<b>🚚 Trip {trip_id}</b><br><b>{i+1}. {name}</b><br>รถ: {truck_info}", max_width=250),
+                                                        tooltip=f"Trip {trip_id} - {i+1}. {name}",
+                                                        icon=folium.DivIcon(html=trip_label)
                                                     ).add_to(m)
                                             
                                             # แสดงแผนที่
