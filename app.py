@@ -3657,12 +3657,11 @@ def main():
                         
                         st.markdown("---")
                         
-                        # 🗺️ แสดงแผนที่เส้นทาง (อยู่หลังปุ่มดาวน์โหลด)
+                        # 🗺️ แผนที่เส้นทาง - ใส่ใน expander เพื่อไม่โหลดอัตโนมัติ (เร็วขึ้น)
                         if FOLIUM_AVAILABLE:
-                            st.markdown("### 🗺️ แผนที่เส้นทางแต่ละทริป")
-                            
-                            # ตัวกรอง
-                            col_filter1, col_filter2, col_filter3 = st.columns([1, 1, 1])
+                            with st.expander("🗺️ แผนที่เส้นทางแต่ละทริป (คลิกเพื่อแสดง)", expanded=False):
+                                # ตัวกรอง
+                                col_filter1, col_filter2, col_filter3 = st.columns([1, 1, 1])
                             
                             with col_filter1:
                                 # กรองตามเลขทริป
@@ -3717,11 +3716,11 @@ def main():
                                                 tiles='OpenStreetMap'
                                             )
                                             
-                                            # สี palette สำหรับแต่ละทริป
-                                            colors = ['blue', 'red', 'green', 'purple', 'orange', 'darkred', 
-                                                     'lightred', 'beige', 'darkblue', 'darkgreen', 'cadetblue', 
-                                                     'darkpurple', 'pink', 'lightblue', 'lightgreen', 'gray', 
-                                                     'black', 'lightgray']
+                                            # สี palette สำหรับแต่ละทริป - ใช้สีเข้มเห็นชัด
+                                            colors = ['#e41a1c', '#377eb8', '#4daf4a', '#984ea3', '#ff7f00', 
+                                                     '#a65628', '#f781bf', '#1b9e77', '#d95f02', '#7570b3',
+                                                     '#e7298a', '#66a61e', '#e6ab02', '#a6761d', '#666666',
+                                                     '#1f78b4', '#33a02c', '#fb9a99']
                                             
                                             # วนลูปแต่ละทริป
                                             for idx, trip_id in enumerate(sorted(valid_coords['Trip'].unique())):
@@ -3756,8 +3755,8 @@ def main():
                                                 
                                                 # ปักหมุดแต่ละจุด (ไม่ลากเส้น) - ใส่เลขทริปที่ icon
                                                 for i, (point, name) in enumerate(zip(points, point_names)):
-                                                    # ใช้ DivIcon เพื่อแสดงเลขทริปชัดเจน
-                                                    trip_label = f'<div style="background-color:{trip_color};color:white;border-radius:50%;width:24px;height:24px;text-align:center;line-height:24px;font-weight:bold;font-size:12px;border:2px solid white;box-shadow:2px 2px 4px rgba(0,0,0,0.3);">T{trip_id}</div>'
+                                                    # ใช้ DivIcon เพื่อแสดงเลขทริปชัดเจน - พื้นสีเข้ม border ดำหนา
+                                                    trip_label = f'<div style="background-color:{trip_color};color:#fff;border-radius:50%;width:30px;height:30px;text-align:center;line-height:30px;font-weight:bold;font-size:12px;border:3px solid #000;box-shadow:3px 3px 8px rgba(0,0,0,0.6);text-shadow:1px 1px 2px #000;">{trip_id}</div>'
                                                     
                                                     folium.Marker(
                                                         location=point,
