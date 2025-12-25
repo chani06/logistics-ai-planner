@@ -2828,11 +2828,17 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         # 🚨 FALLBACK: ถ้าหารถไม่เจอเลย
         if debug:
             print(f"⚠️ หารถไม่เจอ: w={weight:.1f}, c={cube:.2f}, drops={drops}")
+            print(f"  allowed_vehicles: {allowed_vehicles}")
             for r in reasons:
                 print(f"  - {r}")
         
+        # เช็คว่า allowed_vehicles ว่างหรือไม่
+        if not allowed_vehicles:
+            if debug:
+                print(f"  ⚠️ allowed_vehicles ว่าง → Fallback: ใช้ 6W")
+            return '6W'  # ถ้าไม่มีข้อจำกัด ใช้ 6W
+        
         # เช็คว่าโหลดเกินมากเกินไปหรือไม่ (>150% ของรถที่ใหญ่ที่สุดใน allowed)
-        # ถ้าเกินมาก → ไม่ควร fallback (ต้อง split ทริป)
         limits_to_check = PUNTHAI_LIMITS if is_punthai else LIMITS
         largest_allowed = None
         if '6W' in allowed_vehicles:
@@ -2848,10 +2854,18 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             cube_ratio = cube / (max_lim['max_c'] * buffer_mult)
             max_ratio = max(weight_ratio, cube_ratio)
             
-            # ถ้าโหลดเกิน 150% ของรถที่ใหญ่ที่สุด → ห้าม fallback (ต้อง split)
+            # ถ้าโหลดเกิน 150% ของรถที่ใหญ่ที่สุด → พยายาม override ก่อน
             if max_ratio > 1.5:
                 if debug:
-                    print(f"  ❌ โหลดเกิน 150% ({max_ratio:.0%}) → ต้อง split ทริป")
+                    print(f"  ⚠️ โหลดเกิน 150% ({max_ratio:.0%})")
+                # ถ้ามี MaxVehicle จำกัด → override ใช้ 6W
+                if '6W' not in allowed_vehicles:
+                    if debug:
+                        print(f"  → Override MaxVehicle: บังคับใช้ 6W")
+                    return '6W'
+                # ถ้ามี 6W แล้วยังเกิน → return None เพื่อ split
+                if debug:
+                    print(f"  ❌ โหลดเกิน 6W ({max_ratio:.0%}) → ต้อง split ทริป")
                 return None
             
             # ถ้าโหลดเกิน 100% แต่ไม่ถึง 150% → override MaxVehicle และใช้รถใหญ่กว่า
@@ -2871,7 +2885,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 print(f"  → Fallback: ใช้ {largest_allowed}")
             return largest_allowed
         
-        return None
+        # Fallback สุดท้าย: ถ้าไม่มีรถเลย ใช้ 6W
+        if debug:
+            print(f"  → Fallback สุดท้าย: ใช้ 6W")
+        return '6W'
     
     # Helper function: เช็ค Geographic Spread ภายในทริป
     def check_intra_trip_spread(trip_codes_list):
