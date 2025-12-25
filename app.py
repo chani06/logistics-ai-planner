@@ -3090,126 +3090,140 @@ def main():
                                 maxmart_buffer=maxmart_buffer_value
                             )
                             
+                            # 💾 เก็บผลลัพธ์ใน session_state เพื่อใช้ตอน export
+                            st.session_state['trip_result'] = result_df
+                            st.session_state['trip_summary'] = summary
+                            st.session_state['trip_buffers'] = {
+                                'punthai': punthai_buffer_value,
+                                'maxmart': maxmart_buffer_value
+                            }
+                            
                             st.write("✅ จัดทริปเสร็จสิ้น!")
                             status.update(label="✅ ประมวลผลเสร็จสมบูรณ์!", state="complete", expanded=False)
-                            
-                            # ตรวจสอบสาขาที่ไม่ได้จัดทริป (Trip = 0)
-                            unassigned_count = len(result_df[result_df['Trip'] == 0])
-                            if unassigned_count > 0:
-                                st.warning(f"⚠️ มี {unassigned_count} สาขาที่ไม่ได้จัดทริป (Trip = 0)")
-                            
-                            # กรองเฉพาะสาขาที่จัดทริปแล้ว สำหรับการแสดงผล
-                            assigned_df = result_df[result_df['Trip'] > 0].copy()
-                            
-                            st.balloons()
-                            st.success(f"✅ **จัดทริปเสร็จสมบูรณ์!** รวม **{len(summary)}** ทริป ({len(assigned_df)} สาขา)")
-                            
-                            st.markdown("---")
-                            
-                            # สถิติโดยรวม
-                            st.markdown("### 📊 สรุปผลการจัดทริป")
-                            
-                            col1, col2, col3, col4 = st.columns(4)
-                            with col1:
-                                st.metric("🚚 จำนวนทริป", len(summary))
-                            with col2:
-                                st.metric("📍 จำนวนสาขา", len(assigned_df))
-                            with col3:
-                                avg_branches = len(assigned_df) / max(1, assigned_df['Trip'].nunique())
-                                st.metric("📊 เฉลี่ยสาขา/ทริป", f"{avg_branches:.1f}")
-                            with col4:
-                                avg_util = summary['Cube_Use%'].mean() if len(summary) > 0 else 0
-                                st.metric("📈 การใช้รถเฉลี่ย", f"{avg_util:.0f}%")
-                            
-                            st.info("💡 ทริปทั้งหมดจัดตาม Buffer (100% สำหรับ Punthai, 110% สำหรับ Maxmart)")
-                            
-                            st.markdown("---")
-                            
-                            # ตารางสรุปแต่ละทริป
-                            st.markdown("### 🚛 รายละเอียดแต่ละทริป")
-                            
-                            # ตรวจสอบว่า summary มีคอลัมน์ที่ต้องการหรือไม่
-                            format_dict = {}
-                            gradient_cols = []
-                            
-                            if 'Weight' in summary.columns:
-                                format_dict['Weight'] = '{:.2f}'
-                            if 'Cube' in summary.columns:
-                                format_dict['Cube'] = '{:.2f}'
-                            if 'Weight_Use%' in summary.columns:
-                                format_dict['Weight_Use%'] = '{:.1f}%'
-                                gradient_cols.append('Weight_Use%')
-                            if 'Cube_Use%' in summary.columns:
-                                format_dict['Cube_Use%'] = '{:.1f}%'
-                                gradient_cols.append('Cube_Use%')
-                            if 'Total_Distance' in summary.columns:
-                                format_dict['Total_Distance'] = '{:.1f} km'
-                            
-                            # สร้าง styled dataframe
-                            if format_dict:
-                                styled_df = summary.style.format(format_dict)
-                                if gradient_cols:
-                                    styled_df = styled_df.background_gradient(
-                                        subset=gradient_cols,
-                                        cmap='RdYlGn',
-                                        vmin=0,
-                                        vmax=100
-                                    )
-                                st.dataframe(styled_df, use_container_width=True, height=400)
-                            else:
-                                st.dataframe(summary, use_container_width=True, height=400)
-                            
-                            # ตารางรายละเอียดทั้งหมด (มีคอลัมน์รถและระยะทาง)
-                            with st.expander("📋 ดูรายละเอียดรายสาขา (เรียงตามน้ำหนัก)"):
-                                # จัดเรียงคอลัมน์ที่สำคัญ
-                                display_cols = ['Trip', 'Code', 'Name']
-                                if 'Province' in result_df.columns:
-                                    display_cols.append('Province')
-                                if 'Region' in result_df.columns:
-                                    display_cols.append('Region')
-                                display_cols.extend(['Max_Distance_in_Trip', 'Weight', 'Cube', 'Truck', 'VehicleCheck'])
-                                
-                                # กรองคอลัมน์ที่มีอยู่จริง
-                                display_cols = [col for col in display_cols if col in result_df.columns]
-                                display_df = result_df[display_cols].copy()
-                                
-                                # ตั้งชื่อคอลัมน์ภาษาไทย
-                                col_names = {'Trip': 'ทริป', 'Code': 'รหัส', 'Name': 'ชื่อสาขา', 'Province': 'จังหวัด', 
-                                           'Region': 'ภาค', 'Max_Distance_in_Trip': 'ระยะทาง Max(km)', 
-                                           'Weight': 'น้ำหนัก(kg)', 'Cube': 'คิว(m³)', 'Truck': 'รถ', 'VehicleCheck': 'ตรวจสอบรถ'}
-                                display_df.columns = [col_names.get(c, c) for c in display_cols]
-                                
-                                # จัดรูปแบบคอลัมน์ระยะทาง
-                                st.dataframe(
-                                    display_df.style.format({
-                                        'ระยะทาง(km)': '{:.1f}',
-                                        'น้ำหนัก(kg)': '{:.2f}',
-                                        'คิว(m³)': '{:.2f}'
-                                    }),
-                                    use_container_width=True, 
-                                    height=400
+                    
+                    # 📊 แสดงผลลัพธ์ถ้ามีข้อมูลใน session_state
+                    if 'trip_result' in st.session_state and 'trip_summary' in st.session_state:
+                        result_df = st.session_state['trip_result']
+                        summary = st.session_state['trip_summary']
+                        
+                        # ตรวจสอบสาขาที่ไม่ได้จัดทริป (Trip = 0)
+                        unassigned_count = len(result_df[result_df['Trip'] == 0])
+                        if unassigned_count > 0:
+                            st.warning(f"⚠️ มี {unassigned_count} สาขาที่ไม่ได้จัดทริป (Trip = 0)")
+                        
+                        # กรองเฉพาะสาขาที่จัดทริปแล้ว สำหรับการแสดงผล
+                        assigned_df = result_df[result_df['Trip'] > 0].copy()
+                        
+                        st.balloons()
+                        st.success(f"✅ **จัดทริปเสร็จสมบูรณ์!** รวม **{len(summary)}** ทริป ({len(assigned_df)} สาขา)")
+                        
+                        st.markdown("---")
+                        
+                        # สถิติโดยรวม
+                        st.markdown("### 📊 สรุปผลการจัดทริป")
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric("🚚 จำนวนทริป", len(summary))
+                        with col2:
+                            st.metric("📍 จำนวนสาขา", len(assigned_df))
+                        with col3:
+                            avg_branches = len(assigned_df) / max(1, assigned_df['Trip'].nunique())
+                            st.metric("📊 เฉลี่ยสาขา/ทริป", f"{avg_branches:.1f}")
+                        with col4:
+                            avg_util = summary['Cube_Use%'].mean() if len(summary) > 0 else 0
+                            st.metric("📈 การใช้รถเฉลี่ย", f"{avg_util:.0f}%")
+                        
+                        buffers = st.session_state.get('trip_buffers', {'punthai': 1.0, 'maxmart': 1.1})
+                        st.info(f"💡 ทริปทั้งหมดจัดตาม Buffer ({int(buffers['punthai']*100)}% สำหรับ Punthai, {int(buffers['maxmart']*100)}% สำหรับ Maxmart)")
+                        
+                        st.markdown("---")
+                        
+                        # ตารางสรุปแต่ละทริป
+                        st.markdown("### 🚛 รายละเอียดแต่ละทริป")
+                        
+                        # ตรวจสอบว่า summary มีคอลัมน์ที่ต้องการหรือไม่
+                        format_dict = {}
+                        gradient_cols = []
+                        
+                        if 'Weight' in summary.columns:
+                            format_dict['Weight'] = '{:.2f}'
+                        if 'Cube' in summary.columns:
+                            format_dict['Cube'] = '{:.2f}'
+                        if 'Weight_Use%' in summary.columns:
+                            format_dict['Weight_Use%'] = '{:.1f}%'
+                            gradient_cols.append('Weight_Use%')
+                        if 'Cube_Use%' in summary.columns:
+                            format_dict['Cube_Use%'] = '{:.1f}%'
+                            gradient_cols.append('Cube_Use%')
+                        if 'Total_Distance' in summary.columns:
+                            format_dict['Total_Distance'] = '{:.1f} km'
+                        
+                        # สร้าง styled dataframe
+                        if format_dict:
+                            styled_df = summary.style.format(format_dict)
+                            if gradient_cols:
+                                styled_df = styled_df.background_gradient(
+                                    subset=gradient_cols,
+                                    cmap='RdYlGn',
+                                    vmin=0,
+                                    vmax=100
                                 )
+                            st.dataframe(styled_df, use_container_width=True, height=400)
+                        else:
+                            st.dataframe(summary, use_container_width=True, height=400)
+                        
+                        # ตารางรายละเอียดทั้งหมด (มีคอลัมน์รถและระยะทาง)
+                        with st.expander("📋 ดูรายละเอียดรายสาขา (เรียงตามน้ำหนัก)"):
+                            # จัดเรียงคอลัมน์ที่สำคัญ
+                            display_cols = ['Trip', 'Code', 'Name']
+                            if 'Province' in result_df.columns:
+                                display_cols.append('Province')
+                            if 'Region' in result_df.columns:
+                                display_cols.append('Region')
+                            display_cols.extend(['Max_Distance_in_Trip', 'Weight', 'Cube', 'Truck', 'VehicleCheck'])
                             
-                            # แสดงสาขาที่มีคำเตือน
-                            warning_branches = result_df[result_df['VehicleCheck'].str.contains('⚠️', na=False)]
-                            if len(warning_branches) > 0:
-                                with st.expander(f"⚠️ สาขาที่ใช้รถต่างจากปกติ ({len(warning_branches)} สาขา)"):
-                                    st.warning("สาขาเหล่านี้ปกติใช้รถประเภทอื่น แต่ถูกจัดให้ใช้รถประเภทที่ต่างออกไป")
-                                    display_cols_warn = ['Trip', 'Code', 'Name', 'Truck', 'VehicleCheck']
-                                    display_warn_df = warning_branches[display_cols_warn].copy()
-                                    display_warn_df.columns = ['ทริป', 'รหัส', 'ชื่อสาขา', 'รถที่จัด', 'ประวัติการใช้รถ']
-                                    st.dataframe(display_warn_df, use_container_width=True)
+                            # กรองคอลัมน์ที่มีอยู่จริง
+                            display_cols = [col for col in display_cols if col in result_df.columns]
+                            display_df = result_df[display_cols].copy()
                             
-                            st.markdown("---")
+                            # ตั้งชื่อคอลัมน์ภาษาไทย
+                            col_names = {'Trip': 'ทริป', 'Code': 'รหัส', 'Name': 'ชื่อสาขา', 'Province': 'จังหวัด', 
+                                       'Region': 'ภาค', 'Max_Distance_in_Trip': 'ระยะทาง Max(km)', 
+                                       'Weight': 'น้ำหนัก(kg)', 'Cube': 'คิว(m³)', 'Truck': 'รถ', 'VehicleCheck': 'ตรวจสอบรถ'}
+                            display_df.columns = [col_names.get(c, c) for c in display_cols]
                             
-                            # ดาวน์โหลด - เขียนทับชีต 2.Punthai ในไฟล์ต้นฉบับ พร้อมสลับสีเหลืองโทนส้ม-ขาว
-                            from openpyxl import load_workbook
-                            from openpyxl.styles import PatternFill, Font, Border, Side
-                            
-                            output = io.BytesIO()
-                            
-                            # สร้าง location_map จาก MASTER_DATA
-                            location_map = {}
+                            # จัดรูปแบบคอลัมน์ระยะทาง
+                            st.dataframe(
+                                display_df.style.format({
+                                    'ระยะทาง(km)': '{:.1f}',
+                                    'น้ำหนัก(kg)': '{:.2f}',
+                                    'คิว(m³)': '{:.2f}'
+                                }),
+                                use_container_width=True, 
+                                height=400
+                            )
+                        
+                        # แสดงสาขาที่มีคำเตือน
+                        warning_branches = result_df[result_df['VehicleCheck'].str.contains('⚠️', na=False)]
+                        if len(warning_branches) > 0:
+                            with st.expander(f"⚠️ สาขาที่ใช้รถต่างจากปกติ ({len(warning_branches)} สาขา)"):
+                                st.warning("สาขาเหล่านี้ปกติใช้รถประเภทอื่น แต่ถูกจัดให้ใช้รถประเภทที่ต่างออกไป")
+                                display_cols_warn = ['Trip', 'Code', 'Name', 'Truck', 'VehicleCheck']
+                                display_warn_df = warning_branches[display_cols_warn].copy()
+                                display_warn_df.columns = ['ทริป', 'รหัส', 'ชื่อสาขา', 'รถที่จัด', 'ประวัติการใช้รถ']
+                                st.dataframe(display_warn_df, use_container_width=True)
+                        
+                        st.markdown("---")
+                        
+                        # ดาวน์โหลด - เขียนทับชีต 2.Punthai ในไฟล์ต้นฉบับ พร้อมสลับสีเหลืองโทนส้ม-ขาว
+                        from openpyxl import load_workbook
+                        from openpyxl.styles import PatternFill, Font, Border, Side
+                        
+                        output = io.BytesIO()
+                        
+                        # สร้าง location_map จาก MASTER_DATA
+                        location_map = {}
                             if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
                                 for _, row in MASTER_DATA.iterrows():
                                     code = str(row.get('Plan Code', '')).strip().upper()
