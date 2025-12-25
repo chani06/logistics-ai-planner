@@ -1819,16 +1819,31 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     vehicle_priority_map = {'4W': 1, 'JB': 2, '6W': 3}
     df['_vehicle_priority'] = df['_max_vehicle'].map(vehicle_priority_map).fillna(3)
     
-    # 🎯 Sort: Vehicle Priority (4W ก่อน) + LIFO Zone Routing (ไกล→ใกล้)
-    # 1. สาขา 4W ก่อน (Priority 1)
-    # 2. โซนโลจิสติกส์ไกลก่อน (Zone Priority 1-99)
-    # 3. ภาคไกลก่อน (Region Order)
-    # 4. จังหวัดที่มีจุดไกลสุดก่อน (Prov Max Dist Desc)
-    # 5. อำเภอที่มีจุดไกลสุดก่อน (Dist Max Dist Desc)
-    # 6. ระยะทางไกลก่อน (Distance Desc)
+    # 🎯 Sort: Vehicle Priority (4W ก่อน) + เน้นโซนย่อยไปหลัก (ตำบล→อำเภอ→จังหวัด→Logistics Zone→ภาค)
+    # หลักการ: ข้อจำกัดรถมากก่อน (4W) แล้วจัดกลุ่มตามความใกล้ชิดทางภูมิศาสตร์แบบ hierarchical
+    # 1. สาขาที่มีข้อจำกัดมาก (4W) จัดก่อน → ดึงสาขาใกล้เคียงมาใส่จนเต็ม
+    # 2. จัดกลุ่ม JB → ดึงสาขาใกล้เคียงมาใส่จนเต็ม
+    # 3. จัดกลุ่ม 6W สุดท้าย → ถ้าเหลือน้อยให้ downgrade เป็น 4W ได้
+    # 4. ภายในกลุ่มรถเดียวกัน: เรียงตามโซนย่อยก่อน (ตำบล→อำเภอ→จังหวัด→Logistics Zone→ภาค)
     df = df.sort_values(
-        ['_vehicle_priority', '_zone_priority', '_region_order', '_prov_max_dist', '_dist_max_dist', '_sum_code', '_route', '_distance_from_dc'],
-        ascending=[True, True, True, False, False, True, True, False]  # 4W + Zone + ไกลมาใกล้
+        [
+            '_vehicle_priority',    # 1. ข้อจำกัดรถ: 4W(1) < JB(2) < 6W(3) - จัดกลุ่มที่มีข้อจำกัดก่อน
+            '_region_order',        # 2. ภาคไกลก่อน (เหนือ→อีสาน→ใต้→กลาง)
+            '_zone_priority',       # 3. Logistics Zone ไกลก่อน (ภายในภาค)
+            '_province',            # 4. จังหวัด - จัดกลุ่มจังหวัดเดียวกัน
+            '_district',            # 5. อำเภอ - จัดกลุ่มอำเภอเดียวกัน
+            '_subdistrict',         # 6. ตำบล - จัดกลุ่มตำบลเดียวกัน (โซนย่อยสุด)
+            '_distance_from_dc'     # 7. ระยะทางไกลก่อน (LIFO - ส่งไกลก่อนใกล้ทีหลัง)
+        ],
+        ascending=[
+            True,   # ข้อจำกัดมากก่อน (4W ก่อน JB ก่อน 6W)
+            True,   # ภาคไกลก่อน (1=เหนือ, 6=กลาง)
+            True,   # Logistics Zone ไกลก่อน
+            True,   # จังหวัดเรียง A-Z (กลุ่มเดียวกัน)
+            True,   # อำเภอเรียง A-Z (กลุ่มเดียวกัน)
+            True,   # ตำบลเรียง A-Z (กลุ่มเดียวกัน)
+            False   # ไกลมาใกล้ (LIFO - desc)
+        ]
     ).reset_index(drop=True)
     
     # ==========================================
@@ -2225,10 +2240,17 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         if not remaining_groups:
             break
         
-        # 🌍 เลือกตำบลที่ใกล้ที่สุดจากทริปปัจจุบัน (หรือ DC ถ้าทริปว่าง)
-        # 🎯 ลำดับความสำคัญ: 1) Zone เดียวกัน (ใกล้ที่สุด) → 2) ข้าม Zone (ใกล้ที่สุด)
+        # 🌍 เลือกตำบลที่ใกล้ที่สุดจากทริปปัจจุบัน - เน้นโซนย่อยก่อน
+        # 🎯 ลำดับความสำคัญ:
+        # 1) ตำบลเดียวกัน (ต่อเนื่อง) → 2) อำเภอเดียวกัน → 3) จังหวัดเดียวกัน → 4) Zone เดียวกัน → 5) ข้าม Zone
         best_idx = None
         best_distance = float('inf')
+        best_idx_same_district = None
+        best_distance_same_district = float('inf')
+        best_idx_same_province = None
+        best_distance_same_province = float('inf')
+        best_idx_same_zone = None
+        best_distance_same_zone = float('inf')
         best_idx_cross_zone = None
         best_distance_cross_zone = float('inf')
         
@@ -2238,7 +2260,13 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             current_lat = current_trip_df['_lat'].mean()
             current_lon = current_trip_df['_lon'].mean()
             
-            # 🔍 หา Logistics Zone ของทริปปัจจุบัน
+            # 🔍 หาข้อมูลโซนของทริปปัจจุบัน
+            current_provinces = current_trip_df['_province'].dropna().unique()
+            current_province = current_provinces[0] if len(current_provinces) > 0 else None
+            current_districts = current_trip_df['_district'].dropna().unique()
+            current_district = current_districts[0] if len(current_districts) > 0 else None
+            current_subdistricts = current_trip_df['_subdistrict'].dropna().unique()
+            current_subdistrict = current_subdistricts[0] if len(current_subdistricts) > 0 else None
             current_zones = current_trip_df['_logistics_zone'].dropna().unique()
             current_zone = current_zones[0] if len(current_zones) > 0 else None
             
@@ -2257,21 +2285,41 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     sub_zones = subdistrict_df['_logistics_zone'].dropna().unique()
                     sub_zone = sub_zones[0] if len(sub_zones) > 0 else None
                     
-                    # ⭐ ลำดับแรก: เลือกใน Zone เดียวกันก่อน (ที่ใกล้ที่สุด)
-                    if current_zone and sub_zone and current_zone == sub_zone:
+                    # ⭐ ลำดับที่ 1: ตำบลเดียวกัน (ต่อเนื่อง)
+                    if current_subdistrict and subdistrict and current_subdistrict == subdistrict:
                         if distance < best_distance:
                             best_distance = distance
                             best_idx = i
+                    # ⭐ ลำดับที่ 2: อำเภอเดียวกัน (ตำบลติดกัน)
+                    elif current_district and district and current_district == district and current_province == province:
+                        if distance < best_distance_same_district:
+                            best_distance_same_district = distance
+                            best_idx_same_district = i
+                    # ⭐ ลำดับที่ 3: จังหวัดเดียวกัน (อำเภอติดกัน)
+                    elif current_province and province and current_province == province:
+                        if distance < best_distance_same_province:
+                            best_distance_same_province = distance
+                            best_idx_same_province = i
+                    # ⭐ ลำดับที่ 4: Logistics Zone เดียวกัน (จังหวัดในโซนเดียวกัน)
+                    elif current_zone and sub_zone and current_zone == sub_zone:
+                        if distance < best_distance_same_zone:
+                            best_distance_same_zone = distance
+                            best_idx_same_zone = i
+                    # 💾 ลำดับที่ 5: ข้าม Zone (backup สุดท้าย)
                     else:
-                        # 💾 เก็บตัวเลือกข้าม Zone ไว้ (backup)
                         if distance < best_distance_cross_zone:
                             best_distance_cross_zone = distance
                             best_idx_cross_zone = i
             
-            # ⭐ ถ้าไม่เจอใน Zone เดียวกัน → ใช้ตัวเลือกข้าม Zone
+            # ⭐ เลือกตามลำดับความสำคัญ: ตำบลเดียวกัน → อำเภอเดียวกัน → จังหวัดเดียวกัน → Zone เดียวกัน → ข้าม Zone
+            if best_idx is None and best_idx_same_district is not None:
+                best_idx = best_idx_same_district
+            if best_idx is None and best_idx_same_province is not None:
+                best_idx = best_idx_same_province
+            if best_idx is None and best_idx_same_zone is not None:
+                best_idx = best_idx_same_zone
             if best_idx is None and best_idx_cross_zone is not None:
                 best_idx = best_idx_cross_zone
-                best_distance = best_distance_cross_zone
             
             # ถ้าไม่เจอเลย (ไม่มีพิกัด) → เลือกตัวแรก
             if best_idx is None:
@@ -2695,9 +2743,36 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             current_util = max(w_util, c_util)
             
             # ถ้า utilization ต่ำกว่า MIN_VEHICLE_UTILIZATION และสามารถใช้รถเล็กกว่าได้
-            min_util_threshold = MIN_VEHICLE_UTILIZATION * 100  # 70%
+            min_util_threshold = MIN_VEHICLE_UTILIZATION * 100
             if current_util < min_util_threshold:
-                # ลองใช้รถเล็กกว่า
+                # 🔽 ลองดาวน์เกรด: 6W → JB → 4W (เมื่อหมดสาขาแล้วจริงๆ)
+                if suggested == '6W':
+                    # ลอง JB
+                    if 'JB' in max_vehicles:
+                        jb_lim = limits_to_check['JB']
+                        if total_w <= jb_lim['max_w'] * buffer and total_c <= jb_lim['max_c'] * buffer:
+                            suggested = 'JB'
+                            source = "🔽 Downgrade (หมดสาขา)"
+                        else:
+                            # ลอง 4W
+                            if '4W' in max_vehicles:
+                                fw_lim = limits_to_check['4W']
+                                if total_w <= fw_lim['max_w'] * buffer and total_c <= fw_lim['max_c'] * buffer:
+                                    suggested = '4W'
+                                    source = "🔽 Downgrade (หมดสาขา)"
+                    elif '4W' in max_vehicles:
+                        # ไม่มี JB ลองข้ามไป 4W เลย
+                        fw_lim = limits_to_check['4W']
+                        if total_w <= fw_lim['max_w'] * buffer and total_c <= fw_lim['max_c'] * buffer:
+                            suggested = '4W'
+                            source = "🔽 Downgrade (หมดสาขา)"
+                elif suggested == 'JB':
+                    # ลอง 4W
+                    if '4W' in max_vehicles:
+                        fw_lim = limits_to_check['4W']
+                        if total_w <= fw_lim['max_w'] * buffer and total_c <= fw_lim['max_c'] * buffer:
+                            suggested = '4W'
+                            source = "🔽 Downgrade (หมดสาขา)"
                 if suggested == '6W' and 'JB' in max_vehicles:
                     jb_w_util = (total_w / limits_to_check['JB']['max_w']) * 100
                     jb_c_util = (total_c / limits_to_check['JB']['max_c']) * 100
