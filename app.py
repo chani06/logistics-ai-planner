@@ -2126,16 +2126,26 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                         # Double check
                         split_until_fits(allowed_vehicles, region)
                     else:
-                        # ไม่พอดี → พยายามปิดทริปเก่า (force=True เพราะเต็มแล้ว), เริ่มใหม่
-                        if finalize_current_trip(force=True):
+                        # ไม่พอดี → ตรวจสอบ util ก่อนปิดทริป
+                        limits = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
+                        weight_util = (current_trip['weight'] / limits['max_w']) * 100 if limits['max_w'] > 0 else 0
+                        cube_util = (current_trip['cube'] / limits['max_c']) * 100 if limits['max_c'] > 0 else 0
+                        max_util = max(weight_util, cube_util)
+                        
+                        # ถ้า util >= 75% → ปิดทริปได้ (เกือบเต็ม)
+                        if max_util >= 75.0:
+                            finalize_current_trip(force=True)
                             trip_counter += 1
                         else:
-                            # ถ้าปิดไม่ได้ (ยังไม่เต็มพอ) → บังคับเพิ่มเข้าไปอยู่ดี
-                            current_trip['codes'].append(code)
-                            current_trip['weight'] = test_weight
-                            current_trip['cube'] = test_cube
-                            current_trip['drops'] = test_drops
-                            trip_counter += 1
+                            # ยังไม่เต็ม → เก็บไว้ใน overflow เพื่อรอรวมกับสาขาอื่น
+                            for c in current_trip['codes']:
+                                overflow_queue.append({
+                                    'code': c,
+                                    'weight': df.loc[df['Code'] == c, 'Weight'].iloc[0],
+                                    'cube': df.loc[df['Code'] == c, 'Cube'].iloc[0],
+                                    'region': current_trip['region'],
+                                    'allowed_vehicles': current_trip['allowed_vehicles']
+                                })
                         new_allowed = get_allowed_from_codes([code], allowed_vehicles)
                         current_trip = {
                             'codes': [code],
@@ -2148,9 +2158,25 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                             'is_punthai': branch_bu_cache.get(code, False)
                         }
                 else:
-                    # ❌ ไม่ผ่าน Zone/Cross-Zone Check → ปิดทริปเก่า, เริ่มใหม่
-                    finalize_current_trip(force=True)
-                    trip_counter += 1
+                    # ❌ ไม่ผ่าน Zone/Cross-Zone Check → เช็ค util ก่อนปิดทริป
+                    limits = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
+                    weight_util = (current_trip['weight'] / limits['max_w']) * 100 if limits['max_w'] > 0 else 0
+                    cube_util = (current_trip['cube'] / limits['max_c']) * 100 if limits['max_c'] > 0 else 0
+                    max_util = max(weight_util, cube_util)
+                    
+                    if max_util >= 75.0:
+                        finalize_current_trip(force=True)
+                        trip_counter += 1
+                    else:
+                        # ยังไม่เต็ม → เก็บไว้ใน overflow
+                        for c in current_trip['codes']:
+                            overflow_queue.append({
+                                'code': c,
+                                'weight': df.loc[df['Code'] == c, 'Weight'].iloc[0],
+                                'cube': df.loc[df['Code'] == c, 'Cube'].iloc[0],
+                                'region': current_trip['region'],
+                                'allowed_vehicles': current_trip['allowed_vehicles']
+                            })
                     new_allowed = get_allowed_from_codes([code], allowed_vehicles)
                     current_trip = {
                         'codes': [code],
@@ -2400,12 +2426,31 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         allowed_vehicles = ['4W', 'JB', '6W']
         
         # ==========================================
-        # Rule 0: Region Change → ปิดทริปเก่า + process overflow
+        # Rule 0: Region Change → เช็ค util ก่อนปิดทริป + process overflow
         # ==========================================
         if current_trip['region'] and current_trip['region'] != region:
             process_overflow_queue()
-            finalize_current_trip(force=True)
-            trip_counter += 1
+            
+            # เช็ค util ก่อนปิด
+            limits = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
+            weight_util = (current_trip['weight'] / limits['max_w']) * 100 if limits['max_w'] > 0 else 0
+            cube_util = (current_trip['cube'] / limits['max_c']) * 100 if limits['max_c'] > 0 else 0
+            max_util = max(weight_util, cube_util)
+            
+            if max_util >= 75.0:
+                finalize_current_trip(force=True)
+                trip_counter += 1
+            else:
+                # ยังไม่เต็ม → เก็บไว้ใน overflow
+                for c in current_trip['codes']:
+                    overflow_queue.append({
+                        'code': c,
+                        'weight': df.loc[df['Code'] == c, 'Weight'].iloc[0],
+                        'cube': df.loc[df['Code'] == c, 'Cube'].iloc[0],
+                        'region': current_trip['region'],
+                        'allowed_vehicles': current_trip['allowed_vehicles']
+                    })
+            
             current_trip = {
                 'codes': [], 'weight': 0, 'cube': 0, 'drops': 0,
                 'region': None, 'allowed_vehicles': allowed_vehicles,
@@ -2576,10 +2621,26 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             else:
                 vehicle = None  # Force split due to geographic/province rule
             
-            # 🔥 ถ้าต้อง force_finalize (เปลี่ยนตำบล/อำเภอแต่ยังมีเหลือ) → ปิดทริปเดิมแน่นอน
+            # 🔥 ถ้าต้อง force_finalize (เปลี่ยนตำบล/อำเภอแต่ยังมีเหลือ) → เช็ค util ก่อนปิดทริป
             if force_finalize:
-                finalize_current_trip(force=True)
-                trip_counter += 1
+                limits = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
+                weight_util = (current_trip['weight'] / limits['max_w']) * 100 if limits['max_w'] > 0 else 0
+                cube_util = (current_trip['cube'] / limits['max_c']) * 100 if limits['max_c'] > 0 else 0
+                max_util = max(weight_util, cube_util)
+                
+                if max_util >= 75.0:
+                    finalize_current_trip(force=True)
+                    trip_counter += 1
+                else:
+                    # ยังไม่เต็ม → เก็บไว้ใน overflow
+                    for c in current_trip['codes']:
+                        overflow_queue.append({
+                            'code': c,
+                            'weight': df.loc[df['Code'] == c, 'Weight'].iloc[0],
+                            'cube': df.loc[df['Code'] == c, 'Cube'].iloc[0],
+                            'region': current_trip['region'],
+                            'allowed_vehicles': current_trip['allowed_vehicles']
+                        })
                 
                 # เริ่มทริปใหม่ด้วย subdistrict ปัจจุบัน
                 new_allowed = get_allowed_from_codes(subdistrict_codes, allowed_vehicles)
@@ -2632,9 +2693,25 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 # 🚫 CRITICAL: เช็คว่าเกิน buffer หรือไม่ หลังรวม
                 split_until_fits(test_allowed, region)
             else:
-                # Subdistrict ไม่พอดี → ปิดทริปเก่า
-                finalize_current_trip(force=True)
-                trip_counter += 1
+                # Subdistrict ไม่พอดี → เช็ค util ก่อนปิดทริปเก่า
+                limits = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
+                weight_util = (current_trip['weight'] / limits['max_w']) * 100 if limits['max_w'] > 0 else 0
+                cube_util = (current_trip['cube'] / limits['max_c']) * 100 if limits['max_c'] > 0 else 0
+                max_util = max(weight_util, cube_util)
+                
+                if max_util >= 75.0:
+                    finalize_current_trip(force=True)
+                    trip_counter += 1
+                else:
+                    # ยังไม่เต็ม → เก็บไว้ใน overflow
+                    for c in current_trip['codes']:
+                        overflow_queue.append({
+                            'code': c,
+                            'weight': df.loc[df['Code'] == c, 'Weight'].iloc[0],
+                            'cube': df.loc[df['Code'] == c, 'Cube'].iloc[0],
+                            'region': current_trip['region'],
+                            'allowed_vehicles': current_trip['allowed_vehicles']
+                        })
                 
                 new_allowed = get_allowed_from_codes(subdistrict_codes, allowed_vehicles)
                 new_punthai = is_all_punthai_codes(subdistrict_codes)
@@ -2698,9 +2775,65 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             split_until_fits(new_allowed, region)
     
     # ==========================================
-    # Final: Process remaining overflow และปิดทริปสุดท้าย
+    # Final: Process remaining overflow และรวมทริป
     # ==========================================
+    # ประมวลผล overflow queue
     process_overflow_queue()
+    
+    # 🔄 รวม overflow กลับเข้า current_trip ถ้ายังมีที่ว่าง
+    while overflow_queue:
+        item = overflow_queue.pop(0)
+        code = item['code']
+        weight = item['weight']
+        cube = item['cube']
+        
+        # ลองเพิ่มเข้า current_trip
+        if current_trip['codes']:
+            test_weight = current_trip['weight'] + weight
+            test_cube = current_trip['cube'] + cube
+            test_drops = current_trip['drops'] + 1
+            test_codes = current_trip['codes'] + [code]
+            test_punthai = is_all_punthai_codes(test_codes)
+            test_allowed = get_allowed_from_codes(test_codes, ['4W', 'JB', '6W'])
+            
+            vehicle = select_vehicle_for_load(test_weight, test_cube, test_drops, test_punthai, test_allowed)
+            
+            if vehicle:
+                current_trip['codes'].append(code)
+                current_trip['weight'] = test_weight
+                current_trip['cube'] = test_cube
+                current_trip['drops'] = test_drops
+                current_trip['is_punthai'] = test_punthai
+                current_trip['allowed_vehicles'] = test_allowed
+            else:
+                # ไม่พอที่ → ปิดทริปเก่า เริ่มใหม่
+                finalize_current_trip(force=True)
+                trip_counter += 1
+                new_allowed = get_allowed_from_codes([code], ['4W', 'JB', '6W'])
+                current_trip = {
+                    'codes': [code],
+                    'weight': weight,
+                    'cube': cube,
+                    'drops': 1,
+                    'region': item['region'],
+                    'allowed_vehicles': new_allowed,
+                    'district': None,
+                    'is_punthai': branch_bu_cache.get(code, False)
+                }
+        else:
+            new_allowed = get_allowed_from_codes([code], ['4W', 'JB', '6W'])
+            current_trip = {
+                'codes': [code],
+                'weight': weight,
+                'cube': cube,
+                'drops': 1,
+                'region': item['region'],
+                'allowed_vehicles': new_allowed,
+                'district': None,
+                'is_punthai': branch_bu_cache.get(code, False)
+            }
+    
+    # ปิดทริปสุดท้าย
     finalize_current_trip(force=True)  # force=True เพราะหมดสาขาแล้ว
 
     # ==========================================
