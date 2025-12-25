@@ -117,7 +117,9 @@ try:
     AUTOREFRESH_AVAILABLE = True
 except ImportError:
     AUTOREFRESH_AVAILABLE = False
-    st.warning("⚠️ ติดตั้ง streamlit-autorefresh: pip install streamlit-autorefresh")
+    # แสดง warning เฉพาะใน local dev (ไม่แสดงใน deployment)
+    if os.environ.get('ENVIRONMENT') != 'production':
+        pass  # ไม่แสดง warning - ใช้ manual refresh แทน
 
 # ==========================================
 # GOOGLE SHEETS SYNC FUNCTION
@@ -2763,9 +2765,27 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             if v not in allowed_vehicles:
                 continue
             lim = limits_to_use[v]
-            if (weight <= lim['max_w'] * buffer_mult and 
-                cube <= lim['max_c'] * buffer_mult and 
-                drops <= lim.get('max_drops', 12)):
+            
+            # 🎯 เช็คเงื่อนไข:
+            # 1. Cube ต้องไม่เกิน buffer (100%/110%)
+            # 2. น้ำหนักต้องไม่เกิน 100% เสมอ (ไม่ว่า buffer จะเป็นเท่าไร)
+            # 3. Drops ต้องไม่เกิน 12 สำหรับ 4W/JB (ถ้าไม่ใช่ Punthai ล้วน)
+            cube_ok = cube <= lim['max_c'] * buffer_mult
+            weight_ok = weight <= lim['max_w']  # น้ำหนักไม่เกิน 100% เสมอ
+            
+            # เช็ค drops
+            if v in ['4W', 'JB']:
+                if is_punthai:
+                    # Punthai ล้วน ใช้ limit พิเศษ (5 สำหรับ 4W, 10 สำหรับ JB)
+                    drops_ok = drops <= lim.get('max_drops', 12)
+                else:
+                    # ไม่ใช่ Punthai ล้วน หรือ Maxmart/ผสม → ไม่เกิน 12 drops
+                    drops_ok = drops <= 12
+            else:
+                # 6W ไม่มีข้อจำกัด drops
+                drops_ok = True
+            
+            if cube_ok and weight_ok and drops_ok:
                 return v
         return None
     
@@ -2838,28 +2858,41 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             limits = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
             weight_util = (current_trip['weight'] / limits['max_w']) * 100 if limits['max_w'] > 0 else 0
             cube_util = (current_trip['cube'] / limits['max_c']) * 100 if limits['max_c'] > 0 else 0
+            
+            # 🎯 หลักการ: ใช้ max(น้ำหนัก, คิว) เป็นตัวตัดสิน CONSISTENT ทั้งระบบ
+            # - ถ้าน้ำหนักเป็น limiting factor (สูงกว่า) → ทุกทริปตัดด้วยน้ำหนัก
+            # - ถ้าคิวเป็น limiting factor (สูงกว่า) → ทุกทริปตัดด้วยคิว
             max_util = max(weight_util, cube_util)
+            limiting_factor = 'น้ำหนัก' if weight_util > cube_util else 'คิว'
             
             # 🎯 คำนวณ buffer threshold (100% สำหรับ Punthai, 110% สำหรับ Maxmart)
             buffer_mult = punthai_buffer if current_trip['is_punthai'] else maxmart_buffer
             buffer_threshold = buffer_mult * 100  # 100% หรือ 110%
             near_buffer_threshold = buffer_threshold * 0.85  # 85% ของ buffer (เช่น 85% หรือ 93.5%)
             
-            # 🚨 เช็คว่า utilization ถึง buffer threshold หรือไม่
+            # 🚫 เช็คว่าน้ำหนักไม่เกิน 100% (Hard Limit)
+            if weight_util > 100.0:
+                print(f"🚨 Trip {trip_counter}: น้ำหนักเกิน 100% ({weight_util:.1f}%) - ต้อง split")
+                return False
+            
+            # เช็คว่าสามารถปิดทริปได้หรือไม่
             if not force:
-                if near_buffer and max_util >= near_buffer_threshold:
+                if max_util >= buffer_threshold:
+                    # ✅ ถึง buffer แล้ว → ปิดทริปได้
+                    pass
+                elif near_buffer and max_util >= near_buffer_threshold:
                     # ✅ เกือบถึง buffer (≥85%) และสาขาถัดไปจะเกิน → อนุญาตปิดได้
-                    print(f"✅ ปิดทริป {trip_counter}: Utilization {max_util:.1f}% ใกล้ Buffer {buffer_threshold:.0f}% (สาขาถัดไปจะเกิน)")
-                elif max_util < buffer_threshold:
-                    print(f"🚫 ไม่สามารถปิดทริป {trip_counter}: Utilization {max_util:.1f}% < Buffer {buffer_threshold:.0f}%")
+                    print(f"✅ ปิดทริป {trip_counter}: {limiting_factor} {max_util:.1f}% ใกล้ Buffer {buffer_threshold:.0f}% (สาขาถัดไปจะเกิน)")
+                else:
+                    print(f"🚫 ไม่สามารถปิดทริป {trip_counter}: {limiting_factor} {max_util:.1f}% < Buffer {buffer_threshold:.0f}%")
                     return False
             
             # ✅ ปิดทริป
             if max_util < buffer_threshold:
                 if near_buffer:
-                    print(f"⚠️ Trip {trip_counter}: Utilization {max_util:.1f}% ต่ำกว่า Buffer {buffer_threshold:.0f}% (ปิดเพราะสาขาถัดไปจะเกิน)")
+                    print(f"⚠️ Trip {trip_counter}: {limiting_factor} {max_util:.1f}% (ปิดเพราะสาขาถัดไปจะเกิน)")
                 else:
-                    print(f"⚠️ Trip {trip_counter}: Utilization {max_util:.1f}% ต่ำกว่า Buffer {buffer_threshold:.0f}% (บังคับปิดด้วย force)")
+                    print(f"⚠️ Trip {trip_counter}: {limiting_factor} {max_util:.1f}% (บังคับปิดด้วย force)")
             
             for c in current_trip['codes']:
                 df.loc[df['Code'] == c, 'Trip'] = trip_counter
@@ -2878,11 +2911,21 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             # ใช้ cached is_punthai
             is_punthai = current_trip['is_punthai']
             limits = get_max_limits(current_trip['allowed_vehicles'], is_punthai)
+            buffer_mult = punthai_buffer if is_punthai else maxmart_buffer
             
-            # 🚫 STRICT: เช็คว่าเกินหรือไม่ (ห้ามเกิน buffer)
-            if (current_trip['weight'] <= limits['max_w'] and 
-                current_trip['cube'] <= limits['max_c'] and 
-                current_trip['drops'] <= limits['max_d']):
+            # 🎯 หลักการเดียว: ใช้ max(weight, cube) utilization
+            weight_util_check = (current_trip['weight'] / limits['max_w']) * 100 if limits['max_w'] > 0 else 0
+            cube_util_check = (current_trip['cube'] / limits['max_c']) * 100 if limits['max_c'] > 0 else 0
+            max_util_check = max(weight_util_check, cube_util_check)
+            
+            # 🚫 STRICT: เช็คว่าเกิน buffer หรือไม่
+            # 1. น้ำหนักต้องไม่เกิน 100% (Hard Limit)
+            # 2. max(weight, cube) ต้องไม่เกิน buffer
+            weight_ok = weight_util_check <= 100.0
+            util_ok = max_util_check <= (buffer_mult * 100)
+            drops_ok = current_trip['drops'] <= limits['max_d']
+            
+            if weight_ok and util_ok and drops_ok:
                 break
             
             if len(current_trip['codes']) <= 1:
@@ -3486,7 +3529,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 split_until_fits(test_allowed, region)
             else:
                 # Subdistrict ไม่พอดี → เช็คว่าเกือบถึง buffer หรือไม่
-                # 📊 คำนวณ utilization ปัจจุบัน
+                # 📊 คำนวณ utilization ปัจจุบัน (ใช้หลักการเดียว: max)
                 current_limits_final = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
                 current_w_util_final = (current_trip['weight'] / current_limits_final['max_w']) * 100
                 current_c_util_final = (current_trip['cube'] / current_limits_final['max_c']) * 100
@@ -3497,9 +3540,13 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 buffer_threshold_final = buffer_mult_final * 100
                 near_buffer_threshold_final = buffer_threshold_final * 0.85  # 85% ของ buffer
                 
-                # เช็คว่าเกือบถึง buffer และเพิ่มสาขาถัดไปจะเกิน
+                # เช็คว่าเกือบถึง buffer และเพิ่มสาขาถัดไปจะเกิน (ใช้ max util)
+                test_w_util_final = (test_weight / current_limits_final['max_w']) * 100
+                test_c_util_final = (test_cube / current_limits_final['max_c']) * 100
+                test_max_util_final = max(test_w_util_final, test_c_util_final)
+                
                 use_near_buffer = (current_util_final >= near_buffer_threshold_final and 
-                                  test_weight > current_limits_final['max_w'] * buffer_mult_final)
+                                  test_max_util_final > buffer_threshold_final)
                 
                 # ปิดทริปเก่า
                 finalize_current_trip(near_buffer=use_near_buffer)
@@ -3804,8 +3851,8 @@ def main():
         # คำนวณเวลาที่เหลือ (วินาที)
         seconds_until_midnight = int((next_midnight - now).total_seconds())
         
-        # Refresh ทุกเที่ยงคืน
-        if seconds_until_midnight > 0:
+        # Refresh ทุกเที่ยงคืน (เฉพาะถ้ามี autorefresh)
+        if AUTOREFRESH_AVAILABLE and seconds_until_midnight > 0:
             # เช็คในช่วง 5 นาทีก่อนเที่ยงคืน (หลัง 23:55)
             if seconds_until_midnight <= 300:  # 5 minutes
                 st.info(f"🔄 ระบบจะ Refresh อัตโนมัติใน {seconds_until_midnight // 60} นาที")
