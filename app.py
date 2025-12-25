@@ -2326,55 +2326,58 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         # 🌍 เลือกตำบลที่ใกล้ที่สุดจากทริปปัจจุบัน (หรือ DC ถ้าทริปว่าง)
         best_idx = None
         best_distance = float('inf')
-    current_zone = None
-    
-    if current_trip['codes']:
-        # มีทริปอยู่แล้ว → หาตำบลที่ใกล้ที่สุดจากทริปปัจจุบัน
-        current_trip_df = df[df['Code'].isin(current_trip['codes'])]
-        current_lat = current_trip_df['_lat'].mean()
-        current_lon = current_trip_df['_lon'].mean()
+        current_zone = None
         
-        # หา Logistics Zone ของทริปปัจจุบัน
-        current_zones = current_trip_df['_logistics_zone'].dropna().unique()
-        if len(current_zones) > 0:
-            current_zone = current_zones[0]
-        
-        # 🎯 หาตำบลใน Zone เดียวกันก่อน (เลือกใกล้ที่สุด)
-        for i, ((region, province, district, subdistrict), subdistrict_df) in enumerate(subdistrict_groups):
-            if i in processed_subdistricts:
-                continue
+        if current_trip['codes']:
+            # มีทริปอยู่แล้ว → หาตำบลที่ใกล้ที่สุดจากทริปปัจจุบัน
+            current_trip_df = df[df['Code'].isin(current_trip['codes'])]
+            current_lat = current_trip_df['_lat'].mean()
+            current_lon = current_trip_df['_lon'].mean()
             
-            # คำนวณระยะห่างจากทริปปัจจุบัน
-            sub_lat = subdistrict_df['_lat'].mean()
-            sub_lon = subdistrict_df['_lon'].mean()
+            # หา Logistics Zone ของทริปปัจจุบัน
+            current_zones = current_trip_df['_logistics_zone'].dropna().unique()
+            if len(current_zones) > 0:
+                current_zone = current_zones[0]
             
-            if current_lat > 0 and current_lon > 0 and sub_lat > 0 and sub_lon > 0:
-                distance = haversine_distance(current_lat, current_lon, sub_lat, sub_lon)
-                
-                # เช็ค Zone
-                sub_zones = subdistrict_df['_logistics_zone'].dropna().unique()
-                sub_zone = sub_zones[0] if len(sub_zones) > 0 else None
-                
-                # ⭐ ถ้า Zone เดียวกัน → เลือกใกล้ที่สุดใน Zone (ไม่จำกัดระยะทาง)
-                if current_zone and sub_zone and current_zone == sub_zone:
-                    if distance < best_distance:
-                        best_distance = distance
-                        best_idx = i
-        
-        # ถ้าไม่เจอใน Zone เดียวกัน → หาที่ใกล้ที่สุดทั่วไป (คนละ Zone ก็ได้)
-        if best_idx is None:
+            # 🎯 หาตำบลใน Zone เดียวกันก่อน (เลือกใกล้ที่สุด)
             for i, ((region, province, district, subdistrict), subdistrict_df) in enumerate(subdistrict_groups):
                 if i in processed_subdistricts:
                     continue
                 
+                # คำนวณระยะห่างจากทริปปัจจุบัน
                 sub_lat = subdistrict_df['_lat'].mean()
                 sub_lon = subdistrict_df['_lon'].mean()
                 
                 if current_lat > 0 and current_lon > 0 and sub_lat > 0 and sub_lon > 0:
                     distance = haversine_distance(current_lat, current_lon, sub_lat, sub_lon)
-                    if distance < best_distance:
-                        best_distance = distance
-                        best_idx = i
+                    
+                    # เช็ค Zone
+                    sub_zones = subdistrict_df['_logistics_zone'].dropna().unique()
+                    sub_zone = sub_zones[0] if len(sub_zones) > 0 else None
+                    
+                    # ⭐ ถ้า Zone เดียวกัน → เลือกใกล้ที่สุดใน Zone (ไม่จำกัดระยะทาง)
+                    if current_zone and sub_zone and current_zone == sub_zone:
+                        if distance < best_distance:
+                            best_distance = distance
+                            best_idx = i
+            
+            # ถ้าไม่เจอใน Zone เดียวกัน → หาที่ใกล้ที่สุดทั่วไป (คนละ Zone ก็ได้)
+            if best_idx is None:
+                for i, ((region, province, district, subdistrict), subdistrict_df) in enumerate(subdistrict_groups):
+                    if i in processed_subdistricts:
+                        continue
+                    
+                    sub_lat = subdistrict_df['_lat'].mean()
+                    sub_lon = subdistrict_df['_lon'].mean()
+                    
+                    if current_lat > 0 and current_lon > 0 and sub_lat > 0 and sub_lon > 0:
+                        distance = haversine_distance(current_lat, current_lon, sub_lat, sub_lon)
+                        if distance < best_distance:
+                            best_distance = distance
+                            best_idx = i
+            
+            # ถ้ายังไม่เจอ (ไม่มีพิกัด) → เลือกตัวแรกที่ยังไม่ได้ process
+            if best_idx is None:
                 for i in range(len(subdistrict_groups)):
                     if i not in processed_subdistricts:
                         best_idx = i
