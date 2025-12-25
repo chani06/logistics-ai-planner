@@ -2449,33 +2449,6 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             current_district = current_trip_df['_district'].iloc[0] if not current_trip_df.empty else None
             current_subdistrict = current_trip_df['_subdistrict'].iloc[0] if not current_trip_df.empty else None
             
-            # 🚫 Vehicle Priority Check: เช็คว่ารถที่เลือกรับ constraint ได้หรือไม่
-            # Rule: อนุญาตให้ผสม vehicle priority ได้ ถ้ารถใหญ่พอรับ constraint ทั้งหมด
-            current_max_vehicles = set(current_trip_df['_max_vehicle'].unique()) if not current_trip_df.empty else set()
-            new_max_vehicles = set(subdistrict_df['_max_vehicle'].unique())
-            
-            # ถ้าข้อจำกัดรถไม่ตรงกัน → ตรวจสอบว่ารถใหญ่พอหรือไม่
-            if current_max_vehicles and new_max_vehicles:
-                # รวม constraint ทั้งหมด
-                combined_max_vehicles = current_max_vehicles | new_max_vehicles
-                
-                # หารถที่เล็กที่สุด (ข้อจำกัดมากที่สุด)
-                vehicle_order = {'4W': 1, 'JB': 2, '6W': 3}
-                min_priority = min([vehicle_order.get(v, 3) for v in combined_max_vehicles])
-                most_restrictive = [v for v, p in vehicle_order.items() if p == min_priority][0]
-                
-                # ถ้ามี 4W+JB → รถต้องเป็น JB ขึ้นไป
-                # ถ้ามี JB+6W → รถต้องเป็น 6W
-                # ถ้ามี 4W+6W → รถต้องเป็น 6W
-                # ตรวจสอบว่า allowed_vehicles มีรถที่รับ constraint ได้หรือไม่
-                test_codes_check = current_trip['codes'] + subdistrict_codes
-                test_allowed_check = get_allowed_from_codes(test_codes_check, allowed_vehicles)
-                
-                # ถ้าไม่มีรถที่รับได้ → บังคับแยก
-                if not test_allowed_check:
-                    force_finalize = True
-                    allow_merge = False
-            
             # 1️⃣ ตรวจสอบตำบล: ถ้าคนละตำบล → เช็คว่าตำบลเก่าหมดหรือยัง
             if current_subdistrict and current_subdistrict != subdistrict:
                 subdistrict_key = (region, current_province, current_district, current_subdistrict)
@@ -2485,133 +2458,29 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     force_finalize = True
                     allow_merge = False
                 else:
-                    # ✅ ตำบลเก่าหมดแล้ว → เช็ค utilization + constraint
-                    # 📊 คำนวณ utilization ปัจจุบัน
-                    current_limits = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
-                    current_w_util = (current_trip['weight'] / current_limits['max_w']) * 100
-                    current_c_util = (current_trip['cube'] / current_limits['max_c']) * 100
-                    current_util = max(current_w_util, current_c_util)
-                    
-                    # 🎯 เช็ค vehicle constraint ก่อน
-                    test_codes_cross_sub = current_trip['codes'] + subdistrict_codes
-                    test_allowed_cross_sub = get_allowed_from_codes(test_codes_cross_sub, allowed_vehicles)
-                    
-                    if not test_allowed_cross_sub:
-                        # ❌ ไม่มีรถที่รับ constraint ทั้งหมดได้ → บังคับแยก (ยกเว้นจากกฎ 95%)
-                        force_finalize = True
-                        allow_merge = False
-                    elif current_district == district:
-                        # ✅ อำเภอเดียวกัน → รวมต่อเสมอ (ไม่สนใจ utilization) เพื่อให้สาขาในอำเภอเดียวกันไปด้วยกัน
-                        # ไม่ตั้ง force_finalize = True เพื่อให้รวมต่อ
+                    # ✅ ตำบลเก่าหมดแล้ว → อนุญาตเปลี่ยนตำบล
+                    if current_district == district:
+                        # ✅ อำเภอเดียวกัน → รวมต่อได้
                         pass
                     else:
-                        # 🌍 เช็คโซนโลจิสติกส์ก่อน - ถ้าคนละโซน → ยกเว้นจากกฎ buffer
-                        current_trip_df_zone_check = df[df['Code'].isin(current_trip['codes'])]
-                        new_trip_df_zone_check = df[df['Code'].isin(subdistrict_codes)]
-                        
-                        zone_conflict = False
-                        if not current_trip_df_zone_check.empty and not new_trip_df_zone_check.empty:
-                            current_zones = current_trip_df_zone_check['_logistics_zone'].dropna().unique()
-                            new_zones = new_trip_df_zone_check['_logistics_zone'].dropna().unique()
-                            
-                            if len(current_zones) > 0 and len(new_zones) > 0:
-                                current_zone = current_zones[0]
-                                new_zone = new_zones[0]
-                                if current_zone != new_zone:
-                                    # คนละโซน → เช็คว่าอยู่บนทางหลวงเดียวกันหรือไม่
-                                    if not can_combine_zones_by_highway(current_zone, new_zone):
-                                        zone_conflict = True
-                        
-                        # 🎯 คำนวณ buffer threshold
-                        buffer_mult_check = punthai_buffer if current_trip['is_punthai'] else maxmart_buffer
-                        buffer_threshold_check = buffer_mult_check * 100
-                        
-                        if zone_conflict:
-                            # ❌ คนละโซนโลจิสติกส์ → ยกเว้นจากกฎ buffer (ให้ปิดทริปได้)
-                            # ไม่ตั้ง force_finalize เพราะยังต้องเช็คเงื่อนไขอื่น
-                            pass
-                        elif current_util < buffer_threshold_check:
-                            # 🚫 Utilization < Buffer และไม่มี zone conflict → บังคับรวมต่อ
-                            # 📍 เช็คว่าตำบลปัจจุบันหมดแล้วหรือยัง
-                            current_sub_key = (region, current_province, current_district, current_subdistrict)
-                            current_sub_remaining = subdistrict_remaining.get(current_sub_key, 0)
-                            
-                            if current_sub_remaining <= 0:
-                                # ✅ ตำบลปัจจุบันหมดแล้ว → อนุญาตให้รวมตำบลใหม่ต่อเพื่อเพิ่ม utilization
-                                pass
-                            else:
-                                # ❌ ตำบลปัจจุบันยังไม่หมด → ต้องปิดทริป (ตำบลเดียวกันต้องไปด้วยกัน)
-                                force_finalize = True
-                                allow_merge = False
-                        else:
-                            # ✅ Utilization >= Buffer → อนุญาตให้ปิดทริปได้ แต่ยังพยายามรวมต่อจนเกิน buffer
-                            # ไม่ตั้ง force_finalize = True เพื่อให้มันเช็ค buffer ต่อใน allow_merge
-                            pass
+                        # คนละอำเภอ → ให้เช็คเงื่อนไขด้านล่าง
+                        pass
             
-            # 2️⃣ ตรวจสอบอำเภอ: ถ้าคนละอำเภอ → เช็คว่าอำเภอเก่าหมดหรือยัง
+            # 2️⃣ ตรวจสอบอำเภอ: ถ้าคนละอำเภอ และยังมีสาขาเหลือ → ต้องทำอำเภอเก่าให้หมดก่อน
             if allow_merge and current_district and current_district != district:
                 district_key = (region, current_province, current_district)
                 remaining = district_remaining.get(district_key, 0)
                 if remaining > 0:
-                    # ❌ ยังมีสาขาเหลือในอำเภอเก่า → เช็ค utilization ก่อนปิดทริป
-                    current_limits_check = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
-                    current_w_util_check = (current_trip['weight'] / current_limits_check['max_w']) * 100
-                    current_c_util_check = (current_trip['cube'] / current_limits_check['max_c']) * 100
-                    current_util_check = max(current_w_util_check, current_c_util_check)
-                    
-                    # 🎯 คำนวณ buffer threshold
-                    buffer_mult_district = punthai_buffer if current_trip['is_punthai'] else maxmart_buffer
-                    buffer_threshold_district = buffer_mult_district * 100
-                    
-                    # เฉพาะเมื่อ utilization >= buffer threshold เท่านั้น
-                    if current_util_check >= buffer_threshold_district:
-                        force_finalize = True
-                        allow_merge = False
-                    else:
-                        # utilization < buffer → ห้ามปิดทริป (ต้องรวมอำเภอเก่าให้หมดก่อน)
-                        pass
+                    # ยังมีสาขาเหลือในอำเภอเก่า → ห้ามข้ามไปอำเภอใหม่ (ให้ select_vehicle_for_load ตัดสินปิดทริป)
+                    allow_merge = False
             
-            # 3️⃣ ตรวจสอบจังหวัด: ถ้าคนละจังหวัด → เช็ค province completion และ proximity
+            # 3️⃣ ตรวจสอบจังหวัด: ถ้าคนละจังหวัด และยังมีสาขาเหลือ → ต้องทำจังหวัดเก่าให้หมดก่อน
             if allow_merge and current_province and current_province != province:
                 province_key = (region, current_province)
                 remaining = province_remaining.get(province_key, 0)
                 if remaining > 0:
-                    # 🌍 เช็คว่าอยู่โซนเดียวกันหรือไม่
-                    current_trip_df_prov_check = df[df['Code'].isin(current_trip['codes'])]
-                    new_trip_df_prov_check = df[df['Code'].isin(subdistrict_codes)]
-                    
-                    same_logistics_zone = False
-                    if not current_trip_df_prov_check.empty and not new_trip_df_prov_check.empty:
-                        current_zones_prov = current_trip_df_prov_check['_logistics_zone'].dropna().unique()
-                        new_zones_prov = new_trip_df_prov_check['_logistics_zone'].dropna().unique()
-                        
-                        if len(current_zones_prov) > 0 and len(new_zones_prov) > 0:
-                            current_zone_prov = current_zones_prov[0]
-                            new_zone_prov = new_zones_prov[0]
-                            # ถ้าโซนเดียวกัน หรือ อยู่บนทางหลวงเดียวกัน
-                            if current_zone_prov == new_zone_prov or can_combine_zones_by_highway(current_zone_prov, new_zone_prov):
-                                same_logistics_zone = True
-                    
-                    if same_logistics_zone:
-                        # ✅ โซนเดียวกัน → เช็ค utilization แทน
-                        current_limits_prov = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
-                        current_w_util_prov = (current_trip['weight'] / current_limits_prov['max_w']) * 100
-                        current_c_util_prov = (current_trip['cube'] / current_limits_prov['max_c']) * 100
-                        current_util_prov = max(current_w_util_prov, current_c_util_prov)
-                        
-                        # 🎯 คำนวณ buffer threshold
-                        buffer_mult_prov = punthai_buffer if current_trip['is_punthai'] else maxmart_buffer
-                        buffer_threshold_prov = buffer_mult_prov * 100
-                        
-                        if current_util_prov < buffer_threshold_prov:
-                            # 🚫 Utilization < Buffer + โซนเดียวกัน → อนุญาตข้ามจังหวัดเพื่อเพิ่ม utilization
-                            pass
-                        else:
-                            # ✅ Utilization >= Buffer → อนุญาตปิดทริป
-                            allow_merge = False
-                    else:
-                        # ❌ คนละโซน + ยังมีสาขาเหลือในจังหวัดเก่า → ไม่ให้ข้ามจังหวัด (STRICT)
-                        allow_merge = False
+                    # ยังมีสาขาเหลือในจังหวัดเก่า → ห้ามข้ามไปจังหวัดใหม่
+                    allow_merge = False
                 else:
                     # 🚨 เช็ค NO_CROSS_ZONE_PAIRS (ห้ามข้ามภูเขา/แม่น้ำ)
                     if is_cross_zone_violation(current_province, province):
