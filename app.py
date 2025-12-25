@@ -2169,14 +2169,21 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             break
         
         # 🌍 เลือกตำบลที่ใกล้ที่สุดจากทริปปัจจุบัน (หรือ DC ถ้าทริปว่าง)
+        # 🎯 ลำดับความสำคัญ: 1) Zone เดียวกัน (ใกล้ที่สุด) → 2) ข้าม Zone (ใกล้ที่สุด)
         best_idx = None
         best_distance = float('inf')
+        best_idx_cross_zone = None
+        best_distance_cross_zone = float('inf')
         
         if current_trip['codes']:
             # มีทริปอยู่แล้ว → หาตำบลที่ใกล้ที่สุดจากทริปปัจจุบัน
             current_trip_df = df[df['Code'].isin(current_trip['codes'])]
             current_lat = current_trip_df['_lat'].mean()
             current_lon = current_trip_df['_lon'].mean()
+            
+            # 🔍 หา Logistics Zone ของทริปปัจจุบัน
+            current_zones = current_trip_df['_logistics_zone'].dropna().unique()
+            current_zone = current_zones[0] if len(current_zones) > 0 else None
             
             for i, ((region, province, district, subdistrict), subdistrict_df) in enumerate(subdistrict_groups):
                 if i in processed_subdistricts:
@@ -2188,11 +2195,28 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 
                 if current_lat > 0 and current_lon > 0 and sub_lat > 0 and sub_lon > 0:
                     distance = haversine_distance(current_lat, current_lon, sub_lat, sub_lon)
-                    if distance < best_distance:
-                        best_distance = distance
-                        best_idx = i
+                    
+                    # 🎯 เช็ค Zone ของตำบลนี้
+                    sub_zones = subdistrict_df['_logistics_zone'].dropna().unique()
+                    sub_zone = sub_zones[0] if len(sub_zones) > 0 else None
+                    
+                    # ⭐ ลำดับแรก: เลือกใน Zone เดียวกันก่อน (ที่ใกล้ที่สุด)
+                    if current_zone and sub_zone and current_zone == sub_zone:
+                        if distance < best_distance:
+                            best_distance = distance
+                            best_idx = i
+                    else:
+                        # 💾 เก็บตัวเลือกข้าม Zone ไว้ (backup)
+                        if distance < best_distance_cross_zone:
+                            best_distance_cross_zone = distance
+                            best_idx_cross_zone = i
             
-            # ถ้าไม่เจอ (ไม่มีพิกัด) → เลือกตัวแรก
+            # ⭐ ถ้าไม่เจอใน Zone เดียวกัน → ใช้ตัวเลือกข้าม Zone
+            if best_idx is None and best_idx_cross_zone is not None:
+                best_idx = best_idx_cross_zone
+                best_distance = best_distance_cross_zone
+            
+            # ถ้าไม่เจอเลย (ไม่มีพิกัด) → เลือกตัวแรก
             if best_idx is None:
                 for i in range(len(subdistrict_groups)):
                     if i not in processed_subdistricts:
