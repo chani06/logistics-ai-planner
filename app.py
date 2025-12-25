@@ -1103,6 +1103,19 @@ def load_master_data():
             df_from_sheets = df_from_sheets[df_from_sheets['Plan Code'] != '']
         
         print(f"✅ โหลด MASTER_DATA: {len(df_from_sheets)} สาขา")
+        
+        # 🔍 Debug: แสดงคอลัมน์ที่เกี่ยวข้องกับรถ
+        vehicle_cols = ['MaxTruckType', 'Max Truck Type', 'MaxVehicle', 'Max Vehicle', 'รถสูงสุด', 'Max_Truck_Type']
+        found_vehicle_cols = [col for col in vehicle_cols if col in df_from_sheets.columns]
+        if found_vehicle_cols:
+            print(f"✅ พบคอลัมน์ข้อจำกัดรถ: {', '.join(found_vehicle_cols)}")
+            # แสดงสถิติข้อจำกัดรถ
+            for col in found_vehicle_cols:
+                vehicle_counts = df_from_sheets[col].value_counts(dropna=False)
+                print(f"   - {col}: {dict(vehicle_counts)}")
+        else:
+            print(f"⚠️ ไม่พบคอลัมน์ข้อจำกัดรถ! คอลัมน์ที่มี: {', '.join(df_from_sheets.columns.tolist()[:10])}...")
+        
         return df_from_sheets
         
     except Exception as e:
@@ -1111,6 +1124,81 @@ def load_master_data():
 
 # โหลด Master Data จาก Google Sheets
 MASTER_DATA = load_master_data()
+
+# ==========================================
+# DEBUG: ตรวจสอบข้อมูลข้อจำกัดรถใน MASTER_DATA
+# ==========================================
+def debug_master_data_vehicle_restrictions(show_details=False):
+    """
+    ตรวจสอบและแสดงข้อมูลข้อจำกัดรถจาก MASTER_DATA
+    เพื่อดูว่าข้อมูลใน Google Sheets/JSON ถูกโหลดถูกต้องหรือไม่
+    """
+    if MASTER_DATA.empty:
+        print("❌ MASTER_DATA ว่างเปล่า - ไม่มีข้อมูล")
+        return None
+    
+    print("\n" + "="*80)
+    print("🔍 ตรวจสอบข้อมูลข้อจำกัดรถใน MASTER_DATA")
+    print("="*80)
+    
+    # แสดงคอลัมน์ทั้งหมด
+    print(f"\n📊 คอลัมน์ทั้งหมดใน MASTER_DATA ({len(MASTER_DATA.columns)} คอลัมน์):")
+    for i, col in enumerate(MASTER_DATA.columns, 1):
+        print(f"  {i}. {col}")
+    
+    # หาคอลัมน์ที่เกี่ยวข้องกับรถ
+    vehicle_cols = []
+    possible_names = ['max', 'truck', 'vehicle', 'รถ', 'constraint', 'limit', 'restrict']
+    for col in MASTER_DATA.columns:
+        if any(name.lower() in col.lower() for name in possible_names):
+            vehicle_cols.append(col)
+    
+    print(f"\n🚚 คอลัมน์ที่อาจเกี่ยวข้องกับข้อจำกัดรถ ({len(vehicle_cols)} คอลัมน์):")
+    if vehicle_cols:
+        for col in vehicle_cols:
+            print(f"  - {col}")
+    else:
+        print("  ⚠️ ไม่พบคอลัมน์ที่เกี่ยวข้องกับรถ!")
+    
+    # ตรวจสอบคอลัมน์ที่ระบบใช้งาน
+    print(f"\n🎯 คอลัมน์ที่ระบบต้องการ (ตามลำดับความสำคัญ):")
+    expected_cols = ['MaxTruckType', 'Max Truck Type', 'MaxVehicle', 'Max Vehicle', 'รถสูงสุด', 'Max_Truck_Type']
+    found_col = None
+    for col in expected_cols:
+        exists = col in MASTER_DATA.columns
+        symbol = "✅" if exists else "❌"
+        print(f"  {symbol} {col}")
+        if exists and found_col is None:
+            found_col = col
+    
+    if found_col:
+        print(f"\n✅ พบคอลัมน์ข้อจำกัดรถ: '{found_col}'")
+        
+        # นับจำนวนแต่ละประเภท
+        vehicle_counts = MASTER_DATA[found_col].value_counts(dropna=False)
+        print(f"\n📈 สถิติข้อจำกัดรถจากคอลัมน์ '{found_col}':")
+        for value, count in vehicle_counts.items():
+            if pd.isna(value):
+                print(f"  - (ว่าง/NaN): {count} สาขา")
+            else:
+                print(f"  - {value}: {count} สาขา")
+        
+        # แสดงตัวอย่างข้อมูล
+        if show_details:
+            print(f"\n📋 ตัวอย่างข้อมูล (10 สาขาแรก):")
+            sample_df = MASTER_DATA[['Plan Code', found_col]].head(10)
+            for _, row in sample_df.iterrows():
+                code = row['Plan Code']
+                max_v = row[found_col] if pd.notna(row[found_col]) else '(ว่าง)'
+                print(f"  - {code}: {max_v}")
+    else:
+        print(f"\n❌ ไม่พบคอลัมน์ข้อจำกัดรถที่ระบบรองรับ!")
+        print(f"\n💡 แนะนำ: เพิ่มคอลัมน์ใดคอลัมน์หนึ่งต่อไปนี้ใน Google Sheets:")
+        for col in expected_cols:
+            print(f"  - {col}")
+    
+    print("\n" + "="*80 + "\n")
+    return found_col
 
 # ==========================================
 # CLEAN NAME FUNCTION (สำหรับทำ Join_Key)
@@ -3144,7 +3232,55 @@ def main():
                     
                     st.markdown("---")
                     
-                    # 📊 แสดงสรุปข้อมูลข้อจำกัดรถจาก Master Data
+                    # � Debug: ตรวจสอบข้อมูลข้อจำกัดรถจาก MASTER_DATA
+                    with st.expander("🔍 ตรวจสอบข้อมูล Master Data (Debug)"):
+                        st.markdown("### 🗂️ ข้อมูล MASTER_DATA")
+                        
+                        if MASTER_DATA.empty:
+                            st.error("❌ MASTER_DATA ว่างเปล่า - ไม่มีข้อมูลจาก Google Sheets/JSON")
+                            st.info("💡 กรุณาตรวจสอบ:\n1. ไฟล์ credentials.json\n2. การเชื่อมต่อ Google Sheets\n3. ไฟล์ branch_data.json")
+                        else:
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.metric("📊 จำนวนสาขาใน Master", len(MASTER_DATA))
+                                st.metric("📋 จำนวนคอลัมน์", len(MASTER_DATA.columns))
+                            with col2:
+                                # หาคอลัมน์ข้อจำกัดรถ
+                                expected_cols = ['MaxTruckType', 'Max Truck Type', 'MaxVehicle', 'Max Vehicle', 'รถสูงสุด', 'Max_Truck_Type']
+                                found_cols = [col for col in expected_cols if col in MASTER_DATA.columns]
+                                
+                                if found_cols:
+                                    st.success(f"✅ พบคอลัมน์ข้อจำกัดรถ: {found_cols[0]}")
+                                    
+                                    # นับจำนวนแต่ละประเภท
+                                    vehicle_col = found_cols[0]
+                                    vehicle_counts = MASTER_DATA[vehicle_col].value_counts(dropna=False)
+                                    st.markdown("**สถิติข้อจำกัดรถ:**")
+                                    for value, count in vehicle_counts.items():
+                                        if pd.isna(value):
+                                            st.write(f"- (ว่าง/NaN): {count} สาขา")
+                                        else:
+                                            st.write(f"- {value}: {count} สาขา")
+                                else:
+                                    st.error("❌ ไม่พบคอลัมน์ข้อจำกัดรถ!")
+                                    st.info(f"💡 ต้องมีคอลัมน์ใดคอลัมน์หนึ่ง:\n{', '.join(expected_cols)}")
+                            
+                            # แสดงรายชื่อคอลัมน์ทั้งหมด
+                            st.markdown("**คอลัมน์ทั้งหมดใน MASTER_DATA:**")
+                            cols_display = ", ".join(MASTER_DATA.columns.tolist())
+                            st.code(cols_display, language="text")
+                            
+                            # แสดงตัวอย่างข้อมูล
+                            st.markdown("**ตัวอย่างข้อมูล (5 สาขาแรก):**")
+                            display_cols = ['Plan Code'] + [col for col in found_cols if col in MASTER_DATA.columns]
+                            if display_cols:
+                                st.dataframe(MASTER_DATA[display_cols].head(5), use_container_width=True)
+                            else:
+                                st.dataframe(MASTER_DATA.head(5), use_container_width=True)
+                    
+                    st.markdown("---")
+                    
+                    # �📊 แสดงสรุปข้อมูลข้อจำกัดรถจาก Master Data
                     st.markdown("### 📋 สรุปข้อจำกัดรถจาก Master Data")
                     
                     # นับจำนวนสาขาแต่ละประเภทรถ
