@@ -4097,9 +4097,14 @@ def main():
                     
                     # ปุ่มจัดทริป
                     if st.button("🚀 เริ่มจัดเที่ยว", type="primary", use_container_width=True):
-                        with st.spinner("⏳ กำลังประมวลผล..."):
+                        # สร้าง status container แบบ popup
+                        with st.status("🚀 กำลังประมวลผล...", expanded=True) as status:
+                            st.write("⏳ กำลังโหลดข้อมูล...")
+                            
                             # จัดเรียงตามภาค/จังหวัด/อำเภอ/ตำบล/Route (ในฟังก์ชัน predict_trips)
                             df_to_process = df.copy()
+                            
+                            st.write("🔄 กำลังคำนวณเส้นทาง...")
                             
                             # ส่ง buffer แยกตาม BU
                             result_df, summary = predict_trips(
@@ -4108,6 +4113,9 @@ def main():
                                 punthai_buffer=punthai_buffer_value,
                                 maxmart_buffer=maxmart_buffer_value
                             )
+                            
+                            st.write("✅ จัดทริปเสร็จสิ้น!")
+                            status.update(label="✅ ประมวลผลเสร็จสมบูรณ์!", state="complete", expanded=False)
                             
                             # ตรวจสอบสาขาที่ไม่ได้จัดทริป (Trip = 0)
                             unassigned_count = len(result_df[result_df['Trip'] == 0])
