@@ -2825,10 +2825,11 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     fails.append(f"drops {drops} > 12")
                 reasons.append(f"{v}: {', '.join(fails)}")
         
-        # 🚨 FALLBACK: ถ้าหารถไม่เจอเลย
+        # 🚨 FALLBACK: ไม่มีรถที่พอดีตามเงื่อนไข → ใช้ fallback logic
         if debug:
-            print(f"⚠️ หารถไม่เจอ: w={weight:.1f}, c={cube:.2f}, drops={drops}")
+            print(f"⚠️ ไม่มีรถที่ผ่านเงื่อนไขทั้งหมด: w={weight:.1f}, c={cube:.2f}, drops={drops}")
             print(f"  allowed_vehicles: {allowed_vehicles}")
+            print(f"  → กำลังใช้ Fallback Logic...")
             for r in reasons:
                 print(f"  - {r}")
         
@@ -3083,8 +3084,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     test_punthai = is_all_punthai_codes(test_codes)
                     test_allowed = get_allowed_from_codes(test_codes, allowed_vehicles)
                     
-                    # 🔍 Debug: เช็คการเลือกรถ
-                    vehicle = select_vehicle_for_load(test_weight, test_cube, test_drops, test_punthai, test_allowed, debug=True)
+                    # เลือกรถที่เหมาะสม
+                    vehicle = select_vehicle_for_load(test_weight, test_cube, test_drops, test_punthai, test_allowed, debug=False)
                     
                     if vehicle:
                         # พอดี! เพิ่มเข้า
@@ -3550,7 +3551,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     vehicle = None  # กระจายเกินไป → ไม่ให้รวม
                 else:
                     # 🚫 STRICT: เช็คว่าไม่เกิน buffer
-                    vehicle = select_vehicle_for_load(test_weight, test_cube, test_drops, test_punthai, test_allowed, debug=True)
+                    vehicle = select_vehicle_for_load(test_weight, test_cube, test_drops, test_punthai, test_allowed, debug=False)
             else:
                 vehicle = None  # Force split due to geographic/province rule
             
