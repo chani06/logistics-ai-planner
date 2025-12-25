@@ -3752,54 +3752,7 @@ def main():
                                                         ).add_to(m)
                                                     continue
                                                 
-                                                # 🚀 ใช้ Route Cache - ไม่ต้องเรียก OSRM ทุกครั้ง
-                                                # สร้าง cache key จากพิกัดทั้งหมด
-                                                cache_key = f"trip_{trip_id}_" + "_".join([f"{p[0]:.4f},{p[1]:.4f}" for p in points])
-                                                
-                                                if use_real_route and len(points) >= 2:
-                                                    # เช็ค cache ก่อน
-                                                    if cache_key in route_cache:
-                                                        # ✅ มี cache - ใช้เลย (เร็วมาก!)
-                                                        road_path = route_cache[cache_key]
-                                                        folium.PolyLine(
-                                                            road_path,
-                                                            color=trip_color,
-                                                            weight=4,
-                                                            opacity=0.8,
-                                                            popup=f"Trip {trip_id}: {len(points)} สาขา (cached)"
-                                                        ).add_to(m)
-                                                    else:
-                                                        # ❌ ไม่มี cache - เรียก OSRM แล้วเก็บ cache
-                                                        try:
-                                                            waypoints = ';'.join([f"{p[1]},{p[0]}" for p in points])
-                                                            osrm_url = f"http://router.project-osrm.org/route/v1/driving/{waypoints}?overview=full&geometries=geojson"
-                                                            response = requests.get(osrm_url, timeout=5)
-                                                            if response.status_code == 200:
-                                                                route_data = response.json()
-                                                                if route_data.get('code') == 'Ok' and route_data.get('routes'):
-                                                                    coords = route_data['routes'][0]['geometry']['coordinates']
-                                                                    road_path = [[c[1], c[0]] for c in coords]
-                                                                    # 💾 เก็บ cache
-                                                                    route_cache[cache_key] = road_path
-                                                                    st.session_state['route_cache'] = route_cache
-                                                                    folium.PolyLine(
-                                                                        road_path,
-                                                                        color=trip_color,
-                                                                        weight=4,
-                                                                        opacity=0.8,
-                                                                        popup=f"Trip {trip_id}: {len(points)} สาขา"
-                                                                    ).add_to(m)
-                                                                else:
-                                                                    folium.PolyLine(points, color=trip_color, weight=3, opacity=0.6).add_to(m)
-                                                            else:
-                                                                folium.PolyLine(points, color=trip_color, weight=3, opacity=0.6).add_to(m)
-                                                        except:
-                                                            folium.PolyLine(points, color=trip_color, weight=3, opacity=0.6).add_to(m)
-                                                else:
-                                                    # เส้นตรง (เร็ว)
-                                                    folium.PolyLine(points, color=trip_color, weight=3, opacity=0.6).add_to(m)
-                                                
-                                                # ปักหมุดแต่ละจุด (ไม่มี DC) - ใส่เลขทริปที่ icon
+                                                # ปักหมุดแต่ละจุด (ไม่ลากเส้น) - ใส่เลขทริปที่ icon
                                                 for i, (point, name) in enumerate(zip(points, point_names)):
                                                     # ใช้ DivIcon เพื่อแสดงเลขทริปชัดเจน
                                                     trip_label = f'<div style="background-color:{trip_color};color:white;border-radius:50%;width:24px;height:24px;text-align:center;line-height:24px;font-weight:bold;font-size:12px;border:2px solid white;box-shadow:2px 2px 4px rgba(0,0,0,0.3);">T{trip_id}</div>'
