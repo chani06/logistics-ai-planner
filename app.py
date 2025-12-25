@@ -3901,17 +3901,7 @@ def main():
         initial_sidebar_state="collapsed"
     )
     
-    # 🔄 Sync ข้อมูลจาก Google Sheets ทุกครั้งที่โหลดเว็บ
-    try:
-        synced_df = sync_branch_data_from_sheets()
-        if synced_df is not None and not synced_df.empty:
-            st.success(f"✅ โหลดข้อมูล Master สำเร็จ: {len(synced_df):,} สาขา", icon="📊")
-    except Exception as e:
-        # ไม่แสดง error ถ้าเป็นแค่ไม่มี credentials
-        if SHEETS_AVAILABLE:
-            st.warning(f"⚠️ ไม่สามารถ Sync จาก Google Sheets: {e}")
-    
-    # 🔄 Auto-refresh ทุกเที่ยงคืน (ล้างแคช)
+ 
     if AUTOREFRESH_AVAILABLE:
         now = datetime.now()
         # คำนวณเวลาถึงเที่ยงคืน (00:00:00)
