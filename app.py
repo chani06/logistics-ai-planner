@@ -2476,42 +2476,22 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     force_finalize = True
                     allow_merge = False
             
-            # 3️⃣ ตรวจสอบจังหวัด: ถ้าคนละจังหวัด → เช็ค province completion, zone และ utilization
+            # 3️⃣ ตรวจสอบจังหวัด: ถ้าคนละจังหวัด → 🚫 ห้ามข้ามจนกว่าจะหมดสาขาในจังหวัดเก่า
             if allow_merge and current_province and current_province != province:
                 province_key = (region, current_province)
                 remaining = province_remaining.get(province_key, 0)
                 
-                # เช็คว่าอยู่ในโซนเดียวกันหรือไม่
-                current_trip_zones = df[df['Code'].isin(current_trip['codes'])]['_logistics_zone'].dropna().unique()
-                new_zones = subdistrict_df['_logistics_zone'].dropna().unique()
-                same_zone = len(current_trip_zones) > 0 and len(new_zones) > 0 and current_trip_zones[0] == new_zones[0]
-                
-                # คำนวณ utilization ปัจจุบัน
-                current_limits = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
-                current_w_util = (current_trip['weight'] / current_limits['max_w']) * 100
-                current_c_util = (current_trip['cube'] / current_limits['max_c']) * 100
-                current_util = max(current_w_util, current_c_util)
-                
                 if remaining > 0:
-                    # ยังมีสาขาเหลือในจังหวัดเก่า
-                    # คำนวณ buffer threshold จริงตาม BU
-                    buffer_mult = punthai_buffer if current_trip['is_punthai'] else maxmart_buffer
-                    buffer_threshold = buffer_mult * 100  # 100% หรือ 110%
-                    
-                    if same_zone and current_util < buffer_threshold:
-                        # ✅ โซนเดียวกัน + ยังไม่ถึง buffer → อนุญาตให้ข้ามจังหวัดได้
-                        # ตัวอย่าง: ภูเก็ต + กระบี่ + พังงา (ZONE_P_ใต้อันดามัน) รวมกันได้จนถึง buffer
-                        pass  # allow_merge = True
-                    else:
-                        # ❌ คนละโซน หรือ utilization >= buffer → ไม่ให้ข้ามจังหวัด
-                        allow_merge = False
+                    # ❌ ยังมีสาขาเหลือในจังหวัดเก่า → ห้ามข้ามจังหวัด (STRICT)
+                    # หลักการ: จัดกลุ่มตำบลในอำเภอและจังหวัดเดียวกันก่อน ป้องกันการข้ามจังหวัด
+                    allow_merge = False
                 else:
-                    # จังหวัดเก่าหมดแล้ว
-                    # 🚨 เช็ค NO_CROSS_ZONE_PAIRS (ห้ามข้ามภูเขา/แม่น้ำ)
+                    # ✅ จังหวัดเก่าหมดแล้ว → เช็ค NO_CROSS_ZONE_PAIRS และ proximity
+                    # 🚨 เช็คว่าห้ามข้ามโซนหรือไม่ (ภูเขา/แม่น้ำ)
                     if is_cross_zone_violation(current_province, province):
                         allow_merge = False
                     else:
-                        # ✅ จังหวัดเก่าหมดแล้ว → เช็ค proximity
+                        # ✅ จังหวัดเก่าหมดแล้ว + ไม่ใช่โซนห้ามข้าม → เช็ค proximity
                         allow_merge = check_geographic_proximity(current_trip_df, subdistrict_df)
             
             # 4️⃣ ตรวจสอบ Logistics Zone: ห้ามข้ามโซนโลจิสติกส์ (ยกเว้นอยู่บนทางหลวงเดียวกัน)
