@@ -20,7 +20,7 @@ import time as time_module
 # Map visualization
 try:
     import folium
-    from streamlit_folium import st_folium
+    from streamlit_folium import folium_static  # ใช้ folium_static แทน st_folium เพื่อไม่ให้โหลดซ้ำ
     import requests
     FOLIUM_AVAILABLE = True
 except ImportError:
@@ -2807,6 +2807,112 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     df['Trip'] = df['Trip'].map(lambda x: trip_mapping.get(x, x) if x > 0 else x)
 
     # ==========================================
+    # Step 6.6: 🔄 TRIP MERGE - รวมทริปที่ไม่เต็ม buffer เข้าด้วยกัน
+    # หลักการ: เริ่มจากทริปไกลสุด ถ้ายังไม่เต็ม ดึงสาขาจากทริปถัดไปที่ใกล้กันมารวม
+    # ==========================================
+    print("🔄 กำลังรวมทริปที่ไม่เต็ม buffer...")
+    
+    def get_trip_info(trip_num):
+        """คำนวณข้อมูลทริป"""
+        trip_data = df[df['Trip'] == trip_num]
+        if len(trip_data) == 0:
+            return None
+        
+        total_w = trip_data['Weight'].sum()
+        total_c = trip_data['Cube'].sum()
+        codes = trip_data['Code'].tolist()
+        
+        # เช็ค BU
+        is_punthai = all(branch_bu_cache.get(c, False) for c in codes)
+        buffer = punthai_buffer if is_punthai else maxmart_buffer
+        
+        # หารถที่รับ constraint ได้
+        max_vehicles = [branch_max_vehicle_cache.get(c, '6W') for c in codes]
+        min_priority = min(vehicle_priority.get(v, 3) for v in max_vehicles)
+        allowed_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(min_priority, '6W')
+        
+        limits = PUNTHAI_LIMITS if is_punthai else LIMITS
+        max_w = limits[allowed_vehicle]['max_w'] * buffer
+        max_c = limits[allowed_vehicle]['max_c'] * buffer
+        
+        return {
+            'weight': total_w,
+            'cube': total_c,
+            'codes': codes,
+            'max_w': max_w,
+            'max_c': max_c,
+            'is_punthai': is_punthai,
+            'allowed_vehicle': allowed_vehicle,
+            'avg_lat': trip_data['_lat'].mean(),
+            'avg_lon': trip_data['_lon'].mean(),
+            'avg_dist': trip_data['_distance_from_dc'].mean()
+        }
+    
+    # วนลูปทริปจากไกลสุด (1) ไปใกล้สุด
+    all_trips = sorted(df[df['Trip'] > 0]['Trip'].unique())
+    merged_count = 0
+    
+    for i, current_trip in enumerate(all_trips[:-1]):  # ไม่รวมทริปสุดท้าย
+        current_info = get_trip_info(current_trip)
+        if not current_info:
+            continue
+        
+        # เช็คว่าทริปนี้ยังมีที่เหลือไหม (ต่ำกว่า 80% ของ buffer)
+        w_util = current_info['weight'] / current_info['max_w']
+        c_util = current_info['cube'] / current_info['max_c']
+        
+        if max(w_util, c_util) >= 0.80:  # ถ้าเต็มแล้วไม่ต้องรวม
+            continue
+        
+        # หาทริปถัดไปที่ใกล้กัน (ต่อเนื่องกัน)
+        for next_trip in all_trips[i+1:]:
+            next_info = get_trip_info(next_trip)
+            if not next_info:
+                continue
+            
+            # เช็คว่าทั้งสองทริปอยู่ใกล้กัน (< 50 km)
+            dist = haversine_distance(
+                current_info['avg_lat'], current_info['avg_lon'],
+                next_info['avg_lat'], next_info['avg_lon']
+            )
+            
+            if dist > 50:  # ไกลเกิน 50km ไม่รวม
+                continue
+            
+            # เช็คว่า BU เข้ากันได้หรือไม่
+            if current_info['is_punthai'] != next_info['is_punthai']:
+                continue  # Punthai กับ Maxmart ไม่รวมกัน
+            
+            # เช็คว่ารวมแล้วไม่เกิน buffer
+            combined_w = current_info['weight'] + next_info['weight']
+            combined_c = current_info['cube'] + next_info['cube']
+            
+            if combined_w <= current_info['max_w'] and combined_c <= current_info['max_c']:
+                # ✅ รวมได้! ย้ายสาขาจาก next_trip มา current_trip
+                df.loc[df['Trip'] == next_trip, 'Trip'] = current_trip
+                merged_count += 1
+                print(f"   ✅ รวม Trip {next_trip} → Trip {current_trip} (ระยะห่าง {dist:.1f} km)")
+                
+                # อัพเดต current_info สำหรับรอบถัดไป
+                current_info['weight'] = combined_w
+                current_info['cube'] = combined_c
+                current_info['codes'].extend(next_info['codes'])
+                
+                # เช็คอีกครั้งว่าเต็มหรือยัง
+                w_util = current_info['weight'] / current_info['max_w']
+                c_util = current_info['cube'] / current_info['max_c']
+                if max(w_util, c_util) >= 0.90:
+                    break  # เต็มแล้ว หยุดรวม
+    
+    if merged_count > 0:
+        print(f"🔄 รวมทริปเสร็จ: รวม {merged_count} ทริป")
+        
+        # Renumber ทริปใหม่หลังรวม
+        remaining_trips = sorted(df[df['Trip'] > 0]['Trip'].unique())
+        trip_renumber = {old: new for new, old in enumerate(remaining_trips, start=1)}
+        df['Trip'] = df['Trip'].map(lambda x: trip_renumber.get(x, x) if x > 0 else x)
+
+    # ==========================================
     # Step 7: สร้าง Summary + Central Rule + Punthai Drop Limits
     # ==========================================
     summary_data = []
@@ -3805,8 +3911,8 @@ def main():
                                                         icon=folium.DivIcon(html=trip_label)
                                                     ).add_to(m)
                                             
-                                            # แสดงแผนที่
-                                            st_folium(m, width=1200, height=600)
+                                            # แสดงแผนที่ - ใช้ folium_static ไม่โหลดซ้ำเมื่อซูม
+                                            folium_static(m, width=1200, height=600)
                                             
                                             st.caption(f"📍 แสดง {len(valid_coords)} สาขาใน {valid_coords['Trip'].nunique()} ทริป")
                                 else:
