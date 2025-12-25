@@ -3909,32 +3909,20 @@ def main():
     with col2:
         st.image("https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/1f69a.svg", width=100)
     
-    # แสดงสถานะ Google Sheets
-    if SHEETS_AVAILABLE:
-        st.success("✅ เชื่อมต่อ Google Sheets สำเร็จ - ข้อมูลสาขาอัปเดตอัตโนมัติ")
-    else:
-        st.warning("⚠️ Google Sheets ยังไม่ได้ตั้งค่า - ใช้ข้อมูลจาก branch_data.json (ข้อมูล cache)")
-    
-    st.write('**โหลดข้อมูลสาขา** → **จัดเที่ยวแบบ Optimization** → **ดาวน์โหลดผลลัพธ์**')
-    
-    # Show Punthai learning stats
-    if PUNTHAI_PATTERNS and 'stats' in PUNTHAI_PATTERNS and PUNTHAI_PATTERNS['stats']:
-        stats = PUNTHAI_PATTERNS['stats']
-        with st.expander("📊 สถิติที่เรียนรู้จากไฟล์ Punthai Maxmart", expanded=False):
-            col_a, col_b, col_c = st.columns(3)
-            with col_a:
-                st.metric("เฉลี่ยสาขา/ทริป", f"{stats.get('avg_branches', 0):.1f}")
-            with col_b:
-                st.metric("ทริปจังหวัดเดียว", f"{stats.get('same_province_pct', 0):.1f}%")
-            with col_c:
-                total_trips = stats.get('same_province', 0) + stats.get('mixed_province', 0)
-                st.metric("จำนวนทริปอ้างอิง", total_trips)
+    # 📊 Status Bar - แสดงสถานะระบบแบบกระชับ
+    status_cols = st.columns([2, 2, 1])
+    with status_cols[0]:
+        if SHEETS_AVAILABLE:
+            st.info("📊 **Google Sheets:** เชื่อมต่อสำเร็จ | Auto-sync ทุก 5 นาที", icon="✅")
+        else:
+            st.warning("📊 **Data Source:** branch_data.json (cache)", icon="⚠️")
+    with status_cols[1]:
+        st.metric("📍 Master Data", f"{len(MASTER_DATA):,} สาขา", delta="อัปเดตแล้ว", delta_color="off")
+    with status_cols[2]:
+        st.metric("🔄 Buffer", "100%/110%", delta="Pun/Max", delta_color="off")
     
     st.markdown("---")
-    
-    # � แสดงสถิติ Master Data (auto-sync ทุก 5 นาที)
-    st.caption(f"📊 Master Data: **{len(MASTER_DATA)}** สาขา | 🔄 Auto-sync ทุก 5 นาที")
-    
+    st.write('**โหลดข้อมูลสาขา** → **จัดเที่ยวแบบ Optimization** → **ดาวน์โหลดผลลัพธ์**')
     st.markdown("---")
     
     # โหลดโมเดล
