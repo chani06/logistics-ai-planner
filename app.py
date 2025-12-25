@@ -291,7 +291,7 @@ MAX_MERGE_ITERATIONS = 25  # จำกัดรอบการรวมทริ
 # 🌍 Geographic Clustering Config
 MAX_DISTRICT_DISTANCE_KM = 50  # อำเภอที่ห่างกันเกิน 50km ไม่ควรอยู่ทริปเดียวกัน (เว้นแต่จังหวัดเดียวกัน)
 MIN_VEHICLE_UTILIZATION = 0.80  # 🎯 รถต้องใช้อย่างน้อย 80% - บังคับให้ทริปเต็ม (เพิ่มจาก 70%)
-MIN_UTIL_BEFORE_FINALIZE = 0.95  # ต้องมี utilization อย่างน้อย 95% ก่อนจะปิดทริป (เพิ่มจาก 75% เป็น 95%)
+MIN_UTIL_BEFORE_FINALIZE = 0.95  # [เลิกใช้แล้ว] ใช้ buffer (100%/110%) จากหน้าเว็บแทน
 
 # ==========================================
 # REGION ORDER CONFIG (Far-to-Near Sorting)
@@ -2823,13 +2823,13 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     
     def finalize_current_trip(force=False):
         """
-        ปิดทริปปัจจุบันและบันทึก พร้อมแสดง warning ถ้า utilization ต่ำกว่า 95%
+        ปิดทริปปัจจุบันและบันทึก
         
         Args:
             force (bool): ถ้า True → ปิดทริปไม่ว่า utilization จะต่ำ (สำหรับทริปสุดท้าย)
         
         Returns:
-            bool: True ถ้าปิดทริปสำเร็จ, False ถ้า utilization ต่ำเกินไปและไม่ force
+            bool: True ถ้าปิดทริปสำเร็จ, False ถ้า utilization ไม่ถึง buffer และไม่ force
         """
         nonlocal trip_counter
         if current_trip['codes']:
@@ -2839,15 +2839,18 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             cube_util = (current_trip['cube'] / limits['max_c']) * 100 if limits['max_c'] > 0 else 0
             max_util = max(weight_util, cube_util)
             
-            # 🚨 เช็คว่า utilization ถึงเป้าหมาย 95% หรือไม่
-            if not force and max_util < (MIN_UTIL_BEFORE_FINALIZE * 100):
-                print(f"🚫 ไม่สามารถปิดทริป {trip_counter}: Utilization {max_util:.1f}% < {MIN_UTIL_BEFORE_FINALIZE*100:.0f}%")
+            # 🎯 คำนวณ buffer threshold (100% สำหรับ Punthai, 110% สำหรับ Maxmart)
+            buffer_mult = punthai_buffer if current_trip['is_punthai'] else maxmart_buffer
+            buffer_threshold = buffer_mult * 100  # 100% หรือ 110%
+            
+            # 🚨 เช็คว่า utilization ถึง buffer threshold หรือไม่
+            if not force and max_util < buffer_threshold:
+                print(f"🚫 ไม่สามารถปิดทริป {trip_counter}: Utilization {max_util:.1f}% < Buffer {buffer_threshold:.0f}%")
                 return False
             
-            # ✅ ปิดทริผ
-            if max_util < (MIN_UTIL_BEFORE_FINALIZE * 100):
-                print(f"⚠️ Trip {trip_counter}: Utilization {max_util:.1f}% ต่ำกว่าเป้าหมาย {MIN_UTIL_BEFORE_FINALIZE*100:.0f}%")
-                print(f"⚠️ Trip {trip_counter}: Utilization {max_util:.1f}% ต่ำกว่าเป้าหมาย {MIN_VEHICLE_UTILIZATION*100:.0f}%")
+            # ✅ ปิดทริป
+            if max_util < buffer_threshold:
+                print(f"⚠️ Trip {trip_counter}: Utilization {max_util:.1f}% ต่ำกว่า Buffer {buffer_threshold:.0f}% (บังคับปิดด้วย force)")
             
             for c in current_trip['codes']:
                 df.loc[df['Code'] == c, 'Trip'] = trip_counter
@@ -3269,7 +3272,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                         # ไม่ตั้ง force_finalize = True เพื่อให้รวมต่อ
                         pass
                     else:
-                        # 🌍 เช็คโซนโลจิสติกส์ก่อน - ถ้าคนละโซน → ยกเว้นจากกฎ 95%
+                        # 🌍 เช็คโซนโลจิสติกส์ก่อน - ถ้าคนละโซน → ยกเว้นจากกฎ buffer
                         current_trip_df_zone_check = df[df['Code'].isin(current_trip['codes'])]
                         new_trip_df_zone_check = df[df['Code'].isin(subdistrict_codes)]
                         
@@ -3286,12 +3289,16 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                                     if not can_combine_zones_by_highway(current_zone, new_zone):
                                         zone_conflict = True
                         
+                        # 🎯 คำนวณ buffer threshold
+                        buffer_mult_check = punthai_buffer if current_trip['is_punthai'] else maxmart_buffer
+                        buffer_threshold_check = buffer_mult_check * 100
+                        
                         if zone_conflict:
-                            # ❌ คนละโซนโลจิสติกส์ → ยกเว้นจากกฎ 95% (ให้ปิดทริปได้)
+                            # ❌ คนละโซนโลจิสติกส์ → ยกเว้นจากกฎ buffer (ให้ปิดทริปได้)
                             # ไม่ตั้ง force_finalize เพราะยังต้องเช็คเงื่อนไขอื่น
                             pass
-                        elif current_util < (MIN_UTIL_BEFORE_FINALIZE * 100):
-                            # 🚫 Utilization < 95% และไม่มี zone conflict → บังคับรวมต่อ
+                        elif current_util < buffer_threshold_check:
+                            # 🚫 Utilization < Buffer และไม่มี zone conflict → บังคับรวมต่อ
                             # 📍 เช็คว่าตำบลปัจจุบันหมดแล้วหรือยัง
                             current_sub_key = (region, current_province, current_district, current_subdistrict)
                             current_sub_remaining = subdistrict_remaining.get(current_sub_key, 0)
@@ -3304,7 +3311,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                                 force_finalize = True
                                 allow_merge = False
                         else:
-                            # ✅ Utilization >= 95% → อนุญาตให้ปิดทริปได้ แต่ยังพยายามรวมต่อจนเต็ม buffer
+                            # ✅ Utilization >= Buffer → อนุญาตให้ปิดทริปได้ แต่ยังพยายามรวมต่อจนเกิน buffer
                             # ไม่ตั้ง force_finalize = True เพื่อให้มันเช็ค buffer ต่อใน allow_merge
                             pass
             
@@ -3319,12 +3326,16 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     current_c_util_check = (current_trip['cube'] / current_limits_check['max_c']) * 100
                     current_util_check = max(current_w_util_check, current_c_util_check)
                     
-                    # เฉพาะเมื่อ utilization >= 95% เท่านั้น
-                    if current_util_check >= (MIN_UTIL_BEFORE_FINALIZE * 100):
+                    # 🎯 คำนวณ buffer threshold
+                    buffer_mult_district = punthai_buffer if current_trip['is_punthai'] else maxmart_buffer
+                    buffer_threshold_district = buffer_mult_district * 100
+                    
+                    # เฉพาะเมื่อ utilization >= buffer threshold เท่านั้น
+                    if current_util_check >= buffer_threshold_district:
                         force_finalize = True
                         allow_merge = False
                     else:
-                        # utilization < 95% → ห้ามปิดทริป (ต้องรวมอำเภอเก่าให้หมดก่อน)
+                        # utilization < buffer → ห้ามปิดทริป (ต้องรวมอำเภอเก่าให้หมดก่อน)
                         pass
             
             # 3️⃣ ตรวจสอบจังหวัด: ถ้าคนละจังหวัด → เช็ค province completion และ proximity
@@ -3355,11 +3366,15 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                         current_c_util_prov = (current_trip['cube'] / current_limits_prov['max_c']) * 100
                         current_util_prov = max(current_w_util_prov, current_c_util_prov)
                         
-                        if current_util_prov < (MIN_UTIL_BEFORE_FINALIZE * 100):
-                            # 🚫 Utilization < 95% + โซนเดียวกัน → อนุญาตข้ามจังหวัดเพื่อเพิ่ม utilization
+                        # 🎯 คำนวณ buffer threshold
+                        buffer_mult_prov = punthai_buffer if current_trip['is_punthai'] else maxmart_buffer
+                        buffer_threshold_prov = buffer_mult_prov * 100
+                        
+                        if current_util_prov < buffer_threshold_prov:
+                            # 🚫 Utilization < Buffer + โซนเดียวกัน → อนุญาตข้ามจังหวัดเพื่อเพิ่ม utilization
                             pass
                         else:
-                            # ✅ Utilization >= 95% → อนุญาตปิดทริป
+                            # ✅ Utilization >= Buffer → อนุญาตปิดทริป
                             allow_merge = False
                     else:
                         # ❌ คนละโซน + ยังมีสาขาเหลือในจังหวัดเก่า → ไม่ให้ข้ามจังหวัด (STRICT)
