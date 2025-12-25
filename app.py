@@ -2759,7 +2759,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         }
     
     # Helper function: เลือกรถที่เหมาะสม (Optimized)
-    def select_vehicle_for_load(weight, cube, drops, is_punthai, allowed_vehicles):
+    def select_vehicle_for_load(weight, cube, drops, is_punthai, allowed_vehicles, debug=False):
         """
         เลือกรถที่เหมาะสมตามโหลดและข้อจำกัด
         
@@ -2785,8 +2785,11 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             # ไม่มีทั้ง 4W และ JB (มีแต่ 6W) → เลือกรถใหญ่ก่อน: 6W → JB → 4W เพื่อ utilization สูง
             vehicle_order = ['6W', 'JB', '4W']
         
+        reasons = []  # เก็บเหตุผลที่ไม่เลือกแต่ละคัน
+        
         for v in vehicle_order:
             if v not in allowed_vehicles:
+                reasons.append(f"{v}: ไม่อยู่ใน allowed_vehicles")
                 continue
             lim = limits_to_use[v]
             
@@ -2811,6 +2814,37 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             
             if cube_ok and weight_ok and drops_ok:
                 return v
+            else:
+                # บันทึกเหตุผล
+                fails = []
+                if not weight_ok:
+                    fails.append(f"น้ำหนัก {weight:.1f} > {lim['max_w']:.1f}")
+                if not cube_ok:
+                    fails.append(f"คิว {cube:.2f} > {lim['max_c']:.2f}*{buffer_mult:.0%}")
+                if not drops_ok:
+                    fails.append(f"drops {drops} > 12")
+                reasons.append(f"{v}: {', '.join(fails)}")
+        
+        # 🚨 FALLBACK: ถ้าหารถไม่เจอเลย ให้ใช้รถใหญ่สุด (6W) ไปก่อน
+        if debug:
+            print(f"⚠️ หารถไม่เจอ: w={weight:.1f}, c={cube:.2f}, drops={drops}")
+            for r in reasons:
+                print(f"  - {r}")
+        
+        # ใช้รถใหญ่สุดใน allowed_vehicles เป็น fallback
+        if '6W' in allowed_vehicles:
+            if debug:
+                print(f"  → Fallback: ใช้ 6W")
+            return '6W'
+        elif 'JB' in allowed_vehicles:
+            if debug:
+                print(f"  → Fallback: ใช้ JB")
+            return 'JB'
+        elif '4W' in allowed_vehicles:
+            if debug:
+                print(f"  → Fallback: ใช้ 4W")
+            return '4W'
+        
         return None
     
     # Helper function: เช็ค Geographic Spread ภายในทริป
@@ -3026,7 +3060,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     test_punthai = is_all_punthai_codes(test_codes)
                     test_allowed = get_allowed_from_codes(test_codes, allowed_vehicles)
                     
-                    vehicle = select_vehicle_for_load(test_weight, test_cube, test_drops, test_punthai, test_allowed)
+                    # 🔍 Debug: เช็คการเลือกรถ
+                    vehicle = select_vehicle_for_load(test_weight, test_cube, test_drops, test_punthai, test_allowed, debug=True)
                     
                     if vehicle:
                         # พอดี! เพิ่มเข้า
@@ -3492,7 +3527,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     vehicle = None  # กระจายเกินไป → ไม่ให้รวม
                 else:
                     # 🚫 STRICT: เช็คว่าไม่เกิน buffer
-                    vehicle = select_vehicle_for_load(test_weight, test_cube, test_drops, test_punthai, test_allowed)
+                    vehicle = select_vehicle_for_load(test_weight, test_cube, test_drops, test_punthai, test_allowed, debug=True)
             else:
                 vehicle = None  # Force split due to geographic/province rule
             
