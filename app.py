@@ -1997,27 +1997,14 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     overflow_queue = []  # Queue สำหรับ stores ที่ overflow
     
     def finalize_current_trip(force=False):
-        """ปิดทริปปัจจุบันและบันทึก - ปกติห้ามปิดจนกว่าจะเต็ม buffer"""
+        """ปิดทริปปัจจุบันและบันทึก - ปิดเมื่อสาขาถัดไปจะทำให้เกิน buffer"""
         nonlocal trip_counter
         if current_trip['codes']:
-            # 📊 คำนวณ utilization ของทริปที่จะปิด
-            limits = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
-            weight_util = (current_trip['weight'] / limits['max_w']) * 100 if limits['max_w'] > 0 else 0
-            cube_util = (current_trip['cube'] / limits['max_c']) * 100 if limits['max_c'] > 0 else 0
-            max_util = max(weight_util, cube_util)
-            
-            # 🚨 ห้ามปิดทริปถ้ายังไม่ใกล้เต็ม (ยกเว้นถูกบังคับ)
-            if not force and max_util < 85.0:
-                print(f"⚠️ ไม่ปิด Trip {trip_counter}: Utilization {max_util:.1f}% ยังไม่ถึง 85% - ต้องเติมให้เต็มก่อน")
-                return False
-            
-            # แสดง warning ถ้า utilization ต่ำ
-            if max_util < (MIN_VEHICLE_UTILIZATION * 100):
-                print(f"⚠️ Trip {trip_counter}: Utilization {max_util:.1f}% ต่ำกว่าเป้าหมาย {MIN_VEHICLE_UTILIZATION*100:.0f}%")
-            
+            # บันทึกทริป (ไม่มี threshold ขั้นต่ำ - ปิดเมื่อสาขาถัดไปเกิน buffer)
             for c in current_trip['codes']:
                 df.loc[df['Code'] == c, 'Trip'] = trip_counter
             return True
+        return False
     
     def split_until_fits(allowed_vehicles, region):
         """แยก stores ออกจาก current_trip จนกว่าจะพอดีรถ (ไม่เกิน buffer) - STRICT MODE"""
@@ -2126,26 +2113,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                         # Double check
                         split_until_fits(allowed_vehicles, region)
                     else:
-                        # ไม่พอดี → ตรวจสอบ util ก่อนปิดทริป
-                        limits = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
-                        weight_util = (current_trip['weight'] / limits['max_w']) * 100 if limits['max_w'] > 0 else 0
-                        cube_util = (current_trip['cube'] / limits['max_c']) * 100 if limits['max_c'] > 0 else 0
-                        max_util = max(weight_util, cube_util)
+                        # ไม่พอดี → ปิดทริปปัจจุบัน (เพราะสาขาถัดไปทำให้เกิน buffer)
+                        finalize_current_trip(force=True)
+                        trip_counter += 1
                         
-                        # ถ้า util >= 75% → ปิดทริปได้ (เกือบเต็ม)
-                        if max_util >= 75.0:
-                            finalize_current_trip(force=True)
-                            trip_counter += 1
-                        else:
-                            # ยังไม่เต็ม → เก็บไว้ใน overflow เพื่อรอรวมกับสาขาอื่น
-                            for c in current_trip['codes']:
-                                overflow_queue.append({
-                                    'code': c,
-                                    'weight': df.loc[df['Code'] == c, 'Weight'].iloc[0],
-                                    'cube': df.loc[df['Code'] == c, 'Cube'].iloc[0],
-                                    'region': current_trip['region'],
-                                    'allowed_vehicles': current_trip['allowed_vehicles']
-                                })
                         new_allowed = get_allowed_from_codes([code], allowed_vehicles)
                         current_trip = {
                             'codes': [code],
@@ -2158,25 +2129,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                             'is_punthai': branch_bu_cache.get(code, False)
                         }
                 else:
-                    # ❌ ไม่ผ่าน Zone/Cross-Zone Check → เช็ค util ก่อนปิดทริป
-                    limits = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
-                    weight_util = (current_trip['weight'] / limits['max_w']) * 100 if limits['max_w'] > 0 else 0
-                    cube_util = (current_trip['cube'] / limits['max_c']) * 100 if limits['max_c'] > 0 else 0
-                    max_util = max(weight_util, cube_util)
+                    # ❌ ไม่ผ่าน Zone/Cross-Zone Check → ปิดทริป
+                    finalize_current_trip(force=True)
+                    trip_counter += 1
                     
-                    if max_util >= 75.0:
-                        finalize_current_trip(force=True)
-                        trip_counter += 1
-                    else:
-                        # ยังไม่เต็ม → เก็บไว้ใน overflow
-                        for c in current_trip['codes']:
-                            overflow_queue.append({
-                                'code': c,
-                                'weight': df.loc[df['Code'] == c, 'Weight'].iloc[0],
-                                'cube': df.loc[df['Code'] == c, 'Cube'].iloc[0],
-                                'region': current_trip['region'],
-                                'allowed_vehicles': current_trip['allowed_vehicles']
-                            })
                     new_allowed = get_allowed_from_codes([code], allowed_vehicles)
                     current_trip = {
                         'codes': [code],
@@ -2426,30 +2382,12 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         allowed_vehicles = ['4W', 'JB', '6W']
         
         # ==========================================
-        # Rule 0: Region Change → เช็ค util ก่อนปิดทริป + process overflow
+        # Rule 0: Region Change → ปิดทริปปัจจุบัน
         # ==========================================
         if current_trip['region'] and current_trip['region'] != region:
             process_overflow_queue()
-            
-            # เช็ค util ก่อนปิด
-            limits = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
-            weight_util = (current_trip['weight'] / limits['max_w']) * 100 if limits['max_w'] > 0 else 0
-            cube_util = (current_trip['cube'] / limits['max_c']) * 100 if limits['max_c'] > 0 else 0
-            max_util = max(weight_util, cube_util)
-            
-            if max_util >= 75.0:
-                finalize_current_trip(force=True)
-                trip_counter += 1
-            else:
-                # ยังไม่เต็ม → เก็บไว้ใน overflow
-                for c in current_trip['codes']:
-                    overflow_queue.append({
-                        'code': c,
-                        'weight': df.loc[df['Code'] == c, 'Weight'].iloc[0],
-                        'cube': df.loc[df['Code'] == c, 'Cube'].iloc[0],
-                        'region': current_trip['region'],
-                        'allowed_vehicles': current_trip['allowed_vehicles']
-                    })
+            finalize_current_trip(force=True)
+            trip_counter += 1
             
             current_trip = {
                 'codes': [], 'weight': 0, 'cube': 0, 'drops': 0,
@@ -2621,26 +2559,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             else:
                 vehicle = None  # Force split due to geographic/province rule
             
-            # 🔥 ถ้าต้อง force_finalize (เปลี่ยนตำบล/อำเภอแต่ยังมีเหลือ) → เช็ค util ก่อนปิดทริป
+            # 🔥 ถ้าต้อง force_finalize (เปลี่ยนตำบล/อำเภอแต่ยังมีเหลือ) → ปิดทริป
             if force_finalize:
-                limits = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
-                weight_util = (current_trip['weight'] / limits['max_w']) * 100 if limits['max_w'] > 0 else 0
-                cube_util = (current_trip['cube'] / limits['max_c']) * 100 if limits['max_c'] > 0 else 0
-                max_util = max(weight_util, cube_util)
-                
-                if max_util >= 75.0:
-                    finalize_current_trip(force=True)
-                    trip_counter += 1
-                else:
-                    # ยังไม่เต็ม → เก็บไว้ใน overflow
-                    for c in current_trip['codes']:
-                        overflow_queue.append({
-                            'code': c,
-                            'weight': df.loc[df['Code'] == c, 'Weight'].iloc[0],
-                            'cube': df.loc[df['Code'] == c, 'Cube'].iloc[0],
-                            'region': current_trip['region'],
-                            'allowed_vehicles': current_trip['allowed_vehicles']
-                        })
+                finalize_current_trip(force=True)
+                trip_counter += 1
                 
                 # เริ่มทริปใหม่ด้วย subdistrict ปัจจุบัน
                 new_allowed = get_allowed_from_codes(subdistrict_codes, allowed_vehicles)
@@ -2693,25 +2615,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 # 🚫 CRITICAL: เช็คว่าเกิน buffer หรือไม่ หลังรวม
                 split_until_fits(test_allowed, region)
             else:
-                # Subdistrict ไม่พอดี → เช็ค util ก่อนปิดทริปเก่า
-                limits = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
-                weight_util = (current_trip['weight'] / limits['max_w']) * 100 if limits['max_w'] > 0 else 0
-                cube_util = (current_trip['cube'] / limits['max_c']) * 100 if limits['max_c'] > 0 else 0
-                max_util = max(weight_util, cube_util)
-                
-                if max_util >= 75.0:
-                    finalize_current_trip(force=True)
-                    trip_counter += 1
-                else:
-                    # ยังไม่เต็ม → เก็บไว้ใน overflow
-                    for c in current_trip['codes']:
-                        overflow_queue.append({
-                            'code': c,
-                            'weight': df.loc[df['Code'] == c, 'Weight'].iloc[0],
-                            'cube': df.loc[df['Code'] == c, 'Cube'].iloc[0],
-                            'region': current_trip['region'],
-                            'allowed_vehicles': current_trip['allowed_vehicles']
-                        })
+                # Subdistrict ไม่พอดี → ปิดทริปเก่า (เพราะสาขาถัดไปจะเกิน buffer)
+                finalize_current_trip(force=True)
+                trip_counter += 1
                 
                 new_allowed = get_allowed_from_codes(subdistrict_codes, allowed_vehicles)
                 new_punthai = is_all_punthai_codes(subdistrict_codes)
@@ -3745,10 +3651,9 @@ def main():
                         # 🗺️ แสดงแผนที่เส้นทาง (อยู่หลังปุ่มดาวน์โหลด)
                         if FOLIUM_AVAILABLE:
                             st.markdown("### 🗺️ แผนที่เส้นทางแต่ละทริป")
-                            st.info("💡 เลือกทริปและประเภทรถเพื่อดูเส้นทางบนแผนที่ (ใช้ข้อมูลจาก OpenStreetMap)")
                             
                             # ตัวกรอง
-                            col_filter1, col_filter2 = st.columns(2)
+                            col_filter1, col_filter2, col_filter3 = st.columns([1, 1, 1])
                             
                             with col_filter1:
                                 # กรองตามเลขทริป
@@ -3762,6 +3667,10 @@ def main():
                                     unique_trucks = assigned_df['Truck'].dropna().unique()
                                     truck_types.extend(sorted([t.split()[0] for t in unique_trucks if t]))
                                 selected_truck = st.selectbox("🚛 เลือกประเภทรถ", truck_types, key="map_truck_filter")
+                            
+                            with col_filter3:
+                                # เลือกแสดงเส้นทางจริงหรือเส้นตรง
+                                use_real_route = st.checkbox("🛣️ แสดงเส้นทางจริง (ช้ากว่า)", value=False, key="map_real_route")
                             
                             # กรองข้อมูล
                             map_df = assigned_df.copy()
@@ -3823,26 +3732,30 @@ def main():
                                                 points.append([14.5942, 100.6039])
                                                 point_names.append('🏭 DC Wang Noi (กลับ)')
                                                 
-                                                # วาดเส้นทางโดยใช้ OSRM routing
+                                                # วาดเส้นทาง (เลือกได้ระหว่างเส้นตรงหรือเส้นทางจริง)
                                                 for i in range(len(points) - 1):
                                                     start = points[i]
                                                     end = points[i+1]
                                                     
-                                                    # ดึงเส้นทางจริงจาก OSRM
-                                                    try:
-                                                        osrm_url = f"http://router.project-osrm.org/route/v1/driving/{start[1]},{start[0]};{end[1]},{end[0]}?overview=full&geometries=geojson"
-                                                        response = requests.get(osrm_url, timeout=5)
-                                                        if response.status_code == 200:
-                                                            route_data = response.json()
-                                                            if route_data.get('code') == 'Ok' and route_data.get('routes'):
-                                                                coords = route_data['routes'][0]['geometry']['coordinates']
-                                                                road_path = [[c[1], c[0]] for c in coords]  # แปลง [lon,lat] เป็น [lat,lon]
+                                                    if use_real_route:
+                                                        # ดึงเส้นทางจริงจาก OSRM (ช้ากว่า)
+                                                        try:
+                                                            osrm_url = f"http://router.project-osrm.org/route/v1/driving/{start[1]},{start[0]};{end[1]},{end[0]}?overview=full&geometries=geojson"
+                                                            response = requests.get(osrm_url, timeout=3)
+                                                            if response.status_code == 200:
+                                                                route_data = response.json()
+                                                                if route_data.get('code') == 'Ok' and route_data.get('routes'):
+                                                                    coords = route_data['routes'][0]['geometry']['coordinates']
+                                                                    road_path = [[c[1], c[0]] for c in coords]
+                                                                else:
+                                                                    road_path = [start, end]
                                                             else:
-                                                                road_path = [start, end]  # fallback เส้นตรง
-                                                        else:
-                                                            road_path = [start, end]  # fallback เส้นตรง
-                                                    except:
-                                                        road_path = [start, end]  # fallback เส้นตรง
+                                                                road_path = [start, end]
+                                                        except:
+                                                            road_path = [start, end]
+                                                    else:
+                                                        # เส้นตรง (เร็ว)
+                                                        road_path = [start, end]
                                                     
                                                     # วาดเส้น
                                                     folium.PolyLine(
