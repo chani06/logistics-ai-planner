@@ -1,66 +1,5 @@
 import pandas as pd
 
-# =============================
-# ฟังก์ชันอ่านข้อห้ามรถจากไฟล์ Auto planning (1).xlsx
-# =============================
-def load_vehicle_restrictions(filepath='Dc/Auto planning (1).xlsx', sheet='Info'):
-    df = pd.read_excel(filepath, sheet_name=sheet)
-    # แสดงชื่อคอลัมน์จริง
-    print('Columns in file:', list(df.columns))
-    # หาคอลัมน์ที่ตรงกับ LocationNumber และ MaxTruckType แบบไม่สนช่องว่าง/ตัวพิมพ์
-    def find_col(cols, key, must_contain=None):
-        key_norm = key.replace(' ', '').lower()
-        for c in cols:
-            c_norm = c.replace(' ', '').lower()
-            if key_norm in c_norm:
-                if must_contain:
-                    if all(word in c_norm for word in must_contain):
-                        return c
-                else:
-                    return c
-        # ถ้าไม่เจอ ให้ลองหาโดยใช้ must_contain
-        if must_contain:
-            for c in cols:
-                c_norm = c.replace(' ', '').lower()
-                if all(word in c_norm for word in must_contain):
-                    return c
-        raise KeyError(f'Column for {key} not found!')
-    # หา column ที่มีทั้ง 'location' และ 'code' สำหรับรหัสสาขา
-    code_col = find_col(df.columns, 'Location', must_contain=['location','code'])
-    # หา column ที่มี 'maxtrucktype' สำหรับประเภทรถ
-    truck_col = find_col(df.columns, 'MaxTruckType')
-    restrictions = {}
-    for _, row in df.iterrows():
-        code = str(row[code_col]).strip()
-        max_truck = str(row[truck_col]).strip().upper()
-        if max_truck == '4W':
-            allowed = ['4W']
-        elif max_truck == 'JB':
-            allowed = ['4W', 'JB']
-        elif max_truck == '6W':
-            allowed = ['4W', 'JB', '6W']
-        else:
-            allowed = ['4W', 'JB', '6W']
-        restrictions[code] = allowed
-    return restrictions
-
-# =============================
-# ฟังก์ชันเลือกขนาดรถที่เหมาะสมตาม branch/zone
-# =============================
-def get_allowed_vehicle_for_branch(branch_code, zone, restrictions):
-    allowed = restrictions.get(str(branch_code).strip(), ['4W', 'JB', '6W'])
-    if zone == 'CENTRAL' and '6W' in allowed:
-        allowed = [v for v in allowed if v != '6W']
-    for v in ['6W', 'JB', '4W']:
-        if v in allowed:
-            return v
-    return allowed[0]
-
-# =============================
-# ตัวอย่างการใช้งาน (comment ไว้)
-# =============================
-# restrictions = load_vehicle_restrictions('Dc/Auto planning (1).xlsx', 'Info')
-# vehicle = get_allowed_vehicle_for_branch(branch_code, zone, restrictions)
 """
 Logistics Planner 
 """
@@ -302,10 +241,6 @@ MIN_UTIL = {
     '6W': 90    # 6W ต้องใช้อย่างน้อย 90%
 }
 
-# Buffer สำหรับการใช้รถ (รับจากหน้าเว็บ - ไม่ hardcode)
-BUFFER = 1.0  # Default buffer (deprecated - ใช้ค่าจากหน้าเว็บแทน)
-# PUNTHAI_BUFFER และ MAXMART_BUFFER ถูกส่งเป็น parameter ใน predict_trips() จากหน้าเว็บ
-
 # จำนวนสาขาต่อทริป - ใช้กับ 4W/JB เท่านั้น (6W ไม่จำกัด)
 MAX_BRANCHES_PER_TRIP = 12  # สูงสุด 12 สาขาต่อทริปสำหรับ 4W/JB (6W ไม่จำกัด)
 
@@ -316,7 +251,6 @@ MAX_MERGE_ITERATIONS = 25  # จำกัดรอบการรวมทริ
 # 🌍 Geographic Clustering Config
 MAX_DISTRICT_DISTANCE_KM = 50  # อำเภอที่ห่างกันเกิน 50km ไม่ควรอยู่ทริปเดียวกัน (เว้นแต่จังหวัดเดียวกัน)
 MIN_VEHICLE_UTILIZATION = 0.70  # 🎯 รถต้องใช้อย่างน้อย 70% - optimize รถให้เต็มประสิทธิภาพ
-MIN_UTIL_BEFORE_FINALIZE = 0.95  # [เลิกใช้แล้ว] ใช้ buffer (100%/110%) จากหน้าเว็บแทน
 
 # ==========================================
 # REGION ORDER CONFIG (Far-to-Near Sorting)
@@ -1524,23 +1458,6 @@ def normalize(val):
     """ทำให้รหัสสาขาเป็นมาตรฐาน"""
     return str(val).strip().upper().replace(" ", "").replace(".0", "")
 
-def calculate_distance(lat1, lon1, lat2, lon2):
-    """คำนวณระยะทางระหว่างสองจุด (กม.) - Haversine formula"""
-    if lat1 == 0 or lon1 == 0 or lat2 == 0 or lon2 == 0:
-        return 0
-    import math
-    lat1_rad, lon1_rad = math.radians(lat1), math.radians(lon1)
-    lat2_rad, lon2_rad = math.radians(lat2), math.radians(lon2)
-    dlat = lat2_rad - lat1_rad
-    dlon = lon2_rad - lon1_rad
-    a = math.sin(dlat/2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon/2)**2
-    c = 2 * math.asin(math.sqrt(a))
-    return 6371 * c
-
-def calculate_distance_from_dc(lat, lon):
-    """คำนวณระยะทางจาก DC วังน้อย (กม.)"""
-    return calculate_distance(DC_WANG_NOI_LAT, DC_WANG_NOI_LON, lat, lon)
-
 def check_branch_vehicle_compatibility(branch_code, vehicle_type):
     """ตรวจสอบว่าสาขานี้ใช้รถประเภทนี้ได้ไหม (รวม Booking + Punthai)"""
     branch_code_str = str(branch_code).strip()
@@ -1613,22 +1530,6 @@ def get_max_vehicle_for_trip(trip_codes):
             max_allowed = branch_max
     
     return max_allowed
-
-def get_required_vehicle_by_distance(branch_code):
-    """ตรวจสอบว่าสาขาต้องใช้รถอะไรตามระยะทางจาก DC"""
-    # ดึงพิกัดจาก Master
-    if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
-        master_row = MASTER_DATA[MASTER_DATA['Plan Code'] == branch_code]
-        if len(master_row) > 0:
-            lat = master_row.iloc[0].get('ละติจูด', 0)
-            lon = master_row.iloc[0].get('ลองติจูด', 0)
-            distance = calculate_distance_from_dc(lat, lon)
-            
-            # ถ้าห่างจาก DC เกินกำหนด → ต้องใช้ 6W
-            if distance > DISTANCE_REQUIRE_6W:
-                return '6W', distance
-    
-    return None, 0
 
 def haversine_distance(lat1, lon1, lat2, lon2):
     """
@@ -1744,66 +1645,6 @@ def load_model():
     except Exception as e:
         st.error(f"❌ Error loading model: {e}")
         return None
-
-def create_pair_features(code1, code2, branch_info):
-    """สร้าง features สำหรับคู่สาขา"""
-    import math
-    
-    info1 = branch_info[code1]
-    info2 = branch_info[code2]
-    
-    # คำนวณความต่างของน้ำหนักและคิว
-    weight_diff = abs(info1['avg_weight'] - info2['avg_weight'])
-    cube_diff = abs(info1['avg_cube'] - info2['avg_cube'])
-    weight_sum = info1['avg_weight'] + info2['avg_weight']
-    cube_sum = info1['avg_cube'] + info2['avg_cube']
-    
-    # จังหวัดเดียวกันหรือไม่
-    same_province = 1 if info1['province'] == info2['province'] else 0
-    
-    # คำนวณระยะทางจากพิกัด
-    distance_km = 0.0
-    if info1['latitude'] != 0 and info2['latitude'] != 0:
-        lat1, lon1 = math.radians(info1['latitude']), math.radians(info1['longitude'])
-        lat2, lon2 = math.radians(info2['latitude']), math.radians(info2['longitude'])
-        dlat = lat2 - lat1
-        dlon = lon2 - lon1
-        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
-        c = 2 * math.asin(math.sqrt(a))
-        distance_km = 6371 * c
-    
-    # ความถี่
-    freq_product = info1['total_trips'] * info2['total_trips']
-    freq_diff = abs(info1['total_trips'] - info2['total_trips'])
-    
-    # Ratio
-    weight_ratio = (info1['avg_weight'] / info2['avg_weight']) if info2['avg_weight'] > 0 else 0
-    cube_ratio = (info1['avg_cube'] / info2['avg_cube']) if info2['avg_cube'] > 0 else 0
-    
-    # ข้อจำกัดรถ
-    over_4w = 1 if (weight_sum > 2500 or cube_sum > 5.0) else 0
-    over_jb = 1 if (weight_sum > 3500 or cube_sum > 8.0) else 0
-    over_6w = 1 if (weight_sum > 5800 or cube_sum > 22.0) else 0
-    
-    return {
-        'weight_sum': weight_sum,
-        'cube_sum': cube_sum,
-        'weight_diff': weight_diff,
-        'cube_diff': cube_diff,
-        'same_province': same_province,
-        'distance_km': distance_km,
-        'avg_weight_1': info1['avg_weight'],
-        'avg_weight_2': info2['avg_weight'],
-        'avg_cube_1': info1['avg_cube'],
-        'avg_cube_2': info2['avg_cube'],
-        'freq_product': freq_product,
-        'freq_diff': freq_diff,
-        'weight_ratio': weight_ratio,
-        'cube_ratio': cube_ratio,
-        'over_4w': over_4w,
-        'over_jb': over_jb,
-        'over_6w': over_6w
-    }
 
 def load_excel(file_content, sheet_name=None):
     """โหลด Excel"""
