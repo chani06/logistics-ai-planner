@@ -316,7 +316,7 @@ MAX_MERGE_ITERATIONS = 25  # จำกัดรอบการรวมทริ
 
 # 🌍 Geographic Clustering Config
 MAX_DISTRICT_DISTANCE_KM = 50  # อำเภอที่ห่างกันเกิน 50km ไม่ควรอยู่ทริปเดียวกัน (เว้นแต่จังหวัดเดียวกัน)
-MIN_VEHICLE_UTILIZATION = 0.80  # 🎯 รถต้องใช้อย่างน้อย 80% - บังคับให้ทริปเต็ม (เพิ่มจาก 70%)
+MIN_VEHICLE_UTILIZATION = 0.70  # 🎯 รถต้องใช้อย่างน้อย 70% - optimize รถให้เต็มประสิทธิภาพ
 MIN_UTIL_BEFORE_FINALIZE = 0.95  # [เลิกใช้แล้ว] ใช้ buffer (100%/110%) จากหน้าเว็บแทน
 
 # ==========================================
@@ -2725,23 +2725,26 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 continue
             lim = limits_to_use[v]
             
-            # 🎯 เช็คเงื่อนไข:
-            # 1. Cube ต้องไม่เกิน buffer (100%/110%)
-            # 2. น้ำหนักต้องไม่เกิน 100% เสมอ (ไม่ว่า buffer จะเป็นเท่าไร)
-            # 3. Drops ต้องไม่เกิน 12 สำหรับ 4W/JB (ถ้าไม่ใช่ Punthai ล้วน)
-            cube_ok = cube <= lim['max_c'] * buffer_mult
-            weight_ok = weight <= lim['max_w']  # น้ำหนักไม่เกิน 100% เสมอ
+            # 🎯 เช็คเงื่อนไข (ตามหลักการใหม่):
+            # 1. Cube ต้องไม่เกิน buffer (100% สำหรับ Punthai, 110% สำหรับ Maxmart)
+            # 2. Weight ต้องไม่เกิน 100% เสมอ (hard limit ไม่ว่า buffer จะเป็นเท่าไร)
+            # 3. Drops:
+            #    - Punthai ล้วน: ใช้ PUNTHAI_LIMITS (4W:5, JB:10, 6W:999)
+            #    - Maxmart/ผสม: 4W และ JB ≤ 12, 6W ไม่จำกัด
             
-            # เช็ค drops
+            cube_ok = cube <= lim['max_c'] * buffer_mult
+            weight_ok = weight <= lim['max_w']  # Weight ≤ 100% เสมอ
+            
+            # เช็ค Drops
             if v in ['4W', 'JB']:
                 if is_punthai:
-                    # Punthai ล้วน ใช้ limit พิเศษ (5 สำหรับ 4W, 10 สำหรับ JB)
+                    # Punthai ล้วน: ใช้ max_drops จาก PUNTHAI_LIMITS
                     drops_ok = drops <= lim.get('max_drops', 12)
                 else:
-                    # ไม่ใช่ Punthai ล้วน หรือ Maxmart/ผสม → ไม่เกิน 12 drops
+                    # Maxmart/ผสม: 4W และ JB จำกัด 12 drops
                     drops_ok = drops <= 12
             else:
-                # 6W ไม่มีข้อจำกัด drops
+                # 6W: ไม่จำกัด drops
                 drops_ok = True
             
             if cube_ok and weight_ok and drops_ok:
@@ -3729,75 +3732,128 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         buffer_label = f"🅿️ {buffer_pct}%" if is_punthai_only_trip else f"🅼 {buffer_pct}%"
         trip_type = 'punthai' if is_punthai_only_trip else 'maxmart'
         
-        # เลือกรถที่พอดีที่สุด
+        # 🚛 เลือกรถตามหลักการใหม่:
+        # 1. เริ่มจาก MaxVehicle ที่เล็กที่สุดของสาขาทุกสาขาในทริป
+        # 2. เช็ค Cube ≥ Buffer (100%/110%) หรือ Weight ≥ 100%
+        # 3. เช็ค Weight ≤ 100% (hard limit)
+        # 4. เช็ค Drops ≤ 12 (สำหรับ 4W/JB ที่ไม่ใช่ Punthai ล้วน)
+        # 5. ถ้าไม่ผ่าน → เพิ่มรถขึ้น
+        
         suggested = max_allowed_vehicle
-        source = "📋 จำกัดสาขา" if min_max_size < 3 else "🤖 อัตโนมัติ"
+        source = "📋 MaxVehicle" if min_max_size < 3 else "🤖 Auto"
         
-        # ✅ ตรวจสอบ Minimum Utilization (ไม่ให้ต่ำกว่ามาตรฐาน)
-        if suggested in LIMITS:
-            limits_to_check = PUNTHAI_LIMITS if is_punthai_only_trip else LIMITS
-            max_w = limits_to_check[suggested]['max_w']
-            max_c = limits_to_check[suggested]['max_c']
-            w_util = (total_w / max_w) * 100
-            c_util = (total_c / max_c) * 100
-            current_util = max(w_util, c_util)
+        # เลือก LIMITS ตามประเภท BU
+        limits_to_use = PUNTHAI_LIMITS if is_punthai_only_trip else LIMITS
+        
+        # ===============================================
+        # หลักการ: ตรวจสอบรถทีละคัน จากเล็กไปใหญ่
+        # ===============================================
+        attempts = 0
+        max_attempts = 3  # ป้องกัน infinite loop
+        
+        while attempts < max_attempts:
+            attempts += 1
             
-            # ถ้า utilization ต่ำกว่า MIN_VEHICLE_UTILIZATION และสามารถใช้รถเล็กกว่าได้
-            min_util_threshold = MIN_VEHICLE_UTILIZATION * 100  # 70%
-            if current_util < min_util_threshold:
-                # ลองใช้รถเล็กกว่า
-                if suggested == '6W' and 'JB' in max_vehicles:
-                    jb_w_util = (total_w / limits_to_check['JB']['max_w']) * 100
-                    jb_c_util = (total_c / limits_to_check['JB']['max_c']) * 100
-                    if max(jb_w_util, jb_c_util) >= min_util_threshold:
+            if suggested not in LIMITS:
+                break
+            
+            # คำนวณ % การใช้งาน
+            w_pct = (total_w / LIMITS[suggested]['max_w']) * 100
+            c_pct = (total_c / LIMITS[suggested]['max_c']) * 100
+            
+            # เช็ค Drops limit
+            if is_punthai_only_trip:
+                # Punthai ล้วน: ใช้ PUNTHAI_LIMITS (4W:5, JB:10, 6W:999)
+                max_drops_allowed = limits_to_use[suggested]['max_drops']
+            else:
+                # Maxmart/ผสม: 4W และ JB ≤ 12, 6W ไม่จำกัด
+                if suggested in ['4W', 'JB']:
+                    max_drops_allowed = 12
+                else:
+                    max_drops_allowed = 999
+            
+            drops_ok = trip_drops <= max_drops_allowed
+            
+            # ===== เช็คเงื่อนไข =====
+            # 1. Cube ≤ Buffer (ห้ามเกิน)
+            cube_buffer_ok = c_pct <= (buffer * 100)
+            
+            # 2. Weight ≤ 100% (hard limit เสมอ)
+            weight_hard_ok = w_pct <= 100
+            
+            # 3. Drops OK
+            # 4. ตรวจสอบว่าทริปเต็มพอหรือยัง (สำหรับการปิดทริป)
+            #    - Cube ≥ Buffer หรือ
+            #    - Weight ≥ 100%
+            # (ข้อนี้ใช้ใน finalize_current_trip เท่านั้น)
+            
+            # ถ้าผ่านทุกเงื่อนไข → ใช้รถนี้
+            if cube_buffer_ok and weight_hard_ok and drops_ok:
+                # ตรวจสอบว่ารถนี้มี utilization ต่ำเกินไปหรือไม่ (< 70%)
+                max_util_pct = max(w_pct, c_pct)
+                if max_util_pct < (MIN_VEHICLE_UTILIZATION * 100):
+                    # ลองลดรถเล็กลง (ถ้าสาขาอนุญาต)
+                    if suggested == '6W' and min_max_size >= 2:
                         suggested = 'JB'
-                        source += " → JB (Optimize)"
-                elif suggested == 'JB' and '4W' in max_vehicles:
-                    fw_w_util = (total_w / limits_to_check['4W']['max_w']) * 100
-                    fw_c_util = (total_c / limits_to_check['4W']['max_c']) * 100
-                    if max(fw_w_util, fw_c_util) >= min_util_threshold and trip_drops <= limits_to_check['4W']['max_drops']:
+                        source = "🎯 Optimize 70%"
+                        continue  # ลูปใหม่เพื่อเช็ค JB
+                    elif suggested == 'JB' and min_max_size >= 1:
                         suggested = '4W'
-                        source += " → 4W (Optimize)"
-        
-        # 🔒 Punthai Drop Limit Check
-        if is_punthai_only_trip:
-            punthai_drop_limit = PUNTHAI_LIMITS.get(suggested, {}).get('max_drops', 999)
-            if trip_drops > punthai_drop_limit:
-                # ต้องเพิ่มขนาดรถเพื่อรองรับ drops
-                if suggested == '4W' and trip_drops <= PUNTHAI_LIMITS['JB']['max_drops']:
+                        source = "🎯 Optimize 70%"
+                        continue  # ลูปใหม่เพื่อเช็ค 4W
+                # ถ้าไม่สามารถลดรถได้อีก หรือ util ≥70% แล้ว → ใช้รถนี้
+                break
+            
+            # ===== ไม่ผ่านเงื่อนไข → ต้องเพิ่มรถ =====
+            if not cube_buffer_ok:
+                # Cube เกิน buffer
+                if suggested == '4W' and min_max_size >= 2:
                     suggested = 'JB'
-                    source += " → JB (Drop Limit)"
-                elif suggested == 'JB' or trip_drops > PUNTHAI_LIMITS['JB']['max_drops']:
-                    # เพิ่มเป็น 6W เมื่อ drops เกิน
+                    source = "⬆️ Cube Buffer"
+                    continue
+                elif suggested == 'JB' and min_max_size >= 3:
                     suggested = '6W'
-                    source += " → 6W (Drop Limit)"
+                    source = "⬆️ Cube Buffer"
+                    continue
+                else:
+                    # ไม่สามารถเพิ่มรถได้อีก
+                    break
+            
+            elif not weight_hard_ok:
+                # Weight เกิน 100%
+                if suggested == '4W' and min_max_size >= 2:
+                    suggested = 'JB'
+                    source = "🚨 Weight 100%"
+                    continue
+                elif suggested == 'JB' and min_max_size >= 3:
+                    suggested = '6W'
+                    source = "🚨 Weight 100%"
+                    continue
+                else:
+                    # ไม่สามารถเพิ่มรถได้อีก
+                    break
+            
+            elif not drops_ok:
+                # Drops เกินขีดจำกัด
+                if suggested == '4W' and min_max_size >= 2:
+                    suggested = 'JB'
+                    source = "🔒 Drops Limit"
+                    continue
+                elif suggested == 'JB' and min_max_size >= 3:
+                    suggested = '6W'
+                    source = "🔒 Drops Limit"
+                    continue
+                else:
+                    # ไม่สามารถเพิ่มรถได้อีก
+                    break
+            
+            # ถ้าไม่มีเหตุผลใดๆ แล้ว → หยุด
+            break
         
-        # คำนวณ utilization
-        max_util_threshold = buffer * 100  # 100% หรือ 110% ตาม BU
+        # คำนวณ utilization สุดท้าย
         if suggested in LIMITS:
             w_util = (total_w / LIMITS[suggested]['max_w']) * 100
             c_util = (total_c / LIMITS[suggested]['max_c']) * 100
-            max_util = max(w_util, c_util)
-            
-            # ถ้าเกิน threshold ตาม BU ต้องเพิ่มขนาดรถ
-            if max_util > max_util_threshold:
-                if suggested == '4W' and min_max_size >= 2:
-                    jb_util = max((total_w / LIMITS['JB']['max_w']), (total_c / LIMITS['JB']['max_c'])) * 100
-                    if jb_util <= max_util_threshold:
-                        suggested = 'JB'
-                        source += " → JB"
-                        w_util = (total_w / LIMITS['JB']['max_w']) * 100
-                        c_util = (total_c / LIMITS['JB']['max_c']) * 100
-                    elif min_max_size >= 3:
-                        suggested = '6W'
-                        source += " → 6W"
-                        w_util = (total_w / LIMITS['6W']['max_w']) * 100
-                        c_util = (total_c / LIMITS['6W']['max_c']) * 100
-                elif suggested == 'JB' and min_max_size >= 3:
-                    suggested = '6W'
-                    source += " → 6W"
-                    w_util = (total_w / LIMITS['6W']['max_w']) * 100
-                    c_util = (total_c / LIMITS['6W']['max_c']) * 100
         else:
             w_util = c_util = 0
         
