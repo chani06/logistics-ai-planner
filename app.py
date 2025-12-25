@@ -3090,8 +3090,8 @@ def main():
                             status_text.write("🔄 กำลังคำนวณเส้นทางและจัดกลุ่ม... (อาจใช้เวลา 10-30 วินาที)")
                             progress_bar.progress(20)
                             
-                            import time
-                            start_time = time.time()
+                            import time as time_module
+                            start_time = time_module.time()
                             
                             # ส่ง buffer แยกตาม BU
                             result_df, summary = predict_trips(
@@ -3101,7 +3101,7 @@ def main():
                                 maxmart_buffer=maxmart_buffer_value
                             )
                             
-                            elapsed_time = time.time() - start_time
+                            elapsed_time = time_module.time() - start_time
                             progress_bar.progress(90)
                             
                             # 💾 เก็บผลลัพธ์ใน session_state เพื่อใช้ตอน export
