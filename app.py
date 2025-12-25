@@ -2838,52 +2838,32 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 print(f"  ⚠️ allowed_vehicles ว่าง → Fallback: ใช้ 6W")
             return '6W'  # ถ้าไม่มีข้อจำกัด ใช้ 6W
         
-        # เช็คว่าโหลดเกินมากเกินไปหรือไม่ (>150% ของรถที่ใหญ่ที่สุดใน allowed)
+        # พยายาม override MaxVehicle ถ้าโหลดเกิน buffer
         limits_to_check = PUNTHAI_LIMITS if is_punthai else LIMITS
-        largest_allowed = None
-        if '6W' in allowed_vehicles:
-            largest_allowed = '6W'
-        elif 'JB' in allowed_vehicles:
-            largest_allowed = 'JB'
-        elif '4W' in allowed_vehicles:
-            largest_allowed = '4W'
         
-        if largest_allowed:
-            max_lim = limits_to_check[largest_allowed]
-            weight_ratio = weight / max_lim['max_w']
-            cube_ratio = cube / (max_lim['max_c'] * buffer_mult)
-            max_ratio = max(weight_ratio, cube_ratio)
-            
-            # ถ้าโหลดเกิน 150% ของรถที่ใหญ่ที่สุด → พยายาม override ก่อน
-            if max_ratio > 1.5:
-                if debug:
-                    print(f"  ⚠️ โหลดเกิน 150% ({max_ratio:.0%})")
-                # ถ้ามี MaxVehicle จำกัด → override ใช้ 6W
-                if '6W' not in allowed_vehicles:
-                    if debug:
-                        print(f"  → Override MaxVehicle: บังคับใช้ 6W")
-                    return '6W'
-                # ถ้ามี 6W แล้วยังเกิน → return None เพื่อ split
-                if debug:
-                    print(f"  ❌ โหลดเกิน 6W ({max_ratio:.0%}) → ต้อง split ทริป")
-                return None
-            
-            # ถ้าโหลดเกิน 100% แต่ไม่ถึง 150% → override MaxVehicle และใช้รถใหญ่กว่า
-            if max_ratio > 1.0:
-                if '6W' not in allowed_vehicles and (weight > 3500 or cube > 7.0 * buffer_mult):
-                    if debug:
-                        print(f"  → Override MaxVehicle: ใช้ 6W (โหลดเกิน JB)")
-                    return '6W'
-                elif 'JB' not in allowed_vehicles and (weight > 2500 or cube > 5.0 * buffer_mult):
-                    if debug:
-                        print(f"  → Override MaxVehicle: ใช้ JB (โหลดเกิน 4W)")
-                    return 'JB'
-        
-        # Fallback ปกติ: ใช้รถที่ใหญ่ที่สุดใน allowed_vehicles
-        if largest_allowed:
+        # ถ้าโหลดเกินรถที่ใหญ่ที่สุดใน allowed_vehicles → ลอง override ใช้รถใหญ่กว่า
+        if '6W' not in allowed_vehicles and (weight > 3500 or cube > 7.0 * buffer_mult):
             if debug:
-                print(f"  → Fallback: ใช้ {largest_allowed}")
-            return largest_allowed
+                print(f"  → Override MaxVehicle: ใช้ 6W (โหลดเกิน JB: {weight}kg/{cube}m³)")
+            return '6W'
+        elif 'JB' not in allowed_vehicles and (weight > 2500 or cube > 5.0 * buffer_mult):
+            if debug:
+                print(f"  → Override MaxVehicle: ใช้ JB (โหลดเกิน 4W: {weight}kg/{cube}m³)")
+            return 'JB'
+        
+        # Fallback: ใช้รถที่ใหญ่ที่สุดใน allowed_vehicles
+        if '6W' in allowed_vehicles:
+            if debug:
+                print(f"  → Fallback: ใช้ 6W")
+            return '6W'
+        elif 'JB' in allowed_vehicles:
+            if debug:
+                print(f"  → Fallback: ใช้ JB")
+            return 'JB'
+        elif '4W' in allowed_vehicles:
+            if debug:
+                print(f"  → Fallback: ใช้ 4W")
+            return '4W'
         
         # Fallback สุดท้าย: ถ้าไม่มีรถเลย ใช้ 6W
         if debug:
