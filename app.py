@@ -235,7 +235,7 @@ PUNTHAI_LIMITS = {
 }
 
 #  Geographic Clustering Config
-MAX_DISTRICT_DISTANCE_KM = 50  # อำเภอที่ห่างกันเกิน 50km ไม่ควรอยู่ทริปเดียวกัน (เว้นแต่จังหวัดเดียวกัน)
+MAX_DISTRICT_DISTANCE_KM = 30  # คนละจังหวัด: ห่างกันเกิน 30km ไม่ควรรวมทริป (จังหวัดเดียวกันสามารถ 80km)
 
 # ==========================================
 # REGION ORDER CONFIG (Far-to-Near Sorting)
@@ -961,6 +961,21 @@ def calculate_district_centroid(district_df):
 
 def check_geographic_proximity(district1_df, district2_df, max_distance_km=MAX_DISTRICT_DISTANCE_KM):
     """ตรวจสอบว่า 2 อำเภอใกล้กันพอที่จะอยู่ทริปเดียวกันได้หรือไม่"""
+    # ตรวจสอบจังหวัด
+    prov1 = district1_df['_province'].iloc[0] if not district1_df.empty else ''
+    prov2 = district2_df['_province'].iloc[0] if not district2_df.empty else ''
+    
+    # 🚨 ถ้าคนละจังหวัด → เช็ค Logistics Zone ก่อน
+    if prov1 and prov2 and prov1 != prov2:
+        # เช็คว่าอยู่ Logistics Zone เดียวกันหรือไม่
+        zone1 = get_logistics_zone(prov1, '', '')
+        zone2 = get_logistics_zone(prov2, '', '')
+        
+        if zone1 and zone2 and zone1 != zone2:
+            # คนละ Zone → เช็คว่าอยู่บนทางหลวงเดียวกันหรือไม่
+            if not can_combine_zones_by_highway(zone1, zone2):
+                return False  # คนละทางหลวง → ห้ามรวม
+    
     # คำนวณระยะห่างระหว่าง centroids
     lat1, lon1 = calculate_district_centroid(district1_df)
     lat2, lon2 = calculate_district_centroid(district2_df)
@@ -970,16 +985,11 @@ def check_geographic_proximity(district1_df, district2_df, max_distance_km=MAX_D
     
     distance = haversine_distance(lat1, lon1, lat2, lon2)
     
-    # ตรวจสอบจังหวัด
-    prov1 = district1_df['_province'].iloc[0] if not district1_df.empty else ''
-    prov2 = district2_df['_province'].iloc[0] if not district2_df.empty else ''
-    
     if prov1 and prov2 and prov1 == prov2:
-        # ✅ จังหวัดเดียวกัน → ใช้ threshold กว้างกว่า (80km)
-        # เพื่อไม่ให้อำเภอที่อยู่คนละด้านของจังหวัดถูกจับเข้าทริปเดียวกัน
-        return distance <= (max_distance_km * 1.6)  # 50km * 1.6 = 80km
+        # ✅ จังหวัดเดียวกัน → ใช้ threshold กว้างกว่า (60km)
+        return distance <= (max_distance_km * 2.0)  # 30km * 2.0 = 60km
     else:
-        # ⚠️ คนละจังหวัด → ใช้ threshold มาตรฐาน (50km)
+        # ⚠️ คนละจังหวัด → ใช้ threshold เข้มงวด (30km)
         return distance <= max_distance_km
 
 def sort_branches_by_region_route(branches_df, master_data=None):
@@ -2410,8 +2420,21 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     allow_merge = False
                 elif is_cross_zone_violation(current_province, province):
                     allow_merge = False
-                elif not check_geographic_proximity(current_trip_df, subdistrict_df):
-                    allow_merge = False
+                else:
+                    # เช็ค Logistics Zone ก่อน
+                    current_zone = get_logistics_zone(current_province, '', '')
+                    new_zone = get_logistics_zone(province, '', '')
+                    if current_zone and new_zone and current_zone != new_zone:
+                        if not can_combine_zones_by_highway(current_zone, new_zone):
+                            allow_merge = False
+                        else:
+                            # เช็ค proximity
+                            if not check_geographic_proximity(current_trip_df, subdistrict_df):
+                                allow_merge = False
+                    else:
+                        # Zone เดียวกัน → เช็ค proximity
+                        if not check_geographic_proximity(current_trip_df, subdistrict_df):
+                            allow_merge = False
             
             # 4️⃣ Logistics Zone: ห้ามข้ามโซนทางหลวง
             if allow_merge:
