@@ -2240,9 +2240,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         if not remaining_groups:
             break
         
-        # 🌍 เลือกตำบลที่ใกล้ที่สุดจากทริปปัจจุบัน - เน้นโซนย่อยก่อน
+        # 🌍 เลือกตำบลที่ใกล้ที่สุดจากทริปปัจจุบัน - เน้นโซนย่อยก่อนและเส้นทางต่อเนื่อง
         # 🎯 ลำดับความสำคัญ:
-        # 1) ตำบลเดียวกัน (ต่อเนื่อง) → 2) อำเภอเดียวกัน → 3) จังหวัดเดียวกัน → 4) Zone เดียวกัน → 5) ข้าม Zone
+        # 1) ตำบลเดียวกัน (ต่อเนื่อง) → 2) อำเภอเดียวกัน → 3) จังหวัดเดียวกัน 
+        # 4) Zone เดียวกัน → 5) Zone ใกล้กว่า DC (ระหว่างทาง) → 6) ข้าม Zone อื่นๆ
         best_idx = None
         best_distance = float('inf')
         best_idx_same_district = None
@@ -2251,6 +2252,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         best_distance_same_province = float('inf')
         best_idx_same_zone = None
         best_distance_same_zone = float('inf')
+        best_idx_closer_to_dc = None
+        best_distance_closer_to_dc = float('inf')
         best_idx_cross_zone = None
         best_distance_cross_zone = float('inf')
         
@@ -2259,6 +2262,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             current_trip_df = df[df['Code'].isin(current_trip['codes'])]
             current_lat = current_trip_df['_lat'].mean()
             current_lon = current_trip_df['_lon'].mean()
+            
+            # 📏 คำนวณระยะทางจากทริปปัจจุบันไป DC
+            current_distance_to_dc = haversine_distance(current_lat, current_lon, DC_WANG_NOI_LAT, DC_WANG_NOI_LON) if current_lat > 0 and current_lon > 0 else 9999
             
             # 🔍 หาข้อมูลโซนของทริปปัจจุบัน
             current_provinces = current_trip_df['_province'].dropna().unique()
@@ -2285,6 +2291,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     sub_zones = subdistrict_df['_logistics_zone'].dropna().unique()
                     sub_zone = sub_zones[0] if len(sub_zones) > 0 else None
                     
+                    # 📏 คำนวณระยะทางจากตำบลนี้ไป DC
+                    sub_distance_to_dc = haversine_distance(sub_lat, sub_lon, DC_WANG_NOI_LAT, DC_WANG_NOI_LON)
+                    
                     # ⭐ ลำดับที่ 1: ตำบลเดียวกัน (ต่อเนื่อง)
                     if current_subdistrict and subdistrict and current_subdistrict == subdistrict:
                         if distance < best_distance:
@@ -2305,19 +2314,29 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                         if distance < best_distance_same_zone:
                             best_distance_same_zone = distance
                             best_idx_same_zone = i
-                    # 💾 ลำดับที่ 5: ข้าม Zone (backup สุดท้าย)
+                    # � ลำดับที่ 5: Zone อื่นที่ใกล้กว่า DC (อยู่ระหว่างทางกลับ)
+                    # หลักการ: เลือกโซนที่อยู่ระหว่างทางกลับ DC เพื่อให้เส้นทางต่อเนื่อง
+                    elif sub_distance_to_dc < current_distance_to_dc:
+                        # โซนนี้ใกล้ DC กว่าทริปปัจจุบัน → อยู่ระหว่างทาง
+                        if distance < best_distance_closer_to_dc:
+                            best_distance_closer_to_dc = distance
+                            best_idx_closer_to_dc = i
+                    # 💾 ลำดับที่ 6: ข้าม Zone อื่นๆ (backup สุดท้าย)
                     else:
                         if distance < best_distance_cross_zone:
                             best_distance_cross_zone = distance
                             best_idx_cross_zone = i
             
-            # ⭐ เลือกตามลำดับความสำคัญ: ตำบลเดียวกัน → อำเภอเดียวกัน → จังหวัดเดียวกัน → Zone เดียวกัน → ข้าม Zone
+            # ⭐ เลือกตามลำดับความสำคัญ: 
+            # ตำบลเดียวกัน → อำเภอเดียวกัน → จังหวัดเดียวกัน → Zone เดียวกัน → Zone ใกล้กว่า DC → ข้าม Zone
             if best_idx is None and best_idx_same_district is not None:
                 best_idx = best_idx_same_district
             if best_idx is None and best_idx_same_province is not None:
                 best_idx = best_idx_same_province
             if best_idx is None and best_idx_same_zone is not None:
                 best_idx = best_idx_same_zone
+            if best_idx is None and best_idx_closer_to_dc is not None:
+                best_idx = best_idx_closer_to_dc
             if best_idx is None and best_idx_cross_zone is not None:
                 best_idx = best_idx_cross_zone
             
