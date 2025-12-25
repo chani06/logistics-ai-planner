@@ -1731,74 +1731,6 @@ def can_fit_truck(total_weight, total_cube, truck_type):
     max_c = limits['max_c'] * BUFFER
     return total_weight <= max_w and total_cube <= max_c
 
-def suggest_truck(total_weight, total_cube, max_allowed='6W', trip_codes=None):
-    """
-    แนะนำรถที่เหมาะสม โดยเลือกรถที่:
-    1. ใส่ของได้พอดี (ไม่เกินขีดจำกัด 105%)
-    2. ใช้งานได้ใกล้ 100% มากที่สุด (เป้าหมาย: 90-100%)
-    3. เคารพข้อจำกัดของสาขา (ถ้าสาขาใช้แค่ 4W = ต้องใช้ 4W เท่านั้น)
-    """
-    vehicle_sizes = {'4W': 1, 'JB': 2, '6W': 3}
-    max_size = vehicle_sizes.get(max_allowed, 3)
-    
-    # ตรวจสอบข้อจำกัดของสาขาทั้งหมดในกลุ่ม
-    branch_max_vehicle = '4W'  # 🔒 เริ่มต้นที่ 4W (เล็กสุด) แล้วขยายเมื่อจำเป็น
-    if trip_codes is not None and len(trip_codes) > 0:
-        for code in trip_codes:
-            branch_max = get_max_vehicle_for_branch(code)
-            # หารถที่เล็กที่สุดที่ต้องใช้
-            if vehicle_sizes.get(branch_max, 3) < vehicle_sizes.get(branch_max_vehicle, 3):
-                branch_max_vehicle = branch_max
-        
-        # จำกัด max_allowed ตามข้อจำกัดของสาขา
-        if vehicle_sizes.get(branch_max_vehicle, 3) < max_size:
-            max_allowed = branch_max_vehicle
-            max_size = vehicle_sizes.get(max_allowed, 3)
-    
-    best_truck = None
-    best_utilization = 0
-    best_distance_from_100 = 999  # ระยะห่างจาก 100%
-    
-    for truck in ['4W', 'JB', '6W']:
-        truck_size = vehicle_sizes.get(truck, 0)
-        # ถ้ารถใหญ่กว่าที่อนุญาต ข้ามไป
-        if truck_size > max_size:
-            continue
-        if can_fit_truck(total_weight, total_cube, truck):
-            # คำนวณ % การใช้รถ
-            limits = LIMITS[truck]
-            w_util = (total_weight / limits['max_w']) * 100
-            c_util = (total_cube / limits['max_c']) * 100
-            utilization = max(w_util, c_util)
-            
-            # คำนวณระยะห่างจาก 100%
-            distance_from_100 = abs(100 - utilization)
-            
-            # เลือกรถที่ใกล้ 100% ที่สุด (90-105% เป็นเป้าหมาย)
-            # ถ้าใช้งานใกล้เคียงกัน เลือกรถที่ใช้งานสูงกว่า
-            if best_truck is None:
-                best_truck = truck
-                best_utilization = utilization
-                best_distance_from_100 = distance_from_100
-            else:
-                # ถ้าอยู่ในช่วง 90-105% เลือกที่ใกล้ 100% ที่สุด
-                if 90 <= utilization <= 105:
-                    if distance_from_100 < best_distance_from_100 or best_utilization < 90:
-                        best_truck = truck
-                        best_utilization = utilization
-                        best_distance_from_100 = distance_from_100
-                # ถ้าทั้งคู่ไม่อยู่ในช่วง เลือกที่ใช้งานสูงกว่า
-                elif utilization > best_utilization:
-                    best_truck = truck
-                    best_utilization = utilization
-                    best_distance_from_100 = distance_from_100
-    
-    if best_truck:
-        return best_truck
-    
-    # ถ้าไม่มีรถที่เหมาะสม ใช้รถใหญ่สุดที่อนุญาต
-    return max_allowed if max_allowed in LIMITS else '6W+'
-
 def calculate_optimal_vehicle_split(total_weight, total_cube, max_allowed='6W', branch_count=0):
     """
     🚛 คำนวณการแบ่งรถที่เหมาะสม
@@ -2339,7 +2271,7 @@ def process_dataframe(df):
         if col_upper == 'BU' or col_clean == 'BU':
             rename_map[col] = 'BU'
         # Code
-        elif col_clean == 'BranchCode' or 'รหัสสาขา' in col_clean or col_clean == 'รหัส WMS' or 'BRANCH_CODE' in col_upper or 'CODE' in col_upper:
+        elif col_clean == 'BranchCode' or 'รหัสสาขา' in col_clean or col_clean ==  'BRANCH_CODE' in col_upper or 'CODE' in col_upper:
             if 'Weight' not in col_upper and 'Cube' not in col_upper:  # ป้องกันไม่ให้จับ WeightCode
                 rename_map[col] = 'Code'
         # Name
