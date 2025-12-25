@@ -2765,30 +2765,35 @@ def main():
         initial_sidebar_state="collapsed"
     )
     
- 
+    # 🔄 Auto-refresh (Optional - ไม่กระทบการใช้งานหลักถ้าไม่มี)
+    # ใช้สำหรับ refresh cache ทุกเที่ยงคืน (เฉพาะ local dev)
     if AUTOREFRESH_AVAILABLE:
-        now = datetime.now()
-        # คำนวณเวลาถึงเที่ยงคืน (00:00:00)
-        midnight = datetime.combine(now.date(), datetime_time(0, 0, 0))
-        
-        # ถ้ายังไม่ถึงเที่ยงคืน เอาเที่ยงคืนวันถัดไป
-        if now < midnight:
-            next_midnight = midnight
-        else:
-            next_midnight = midnight + timedelta(days=1)
-        
-        # คำนวณเวลาที่เหลือ (วินาที)
-        seconds_until_midnight = int((next_midnight - now).total_seconds())
-        
-        # Refresh ทุกเที่ยงคืน (เฉพาะถ้ามี autorefresh)
-        if AUTOREFRESH_AVAILABLE and seconds_until_midnight > 0:
-            # เช็คในช่วง 5 นาทีก่อนเที่ยงคืน (หลัง 23:55)
-            if seconds_until_midnight <= 300:  # 5 minutes
-                st.info(f"🔄 ระบบจะ Refresh อัตโนมัติใน {seconds_until_midnight // 60} นาที")
-                st_autorefresh(interval=seconds_until_midnight * 1000, key="midnight_refresh")
+        try:
+            now = datetime.now()
+            # คำนวณเวลาถึงเที่ยงคืน (00:00:00)
+            midnight = datetime.combine(now.date(), datetime_time(0, 0, 0))
+            
+            # ถ้ายังไม่ถึงเที่ยงคืน เอาเที่ยงคืนวันถัดไป
+            if now < midnight:
+                next_midnight = midnight
             else:
-                # ตรวจสอบทุก 1 ชั่วโมง
-                st_autorefresh(interval=3600000, limit=24, key="hourly_check")
+                next_midnight = midnight + timedelta(days=1)
+            
+            # คำนวณเวลาที่เหลือ (วินาที)
+            seconds_until_midnight = int((next_midnight - now).total_seconds())
+            
+            # Refresh ทุกเที่ยงคืน (เฉพาะถ้ามี autorefresh)
+            if seconds_until_midnight > 0:
+                # เช็คในช่วง 5 นาทีก่อนเที่ยงคืน (หลัง 23:55)
+                if seconds_until_midnight <= 300:  # 5 minutes
+                    st.info(f"🔄 ระบบจะ Refresh อัตโนมัติใน {seconds_until_midnight // 60} นาที")
+                    st_autorefresh(interval=seconds_until_midnight * 1000, key="midnight_refresh")
+                else:
+                    # ตรวจสอบทุก 1 ชั่วโมง
+                    st_autorefresh(interval=3600000, limit=24, key="hourly_check")
+        except Exception as e:
+            # ถ้า autorefresh มีปัญหา → ไม่แสดง error (ฟีเจอร์เสริมเท่านั้น)
+            pass
     
     # Header
     col1, col2 = st.columns([3, 1])
