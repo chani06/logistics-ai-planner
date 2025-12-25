@@ -1121,6 +1121,10 @@ def normalize_province_name(province):
     }
     return province_mapping.get(province, province)
 
+def normalize(val):
+    """ทำให้รหัสสาขาเป็นมาตรฐาน"""
+    return str(val).strip().upper().replace(" ", "").replace(".0", "")
+
 def load_master_dist_data():
     """
     โหลดไฟล์ Master Dist.xlsx สำหรับ:
