@@ -3540,6 +3540,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 buffer_threshold_final = buffer_mult_final * 100
                 near_buffer_threshold_final = buffer_threshold_final * 0.85  # 85% ของ buffer
                 
+                # คำนวณ test weight/cube หากเพิ่มสาขาใหม่เข้าไป
+                test_weight = current_trip['weight'] + subdistrict_weight
+                test_cube = current_trip['cube'] + subdistrict_cube
+                
                 # เช็คว่าเกือบถึง buffer และเพิ่มสาขาถัดไปจะเกิน (ใช้ max util)
                 test_w_util_final = (test_weight / current_limits_final['max_w']) * 100
                 test_c_util_final = (test_cube / current_limits_final['max_c']) * 100
