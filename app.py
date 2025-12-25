@@ -2294,26 +2294,26 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     # 📏 คำนวณระยะทางจากตำบลนี้ไป DC
                     sub_distance_to_dc = haversine_distance(sub_lat, sub_lon, DC_WANG_NOI_LAT, DC_WANG_NOI_LON)
                     
-                    # ⭐ ลำดับที่ 1: ตำบลเดียวกัน (ต่อเนื่อง)
+                    # ⭐ ลำดับที่ 1: ตำบลเดียวกัน (ต่อเนื่อง - สำคัญสุด)
                     if current_subdistrict and subdistrict and current_subdistrict == subdistrict:
                         if distance < best_distance:
                             best_distance = distance
                             best_idx = i
-                    # ⭐ ลำดับที่ 2: อำเภอเดียวกัน (ตำบลติดกัน)
-                    elif current_district and district and current_district == district and current_province == province:
-                        if distance < best_distance_same_district:
-                            best_distance_same_district = distance
-                            best_idx_same_district = i
-                    # ⭐ ลำดับที่ 3: จังหวัดเดียวกัน (อำเภอติดกัน)
-                    elif current_province and province and current_province == province:
-                        if distance < best_distance_same_province:
-                            best_distance_same_province = distance
-                            best_idx_same_province = i
-                    # ⭐ ลำดับที่ 4: Logistics Zone เดียวกัน (จังหวัดในโซนเดียวกัน)
+                    # 🎯 ลำดับที่ 2: Logistics Zone เดียวกัน (เน้นเส้นทางโซนก่อน!)
                     elif current_zone and sub_zone and current_zone == sub_zone:
                         if distance < best_distance_same_zone:
                             best_distance_same_zone = distance
                             best_idx_same_zone = i
+                    # ⭐ ลำดับที่ 3: อำเภอเดียวกัน (ตำบลติดกัน - แต่คนละโซน)
+                    elif current_district and district and current_district == district and current_province == province:
+                        if distance < best_distance_same_district:
+                            best_distance_same_district = distance
+                            best_idx_same_district = i
+                    # ⭐ ลำดับที่ 4: จังหวัดเดียวกัน (อำเภอติดกัน - แต่คนละโซน)
+                    elif current_province and province and current_province == province:
+                        if distance < best_distance_same_province:
+                            best_distance_same_province = distance
+                            best_idx_same_province = i
                     # � ลำดับที่ 5: Zone อื่นที่ใกล้กว่า DC (อยู่ระหว่างทางกลับ)
                     # หลักการ: เลือกโซนที่อยู่ระหว่างทางกลับ DC เพื่อให้เส้นทางต่อเนื่อง
                     elif sub_distance_to_dc < current_distance_to_dc:
@@ -2327,14 +2327,14 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                             best_distance_cross_zone = distance
                             best_idx_cross_zone = i
             
-            # ⭐ เลือกตามลำดับความสำคัญ: 
-            # ตำบลเดียวกัน → อำเภอเดียวกัน → จังหวัดเดียวกัน → Zone เดียวกัน → Zone ใกล้กว่า DC → ข้าม Zone
+            # ⭐ เลือกตามลำดับความสำคัญ (เน้นโซนเส้นทางก่อน!): 
+            # ตำบลเดียวกัน → Zone เดียวกัน → อำเภอเดียวกัน → จังหวัดเดียวกัน → Zone ใกล้กว่า DC → ข้าม Zone
+            if best_idx is None and best_idx_same_zone is not None:
+                best_idx = best_idx_same_zone
             if best_idx is None and best_idx_same_district is not None:
                 best_idx = best_idx_same_district
             if best_idx is None and best_idx_same_province is not None:
                 best_idx = best_idx_same_province
-            if best_idx is None and best_idx_same_zone is not None:
-                best_idx = best_idx_same_zone
             if best_idx is None and best_idx_closer_to_dc is not None:
                 best_idx = best_idx_closer_to_dc
             if best_idx is None and best_idx_cross_zone is not None:
