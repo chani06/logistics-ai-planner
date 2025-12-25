@@ -14,6 +14,16 @@ from datetime import datetime, time as datetime_time, timedelta
 import io
 from math import radians, sin, cos, sqrt, atan2
 import json
+import time as time_module
+
+# Map visualization
+try:
+    import folium
+    from streamlit_folium import st_folium
+    import requests
+    FOLIUM_AVAILABLE = True
+except ImportError:
+    FOLIUM_AVAILABLE = False
 
 # Google Sheets Integration
 try:
@@ -1273,6 +1283,47 @@ def get_max_vehicle_for_trip(trip_codes):
             max_allowed = branch_max
     
     return max_allowed
+
+def get_route_osrm(pickup_lat, pickup_lon, dropoff_lat, dropoff_lon, max_retries=3):
+    """
+    ขอเส้นทางจริงจาก OSRM API (วิ่งตามถนน)
+    
+    Args:
+        pickup_lat, pickup_lon: พิกัดต้นทาง
+        dropoff_lat, dropoff_lon: พิกัดปลายทาง
+        max_retries: จำนวนครั้งที่ลองใหม่ถ้า API error
+    
+    Returns:
+        list: รายการพิกัด [[lat1, lon1], [lat2, lon2], ...] ตามเส้นทางถนน
+    """
+    if not FOLIUM_AVAILABLE:
+        return [[pickup_lat, pickup_lon], [dropoff_lat, dropoff_lon]]
+    
+    # OSRM Public Server (lon, lat format!)
+    loc = f"{pickup_lon},{pickup_lat};{dropoff_lon},{dropoff_lat}"
+    url = f"http://router.project-osrm.org/route/v1/driving/{loc}?overview=full&geometries=geojson"
+    
+    for attempt in range(max_retries):
+        try:
+            r = requests.get(url, timeout=5)
+            res = r.json()
+            
+            if "routes" in res and len(res["routes"]) > 0:
+                # แปลง GeoJSON coordinates (lon, lat) เป็น (lat, lon)
+                coords = res["routes"][0]["geometry"]["coordinates"]
+                route_coords = [[lat, lon] for lon, lat in coords]
+                return route_coords
+            else:
+                # ถ้าหาไม่เจอให้ตีเส้นตรง
+                return [[pickup_lat, pickup_lon], [dropoff_lat, dropoff_lon]]
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time_module.sleep(0.5)  # รอก่อนลองใหม่
+                continue
+            # ถ้าลองครบแล้วยังไม่ได้ ให้ตีเส้นตรง
+            return [[pickup_lat, pickup_lon], [dropoff_lat, dropoff_lon]]
+    
+    return [[pickup_lat, pickup_lon], [dropoff_lat, dropoff_lon]]
 
 def haversine_distance(lat1, lon1, lat2, lon2):
     """
@@ -3118,6 +3169,131 @@ def main():
                                 display_warn_df = warning_branches[display_cols_warn].copy()
                                 display_warn_df.columns = ['ทริป', 'รหัส', 'ชื่อสาขา', 'รถที่จัด', 'ประวัติการใช้รถ']
                                 st.dataframe(display_warn_df, use_container_width=True)
+                        
+                        st.markdown("---")
+                        
+                        # 🗺️ แสดงแผนที่เส้นทาง
+                        if FOLIUM_AVAILABLE:
+                            st.markdown("### 🗺️ แผนที่เส้นทางแต่ละทริป")
+                            st.info("💡 เลือกทริปและประเภทรถเพื่อดูเส้นทางบนแผนที่ (ใช้ข้อมูลจาก OpenStreetMap)")
+                            
+                            # ตัวกรอง
+                            col_filter1, col_filter2 = st.columns(2)
+                            
+                            with col_filter1:
+                                # กรองตามเลขทริป
+                                trip_options = ['ทั้งหมด'] + sorted([f"Trip {t}" for t in assigned_df['Trip'].unique()])
+                                selected_trip = st.selectbox("🚚 เลือกทริป", trip_options, key="map_trip_filter")
+                            
+                            with col_filter2:
+                                # กรองตามประเภทรถ
+                                truck_types = ['ทั้งหมด']
+                                if 'Truck' in assigned_df.columns:
+                                    unique_trucks = assigned_df['Truck'].dropna().unique()
+                                    truck_types.extend(sorted([t.split()[0] for t in unique_trucks if t]))
+                                selected_truck = st.selectbox("🚛 เลือกประเภทรถ", truck_types, key="map_truck_filter")
+                            
+                            # กรองข้อมูล
+                            map_df = assigned_df.copy()
+                            if selected_trip != 'ทั้งหมด':
+                                trip_num = int(selected_trip.split()[1])
+                                map_df = map_df[map_df['Trip'] == trip_num]
+                            if selected_truck != 'ทั้งหมด':
+                                map_df = map_df[map_df['Truck'].str.startswith(selected_truck, na=False)]
+                            
+                            if len(map_df) == 0:
+                                st.warning("⚠️ ไม่มีข้อมูลตามเงื่อนไขที่เลือก")
+                            else:
+                                # ตรวจสอบว่ามีพิกัด
+                                if '_lat' in map_df.columns and '_lon' in map_df.columns:
+                                    valid_coords = map_df[(map_df['_lat'] > 0) & (map_df['_lon'] > 0)]
+                                    
+                                    if len(valid_coords) == 0:
+                                        st.warning("⚠️ ไม่มีข้อมูลพิกัดสำหรับแสดงแผนที่")
+                                    else:
+                                        # สร้างแผนที่
+                                        with st.spinner("🗺️ กำลังสร้างแผนที่..."):
+                                            # หาจุดกึ่งกลาง
+                                            center_lat = valid_coords['_lat'].mean()
+                                            center_lon = valid_coords['_lon'].mean()
+                                            
+                                            # สร้างแผนที่
+                                            m = folium.Map(
+                                                location=[center_lat, center_lon],
+                                                zoom_start=8,
+                                                tiles='OpenStreetMap'
+                                            )
+                                            
+                                            # สี palette สำหรับแต่ละทริป
+                                            colors = ['blue', 'red', 'green', 'purple', 'orange', 'darkred', 
+                                                     'lightred', 'beige', 'darkblue', 'darkgreen', 'cadetblue', 
+                                                     'darkpurple', 'pink', 'lightblue', 'lightgreen', 'gray', 
+                                                     'black', 'lightgray']
+                                            
+                                            # วนลูปแต่ละทริป
+                                            for idx, trip_id in enumerate(sorted(valid_coords['Trip'].unique())):
+                                                trip_data = valid_coords[valid_coords['Trip'] == trip_id].copy()
+                                                trip_data = trip_data.sort_values('_distance_from_dc', ascending=False).reset_index(drop=True)
+                                                
+                                                trip_color = colors[idx % len(colors)]
+                                                
+                                                # ดึงชื่อรถจาก summary
+                                                truck_info = summary[summary['Trip'] == trip_id]['Truck'].iloc[0] if trip_id in summary['Trip'].values else 'N/A'
+                                                
+                                                # เพิ่ม DC เป็นจุดเริ่มต้น
+                                                points = [[14.5942, 100.6039]]  # DC Wang Noi
+                                                point_names = ['🏭 DC Wang Noi']
+                                                
+                                                # เพิ่มสาขาแต่ละแห่ง
+                                                for _, row in trip_data.iterrows():
+                                                    points.append([row['_lat'], row['_lon']])
+                                                    point_names.append(f"{row.get('Name', row.get('Code', 'Unknown'))}")
+                                                
+                                                # กลับ DC
+                                                points.append([14.5942, 100.6039])
+                                                point_names.append('🏭 DC Wang Noi (กลับ)')
+                                                
+                                                # วาดเส้นทางตามถนนจริง (OSRM)
+                                                for i in range(len(points) - 1):
+                                                    start = points[i]
+                                                    end = points[i+1]
+                                                    
+                                                    # ขอเส้นทางจาก OSRM
+                                                    road_path = get_route_osrm(start[0], start[1], end[0], end[1])
+                                                    
+                                                    # วาดเส้น
+                                                    folium.PolyLine(
+                                                        road_path,
+                                                        color=trip_color,
+                                                        weight=4,
+                                                        opacity=0.7,
+                                                        popup=f"Trip {trip_id}: {point_names[i]} → {point_names[i+1]}"
+                                                    ).add_to(m)
+                                                
+                                                # ปักหมุดแต่ละจุด
+                                                for i, (point, name) in enumerate(zip(points, point_names)):
+                                                    if i == 0 or i == len(points) - 1:
+                                                        # DC (จุดเริ่มต้นและสิ้นสุด)
+                                                        icon_config = folium.Icon(color='black', icon='home', prefix='fa')
+                                                    else:
+                                                        # สาขา
+                                                        icon_config = folium.Icon(color=trip_color, icon='store', prefix='fa')
+                                                    
+                                                    folium.Marker(
+                                                        location=point,
+                                                        popup=folium.Popup(f"<b>Trip {trip_id}</b><br>{name}<br>รถ: {truck_info}", max_width=200),
+                                                        tooltip=name,
+                                                        icon=icon_config
+                                                    ).add_to(m)
+                                            
+                                            # แสดงแผนที่
+                                            st_folium(m, width=1200, height=600)
+                                            
+                                            st.caption(f"📍 แสดง {len(valid_coords)} สาขาใน {valid_coords['Trip'].nunique()} ทริป")
+                                else:
+                                    st.warning("⚠️ ไม่มีข้อมูลพิกัดในผลลัพธ์ (ต้องมีคอลัมน์ _lat และ _lon)")
+                        else:
+                            st.info("💡 ติดตั้ง `folium` และ `streamlit-folium` เพื่อดูแผนที่เส้นทาง\n```\npip install folium streamlit-folium\n```")
                         
                         st.markdown("---")
                         
