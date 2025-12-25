@@ -249,7 +249,8 @@ PUNTHAI_LIMITS = {
 MAX_DISTRICT_DISTANCE_KM = 30  # คนละจังหวัด: ห่างกันเกิน 30km ไม่ควรรวมทริป (จังหวัดเดียวกันสามารถ 80km)
 
 # Utilization Config
-MIN_UTIL_BEFORE_FINALIZE = 0.9  # ต้องมี utilization อย่างน้อย 90% ก่อนจะปิดทริป
+MIN_UTIL_BEFORE_FINALIZE = 0.95  # ต้องมี utilization อย่างน้อย 95% ก่อนจะปิดทริป
+MIN_UTIL_FLEXIBLE = 0.85  # ถ้า utilization >= 85% ของ buffer และเกิน buffer → ปิดได้
 
 # ==========================================
 # REGION ORDER CONFIG (Far-to-Near Sorting)
@@ -1884,6 +1885,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         Logic:
         1. ถ้ามี 4W → มีข้อจำกัดมาก → เลือกรถเล็กสุดที่พอดี
         2. ถ้ามีเฉพาะ JB หรือ 6W → ไม่มีข้อจำกัดมาก → เลือก JB
+        3. Flexible finalization: ถ้า utilization >= 85% ของ buffer และเกิน 100% (weight) → อนุญาต
         """
         buffer_mult = punthai_buffer if is_punthai else maxmart_buffer
         limits_to_use = PUNTHAI_LIMITS if is_punthai else LIMITS
@@ -1902,10 +1904,24 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             if v not in allowed_vehicles:
                 continue
             lim = limits_to_use[v]
+            
+            # Standard check: ไม่เกิน buffer
             if (weight <= lim['max_w'] * buffer_mult and 
                 cube <= lim['max_c'] * buffer_mult and 
                 drops <= lim.get('max_drops', 12)):
                 return v
+            
+            # Flexible check: ถ้า utilization >= 85% ของ buffer และน้ำหนักถึง 100% แล้ว → อนุญาต
+            # (กรณี cube ยังไม่ถึง buffer แต่น้ำหนักเต็มแล้ว)
+            w_util = weight / lim['max_w']
+            c_util = cube / lim['max_c']
+            
+            # เช็ค: utilization >= 85% ของ buffer และน้ำหนักถึง 100%
+            if (w_util >= 1.0 and  # น้ำหนักถึง 100%
+                c_util >= (buffer_mult * MIN_UTIL_FLEXIBLE) and  # cube >= 85% ของ buffer
+                drops <= lim.get('max_drops', 12)):
+                return v
+        
         return None
     
     # Helper function: เช็ค Geographic Spread ภายในทริป
@@ -2411,11 +2427,11 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                         force_finalize = True
                         allow_merge = False
                     elif current_util < (MIN_UTIL_BEFORE_FINALIZE * 100):
-                        # 🚫 Utilization < 75% → บังคับรวมต่อ (ห้ามปิดทริป - ต้องเต็มให้มากขึ้น)
+                        # 🚫 Utilization < 95% → บังคับรวมต่อ (ห้ามปิดทริป - ต้องเต็มให้มากขึ้น)
                         # ไม่ตั้ง force_finalize = True เพื่อให้รวมต่อ
                         pass
                     else:
-                        # ✅ Utilization >= 75% → อนุญาตให้ปิดทริปได้ แต่ยังพยายามรวมต่อจนเต็ม buffer
+                        # ✅ Utilization >= 95% → อนุญาตให้ปิดทริปได้ แต่ยังพยายามรวมต่อจนเต็ม buffer
                         # ไม่ตั้ง force_finalize = True เพื่อให้มันเช็ค buffer ต่อใน allow_merge
                         pass
             
@@ -2428,14 +2444,32 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     force_finalize = True
                     allow_merge = False
             
-            # 3️⃣ ตรวจสอบจังหวัด: ถ้าคนละจังหวัด → เช็ค province completion และ proximity
+            # 3️⃣ ตรวจสอบจังหวัด: ถ้าคนละจังหวัด → เช็ค province completion, zone และ utilization
             if allow_merge and current_province and current_province != province:
                 province_key = (region, current_province)
                 remaining = province_remaining.get(province_key, 0)
+                
+                # เช็คว่าอยู่ในโซนเดียวกันหรือไม่
+                current_trip_zones = df[df['Code'].isin(current_trip['codes'])]['_logistics_zone'].dropna().unique()
+                new_zones = subdistrict_df['_logistics_zone'].dropna().unique()
+                same_zone = len(current_trip_zones) > 0 and len(new_zones) > 0 and current_trip_zones[0] == new_zones[0]
+                
+                # คำนวณ utilization ปัจจุบัน
+                current_limits = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
+                current_w_util = (current_trip['weight'] / current_limits['max_w']) * 100
+                current_c_util = (current_trip['cube'] / current_limits['max_c']) * 100
+                current_util = max(current_w_util, current_c_util)
+                
                 if remaining > 0:
-                    # ❌ ยังมีสาขาเหลือในจังหวัดเก่า → ไม่ให้ข้ามจังหวัด (STRICT)
-                    allow_merge = False
+                    # ยังมีสาขาเหลือในจังหวัดเก่า
+                    if same_zone and current_util < (MIN_UTIL_BEFORE_FINALIZE * 100):
+                        # ✅ โซนเดียวกัน + utilization < 95% → อนุญาตให้ข้ามจังหวัดได้
+                        pass  # allow_merge = True
+                    else:
+                        # ❌ คนละโซน หรือ utilization >= 95% → ไม่ให้ข้ามจังหวัด
+                        allow_merge = False
                 else:
+                    # จังหวัดเก่าหมดแล้ว
                     # 🚨 เช็ค NO_CROSS_ZONE_PAIRS (ห้ามข้ามภูเขา/แม่น้ำ)
                     if is_cross_zone_violation(current_province, province):
                         allow_merge = False
