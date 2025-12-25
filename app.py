@@ -2821,12 +2821,13 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     
     overflow_queue = []  # Queue สำหรับ stores ที่ overflow
     
-    def finalize_current_trip(force=False):
+    def finalize_current_trip(force=False, near_buffer=False):
         """
         ปิดทริปปัจจุบันและบันทึก
         
         Args:
             force (bool): ถ้า True → ปิดทริปไม่ว่า utilization จะต่ำ (สำหรับทริปสุดท้าย)
+            near_buffer (bool): ถ้า True → อนุญาตปิดทริปถ้าเกือบถึง buffer (≥85%)
         
         Returns:
             bool: True ถ้าปิดทริปสำเร็จ, False ถ้า utilization ไม่ถึง buffer และไม่ force
@@ -2842,15 +2843,23 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             # 🎯 คำนวณ buffer threshold (100% สำหรับ Punthai, 110% สำหรับ Maxmart)
             buffer_mult = punthai_buffer if current_trip['is_punthai'] else maxmart_buffer
             buffer_threshold = buffer_mult * 100  # 100% หรือ 110%
+            near_buffer_threshold = buffer_threshold * 0.85  # 85% ของ buffer (เช่น 85% หรือ 93.5%)
             
             # 🚨 เช็คว่า utilization ถึง buffer threshold หรือไม่
-            if not force and max_util < buffer_threshold:
-                print(f"🚫 ไม่สามารถปิดทริป {trip_counter}: Utilization {max_util:.1f}% < Buffer {buffer_threshold:.0f}%")
-                return False
+            if not force:
+                if near_buffer and max_util >= near_buffer_threshold:
+                    # ✅ เกือบถึง buffer (≥85%) และสาขาถัดไปจะเกิน → อนุญาตปิดได้
+                    print(f"✅ ปิดทริป {trip_counter}: Utilization {max_util:.1f}% ใกล้ Buffer {buffer_threshold:.0f}% (สาขาถัดไปจะเกิน)")
+                elif max_util < buffer_threshold:
+                    print(f"🚫 ไม่สามารถปิดทริป {trip_counter}: Utilization {max_util:.1f}% < Buffer {buffer_threshold:.0f}%")
+                    return False
             
             # ✅ ปิดทริป
             if max_util < buffer_threshold:
-                print(f"⚠️ Trip {trip_counter}: Utilization {max_util:.1f}% ต่ำกว่า Buffer {buffer_threshold:.0f}% (บังคับปิดด้วย force)")
+                if near_buffer:
+                    print(f"⚠️ Trip {trip_counter}: Utilization {max_util:.1f}% ต่ำกว่า Buffer {buffer_threshold:.0f}% (ปิดเพราะสาขาถัดไปจะเกิน)")
+                else:
+                    print(f"⚠️ Trip {trip_counter}: Utilization {max_util:.1f}% ต่ำกว่า Buffer {buffer_threshold:.0f}% (บังคับปิดด้วย force)")
             
             for c in current_trip['codes']:
                 df.loc[df['Code'] == c, 'Trip'] = trip_counter
@@ -3476,8 +3485,24 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 # 🚫 CRITICAL: เช็คว่าเกิน buffer หรือไม่ หลังรวม
                 split_until_fits(test_allowed, region)
             else:
-                # Subdistrict ไม่พอดี → ปิดทริปเก่า
-                finalize_current_trip()
+                # Subdistrict ไม่พอดี → เช็คว่าเกือบถึง buffer หรือไม่
+                # 📊 คำนวณ utilization ปัจจุบัน
+                current_limits_final = get_max_limits(current_trip['allowed_vehicles'], current_trip['is_punthai'])
+                current_w_util_final = (current_trip['weight'] / current_limits_final['max_w']) * 100
+                current_c_util_final = (current_trip['cube'] / current_limits_final['max_c']) * 100
+                current_util_final = max(current_w_util_final, current_c_util_final)
+                
+                # 🎯 คำนวณ buffer
+                buffer_mult_final = punthai_buffer if current_trip['is_punthai'] else maxmart_buffer
+                buffer_threshold_final = buffer_mult_final * 100
+                near_buffer_threshold_final = buffer_threshold_final * 0.85  # 85% ของ buffer
+                
+                # เช็คว่าเกือบถึง buffer และเพิ่มสาขาถัดไปจะเกิน
+                use_near_buffer = (current_util_final >= near_buffer_threshold_final and 
+                                  test_weight > current_limits_final['max_w'] * buffer_mult_final)
+                
+                # ปิดทริปเก่า
+                finalize_current_trip(near_buffer=use_near_buffer)
                 trip_counter += 1
                 
                 new_allowed = get_allowed_from_codes(subdistrict_codes, allowed_vehicles)
