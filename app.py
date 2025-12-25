@@ -3823,13 +3823,26 @@ def main():
                                                 points.append([14.5942, 100.6039])
                                                 point_names.append('🏭 DC Wang Noi (กลับ)')
                                                 
-                                                # วาดเส้นทางแบบเส้นตรง (เร็วกว่า OSRM มาก)
+                                                # วาดเส้นทางโดยใช้ OSRM routing
                                                 for i in range(len(points) - 1):
                                                     start = points[i]
                                                     end = points[i+1]
                                                     
-                                                    # ใช้เส้นตรงแทน OSRM (โหลดเร็วมาก)
-                                                    road_path = [start, end]
+                                                    # ดึงเส้นทางจริงจาก OSRM
+                                                    try:
+                                                        osrm_url = f"http://router.project-osrm.org/route/v1/driving/{start[1]},{start[0]};{end[1]},{end[0]}?overview=full&geometries=geojson"
+                                                        response = requests.get(osrm_url, timeout=5)
+                                                        if response.status_code == 200:
+                                                            route_data = response.json()
+                                                            if route_data.get('code') == 'Ok' and route_data.get('routes'):
+                                                                coords = route_data['routes'][0]['geometry']['coordinates']
+                                                                road_path = [[c[1], c[0]] for c in coords]  # แปลง [lon,lat] เป็น [lat,lon]
+                                                            else:
+                                                                road_path = [start, end]  # fallback เส้นตรง
+                                                        else:
+                                                            road_path = [start, end]  # fallback เส้นตรง
+                                                    except:
+                                                        road_path = [start, end]  # fallback เส้นตรง
                                                     
                                                     # วาดเส้น
                                                     folium.PolyLine(
