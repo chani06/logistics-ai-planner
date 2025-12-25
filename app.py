@@ -2415,6 +2415,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             current_trip_df = df[df['Code'].isin(current_trip['codes'])]
             allow_merge = True
             force_finalize = False  # 🔥 Flag สำหรับบังคับปิดทริป
+            block_reason = ""  # 🔍 DEBUG: เหตุผลที่ไม่รวม
             
             # คำนวณระยะห่างระหว่างทริปปัจจุบันกับตำบลใหม่
             if not current_trip_df.empty and len(subdistrict_df) > 0:
@@ -2433,21 +2434,11 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     current_district = current_trip_df['_district'].iloc[0] if not current_trip_df.empty else None
                     current_subdistrict = current_trip_df['_subdistrict'].iloc[0] if not current_trip_df.empty else None
                     
-                    # 🚨 ตำบลเดียวกันจริง (ต้องเช็คจังหวัด+อำเภอด้วย ป้องกันตำบลชื่อซ้ำคนละจังหวัด) → ≤ 10km
-                    if (current_subdistrict == subdistrict and 
-                        current_district == district and 
-                        current_province == province and 
-                        distance_km > 10):
-                        allow_merge = False
-                    # อำเภอเดียวกัน → ≤ 30km
-                    elif current_district == district and current_province == province and distance_km > 30:
-                        allow_merge = False
-                    # จังหวัดเดียวกัน → ≤ 80km
-                    elif current_province == province and distance_km > 80:
-                        allow_merge = False
-                    # คนละจังหวัด → ≤ 50km
-                    elif current_province != province and distance_km > 50:
-                        allow_merge = False
+                    # � ผ่อน distance threshold ให้กว้างขึ้น - ไม่บล็อกด้วยระยะทาง
+                    # หลักการ: ปิดทริปเมื่อเกิน buffer เท่านั้น ไม่ใช่เพราะระยะทาง
+                    # DEBUG: แสดงระยะทางแต่ไม่บล็อก
+                    if distance_km > 100:
+                        print(f"📏 DEBUG: ระยะห่าง {distance_km:.1f} km (ไม่บล็อก - ให้ buffer ตัดสิน)")
             
             # 🏛️ Hierarchical Grouping: ตำบล → อำเภอ → จังหวัด
             current_province = current_trip_df['_province'].iloc[0] if not current_trip_df.empty else None
@@ -2516,6 +2507,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 # 🚨 เช็คว่าห้ามข้ามโซนหรือไม่ (ภูเขา/แม่น้ำ)
                 if is_cross_zone_violation(current_province, province):
                     allow_merge = False
+                    block_reason = f"❌ Cross-zone violation: {current_province} → {province}"
+                    print(f"🚫 BLOCK: {block_reason}")
                 else:
                     # ✅ ไม่ใช่โซนห้ามข้าม → เช็ค proximity และโซนเดียวกัน
                     # 🎯 เงื่อนไข: โซนเดียวกัน หรือ ใกล้กันมาก → รวมได้
@@ -2525,9 +2518,14 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     if current_region == new_region:
                         # โซนเดียวกัน → เช็ค proximity
                         allow_merge = check_geographic_proximity(current_trip_df, subdistrict_df)
+                        if not allow_merge:
+                            block_reason = f"❌ Proximity fail: โซน {current_region} แต่ไกลเกิน"
+                            print(f"🚫 BLOCK: {block_reason}")
                     else:
                         # คนละโซน → ไม่รวม
                         allow_merge = False
+                        block_reason = f"❌ Region mismatch: {current_region} ≠ {new_region}"
+                        print(f"🚫 BLOCK: {block_reason}")
             
             # 4️⃣ ตรวจสอบ Logistics Zone: ห้ามข้ามโซนโลจิสติกส์ (ยกเว้นอยู่บนทางหลวงเดียวกัน)
             if allow_merge and current_trip['codes']:
@@ -2544,6 +2542,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                         if not can_combine_zones_by_highway(current_zone, new_zone):
                             # ❌ คนละทางหลวง → ห้ามรวม
                             allow_merge = False
+                            block_reason = f"❌ Logistics zone: {current_zone} ≠ {new_zone} (คนละทางหลวง)"
+                            print(f"🚫 BLOCK: {block_reason}")
             
             if allow_merge:
                 test_codes = current_trip['codes'] + subdistrict_codes
@@ -2556,6 +2556,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 # 🌍 INTRA-TRIP CHECK: เช็คว่าสาขาในทริปไม่กระจายเกินไป
                 if not check_intra_trip_spread(test_codes):
                     vehicle = None  # กระจายเกินไป → ไม่ให้รวม
+                    block_reason = f"❌ Intra-trip spread เกิน ({len(test_codes)} สาขา กระจายมาก)"
+                    print(f"🚫 BLOCK: {block_reason}")
                 else:
                     # 🚫 STRICT: เช็คว่าไม่เกิน buffer
                     vehicle = select_vehicle_for_load(test_weight, test_cube, test_drops, test_punthai, test_allowed)
