@@ -3224,20 +3224,20 @@ def main():
                         
                         # สร้าง location_map จาก MASTER_DATA
                         location_map = {}
-                            if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
-                                for _, row in MASTER_DATA.iterrows():
-                                    code = str(row.get('Plan Code', '')).strip().upper()
-                                    if code:
-                                        location_map[code] = {
-                                            'ตำบล': row.get('ตำบล', ''),
-                                            'อำเภอ': row.get('อำเภอ', ''),
-                                            'จังหวัด': row.get('จังหวัด', ''),
-                                            'Route': row.get('Reference', '')
-                                        }
-                            
-                            # สร้าง Trip_No map
-                            trip_no_map = {}
-                            vehicle_counts = {'4W': 0, '4WJ': 0, '6W': 0}
+                        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                            for _, row in MASTER_DATA.iterrows():
+                                code = str(row.get('Plan Code', '')).strip().upper()
+                                if code:
+                                    location_map[code] = {
+                                        'ตำบล': row.get('ตำบล', ''),
+                                        'อำเภอ': row.get('อำเภอ', ''),
+                                        'จังหวัด': row.get('จังหวัด', ''),
+                                        'Route': row.get('Reference', '')
+                                    }
+                        
+                        # สร้าง Trip_No map
+                        trip_no_map = {}
+                        vehicle_counts = {'4W': 0, '4WJ': 0, '6W': 0}
                             
                             # เรียง trip ตาม Zone Order + Province Max Dist + District Max Dist (เหมือนตอนจัดทริป)
                             ZONE_ORDER_EXPORT = {'NORTH': 1, 'NE': 2, 'SOUTH': 3, 'EAST': 4, 'WEST': 5, 'CENTRAL': 6}
