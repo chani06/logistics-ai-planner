@@ -4582,20 +4582,72 @@ def main():
                             )
                             red_font = Font(color='FF0000', bold=True)
                             
+                            # 🎯 ตรวจสอบทริปที่มีปัญหา (ใช้ buffer + vehicle constraint + NO_CROSS_ZONE)
                             failed_trips = set()
-                            vehicle_limits = {'4W': {'max_w': 2500, 'max_c': 5.0}, 'JB': {'max_w': 3500, 'max_c': 7.0}, '6W': {'max_w': 6000, 'max_c': 20.0}}
+                            failed_reasons = {}  # เก็บเหตุผลที่ fail
+                            
+                            # ดึง buffer จาก session_state
+                            buffers = st.session_state.get('trip_buffers', {'punthai': 1.0, 'maxmart': 1.1})
+                            punthai_buffer = buffers.get('punthai', 1.0)
+                            maxmart_buffer = buffers.get('maxmart', 1.1)
+                            
                             for t in result_df['Trip'].unique():
                                 if t == 0:
                                     continue
                                 trip_data = result_df[result_df['Trip'] == t]
                                 trip_cube = trip_data['Cube'].sum()
                                 trip_weight = trip_data['Weight'].sum()
+                                trip_codes = trip_data['Code'].tolist()
+                                
+                                # 1️⃣ ตรวจสอบ BU → กำหนด buffer
+                                is_punthai = all(str(trip_data[trip_data['Code'] == c]['BU'].values[0] if len(trip_data[trip_data['Code'] == c]) > 0 else '').upper() in ['211', 'PUNTHAI'] for c in trip_codes)
+                                buffer = punthai_buffer if is_punthai else maxmart_buffer
+                                
                                 trip_no = trip_no_map.get(t, '6W001')
                                 veh_type = 'JB' if trip_no.startswith('4WJ') else ('4W' if trip_no.startswith('4W') else '6W')
-                                limits = vehicle_limits.get(veh_type, vehicle_limits['6W'])
-                                max_util = max((trip_cube / limits['max_c']) * 100, (trip_weight / limits['max_w']) * 100)
-                                if max_util > 105 or max_util < 50:
+                                
+                                # ใช้ LIMITS/PUNTHAI_LIMITS ที่ถูกต้อง
+                                limits = PUNTHAI_LIMITS.get(veh_type, PUNTHAI_LIMITS['6W']) if is_punthai else LIMITS.get(veh_type, LIMITS['6W'])
+                                max_w = limits['max_w'] * buffer
+                                max_c = limits['max_c'] * buffer
+                                
+                                # 2️⃣ ตรวจสอบ utilization (ใช้ buffer)
+                                w_util = (trip_weight / max_w) * 100
+                                c_util = (trip_cube / max_c) * 100
+                                max_util = max(w_util, c_util)
+                                
+                                if max_util > 100:  # เกิน buffer → แดง
                                     failed_trips.add(t)
+                                    failed_reasons[t] = f"เกิน buffer ({max_util:.0f}%)"
+                                    continue
+                                
+                                # 3️⃣ ตรวจสอบ vehicle constraint (สาขาอนุญาตรถเล็กกว่าที่จัด)
+                                vehicle_rank = {'4W': 1, 'JB': 2, '6W': 3}
+                                veh_rank = vehicle_rank.get(veh_type, 3)
+                                has_violation = False
+                                for c in trip_codes:
+                                    max_allowed = get_max_vehicle_for_branch(c)
+                                    max_allowed_rank = vehicle_rank.get(max_allowed, 3)
+                                    if veh_rank > max_allowed_rank:
+                                        has_violation = True
+                                        break
+                                
+                                if has_violation:
+                                    failed_trips.add(t)
+                                    failed_reasons[t] = f"รถเกินข้อจำกัดสาขา"
+                                    continue
+                                
+                                # 4️⃣ ตรวจสอบ NO_CROSS_ZONE_PAIRS (มีจังหวัดที่ห้ามอยู่ด้วยกัน)
+                                provinces = trip_data['_province'].unique() if '_province' in trip_data.columns else []
+                                if len(provinces) > 1:
+                                    for i, p1 in enumerate(provinces):
+                                        for p2 in provinces[i+1:]:
+                                            if is_cross_zone_violation(p1, p2):
+                                                failed_trips.add(t)
+                                                failed_reasons[t] = f"ข้ามโซนห้าม ({p1}-{p2})"
+                                                break
+                                        if t in failed_trips:
+                                            break
                             
                             current_trip = None
                             use_yellow = True
@@ -5086,21 +5138,70 @@ def main():
                             )
                             red_font = Font(color='FF0000', bold=True)
                             
-                            # หาทริปที่ไม่ผ่านเกณฑ์
+                            # 🎯 ตรวจสอบทริปที่มีปัญหา (ใช้ buffer + vehicle constraint + NO_CROSS_ZONE)
                             failed_trips = set()
-                            vehicle_limits = {'4W': {'max_w': 2500, 'max_c': 5.0}, 'JB': {'max_w': 3500, 'max_c': 7.0}, '6W': {'max_w': 6000, 'max_c': 20.0}}
+                            failed_reasons = {}
+                            
+                            buffers = st.session_state.get('trip_buffers', {'punthai': 1.0, 'maxmart': 1.1})
+                            punthai_buffer = buffers.get('punthai', 1.0)
+                            maxmart_buffer = buffers.get('maxmart', 1.1)
+                            
                             for t in result_df['Trip'].unique():
                                 if t == 0:
                                     continue
                                 trip_data = result_df[result_df['Trip'] == t]
                                 trip_cube = trip_data['Cube'].sum()
                                 trip_weight = trip_data['Weight'].sum()
+                                trip_codes = trip_data['Code'].tolist()
+                                
+                                # 1️⃣ ตรวจสอบ BU → กำหนด buffer
+                                is_punthai = all(str(trip_data[trip_data['Code'] == c]['BU'].values[0] if len(trip_data[trip_data['Code'] == c]) > 0 else '').upper() in ['211', 'PUNTHAI'] for c in trip_codes)
+                                buffer = punthai_buffer if is_punthai else maxmart_buffer
+                                
                                 trip_no = trip_no_map.get(t, '6W001')
                                 veh_type = 'JB' if trip_no.startswith('4WJ') else ('4W' if trip_no.startswith('4W') else '6W')
-                                limits = vehicle_limits.get(veh_type, vehicle_limits['6W'])
-                                max_util = max((trip_cube / limits['max_c']) * 100, (trip_weight / limits['max_w']) * 100)
-                                if max_util > 105 or max_util < 50:
+                                
+                                limits = PUNTHAI_LIMITS.get(veh_type, PUNTHAI_LIMITS['6W']) if is_punthai else LIMITS.get(veh_type, LIMITS['6W'])
+                                max_w = limits['max_w'] * buffer
+                                max_c = limits['max_c'] * buffer
+                                
+                                # 2️⃣ ตรวจสอบ utilization
+                                w_util = (trip_weight / max_w) * 100
+                                c_util = (trip_cube / max_c) * 100
+                                max_util = max(w_util, c_util)
+                                
+                                if max_util > 100:
                                     failed_trips.add(t)
+                                    failed_reasons[t] = f"เกิน buffer ({max_util:.0f}%)"
+                                    continue
+                                
+                                # 3️⃣ ตรวจสอบ vehicle constraint
+                                vehicle_rank = {'4W': 1, 'JB': 2, '6W': 3}
+                                veh_rank = vehicle_rank.get(veh_type, 3)
+                                has_violation = False
+                                for c in trip_codes:
+                                    max_allowed = get_max_vehicle_for_branch(c)
+                                    max_allowed_rank = vehicle_rank.get(max_allowed, 3)
+                                    if veh_rank > max_allowed_rank:
+                                        has_violation = True
+                                        break
+                                
+                                if has_violation:
+                                    failed_trips.add(t)
+                                    failed_reasons[t] = f"รถเกินข้อจำกัดสาขา"
+                                    continue
+                                
+                                # 4️⃣ ตรวจสอบ NO_CROSS_ZONE_PAIRS
+                                provinces = trip_data['_province'].unique() if '_province' in trip_data.columns else []
+                                if len(provinces) > 1:
+                                    for i, p1 in enumerate(provinces):
+                                        for p2 in provinces[i+1:]:
+                                            if is_cross_zone_violation(p1, p2):
+                                                failed_trips.add(t)
+                                                failed_reasons[t] = f"ข้ามโซนห้าม ({p1}-{p2})"
+                                                break
+                                        if t in failed_trips:
+                                            break
                             
                             # เขียนข้อมูล
                             current_trip = None
