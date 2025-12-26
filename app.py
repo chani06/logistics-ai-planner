@@ -2,7 +2,7 @@ import pandas as pd
 
 """
 Logistics Planner
-Version: 2025-12-26-v3.1 
+Version: 2025-12-26-v3.2 
 """
 
 import streamlit as st
@@ -3154,49 +3154,11 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     trip_subdistricts = set()
                     trip_districts = set()
             
-            # 5️⃣ หาโซน/จังหวัดใกล้ที่สุด (ถ้าหมดโซนแล้ว)
+            # 5️⃣ หมดโซนแล้ว → ปิดทริป! (ห้ามขยายไปโซนอื่น)
+            # ตามหลัก "หมดในจังหวัดจริงๆถึงไปจังหวัดอื่น, หมดเส้นทางจริงๆถึงไปเส้นอื่น"
             if same_zone_df is None:
-                last_code = trip_codes[-1]
-                last_row = df[df['Code'] == last_code].iloc[0]
-                last_lat, last_lon = last_row['_lat'], last_row['_lon']
-                
-                if last_lat > 0 and last_lon > 0:
-                    # หาโซนที่ใกล้ที่สุด (ที่ไม่ละเมิด NO_CROSS_ZONE_PAIRS)
-                    remaining_zones = remaining_df['_logistics_zone'].unique()
-                    zone_dists = {}
-                    
-                    for zone in remaining_zones:
-                        zone_df = remaining_df[remaining_df['_logistics_zone'] == zone]
-                        # เช็ค NO_CROSS_ZONE กับจังหวัดในโซน
-                        zone_province = zone_df['_province'].iloc[0] if not zone_df.empty else ''
-                        if is_cross_zone_violation(trip_province, zone_province):
-                            continue
-                        
-                        valid_coords = zone_df[(zone_df['_lat'] > 0) & (zone_df['_lon'] > 0)]
-                        if not valid_coords.empty:
-                            dists = valid_coords.apply(
-                                lambda r: haversine_distance(last_lat, last_lon, r['_lat'], r['_lon']), axis=1
-                            )
-                            zone_dists[zone] = dists.min()
-                    
-                    if zone_dists:
-                        nearest_zone = min(zone_dists.keys(), key=lambda x: zone_dists[x])
-                        nearest_dist = zone_dists[nearest_zone]
-                        
-                        if nearest_dist < 80:  # ขยายได้ถ้าใกล้กว่า 80km
-                            trip_logistics_zone = nearest_zone
-                            nearest_prov = remaining_df[remaining_df['_logistics_zone'] == nearest_zone]['_province'].iloc[0]
-                            trip_province = nearest_prov
-                            trip_subdistricts = set()
-                            trip_districts = set()
-                            print(f"      🔄 ขยายไปโซน {nearest_zone} (ห่าง {nearest_dist:.1f} km)")
-                            continue
-                        else:
-                            break  # ไกลเกินไป → ปิดทริป
-                    else:
-                        break  # ไม่มีโซนที่ขยายได้
-                else:
-                    break
+                print(f"      🛑 หมดสาขาในโซน {trip_logistics_zone} แล้ว → ปิดทริป {trip_counter}")
+                break  # ปิดทริปเลย ไม่ขยายไปโซนอื่น
             
             # 🎯 Priority: ตำบลเดียวกัน > อำเภอเดียวกัน > จังหวัด > โซน
             same_zone_df['_priority'] = 4  # default = โซนเดียวกัน
@@ -3303,7 +3265,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 
                 # เช็คว่าเกิน buffer หรือไม่
                 if test_weight > max_w or test_cube > max_c or test_drops > max_d:
-                    continue  # เกิน buffer → ลองสาขาถัดไป
+                    # 🚨 เกิน buffer → ปิดทริปเลย! (ตัดทันทีเมื่อเกิน)
+                    print(f"      🛑 สาขา {candidate_code} ทำให้เกิน buffer → ปิดทริป {trip_counter}")
+                    break  # ปิดทริปเลย ไม่ลองสาขาอื่น
                 
                 # ✅ เพิ่มสาขานี้เข้าทริป
                 trip_codes.append(candidate_code)
