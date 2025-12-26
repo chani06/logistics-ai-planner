@@ -3706,7 +3706,13 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             
             # สร้างทริปใหม่สำหรับสาขาที่มี max_vehicle เดียวกัน
             new_trip = max_trip + 1
-            limits = PUNTHAI_LIMITS if all(str(veh_branches['BU'].iloc[0]).upper() in ['211', 'PUNTHAI']) else LIMITS
+            
+            # เช็คว่าเป็น Punthai หรือไม่
+            is_punthai = False
+            if 'BU' in veh_branches.columns and len(veh_branches) > 0:
+                bu_val = str(veh_branches['BU'].iloc[0]).upper()
+                is_punthai = bu_val in ['211', 'PUNTHAI']
+            limits = PUNTHAI_LIMITS if is_punthai else LIMITS
             
             current_w = 0
             current_c = 0
