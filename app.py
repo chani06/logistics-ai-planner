@@ -2944,13 +2944,14 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             
             # ถ้าไม่มีสาขาในโซนเดียวกัน → ลองหาจังหวัดใกล้เคียง
             if same_zone_df.empty:
-                # ลองหาสาขาที่อยู่ใกล้ centroid มาก (< 50km) แม้จะต่างจังหวัด
-                trip_df = df[df['Code'].isin(trip_codes)]
-                centroid_lat = trip_df['_lat'].mean()
-                centroid_lon = trip_df['_lon'].mean()
+                # ลองหาสาขาที่อยู่ใกล้สาขาสุดท้ายมาก (< 50km) แม้จะต่างจังหวัด
+                last_code = trip_codes[-1]
+                last_branch = df[df['Code'] == last_code].iloc[0]
+                last_lat = last_branch['_lat']
+                last_lon = last_branch['_lon']
                 
                 remaining_df['_dist_to_trip'] = remaining_df.apply(
-                    lambda row: haversine_distance(centroid_lat, centroid_lon, row['_lat'], row['_lon'])
+                    lambda row: haversine_distance(last_lat, last_lon, row['_lat'], row['_lon'])
                     if row['_lat'] > 0 and row['_lon'] > 0 else 999,
                     axis=1
                 )
@@ -2966,14 +2967,15 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 
                 same_zone_df = nearby_df.copy()
             
-            # คำนวณ centroid ของทริปปัจจุบัน
-            trip_df = df[df['Code'].isin(trip_codes)]
-            centroid_lat = trip_df['_lat'].mean()
-            centroid_lon = trip_df['_lon'].mean()
+            # 🎯 หาสาขาถัดไปจากสาขาสุดท้ายในทริป (ไม่ใช่ centroid)
+            last_code = trip_codes[-1]
+            last_branch = df[df['Code'] == last_code].iloc[0]
+            last_lat = last_branch['_lat']
+            last_lon = last_branch['_lon']
             
-            # หาสาขาที่ใกล้ centroid มากที่สุด
+            # หาสาขาที่ใกล้สาขาสุดท้ายมากที่สุด
             same_zone_df['_dist_to_trip'] = same_zone_df.apply(
-                lambda row: haversine_distance(centroid_lat, centroid_lon, row['_lat'], row['_lon'])
+                lambda row: haversine_distance(last_lat, last_lon, row['_lat'], row['_lon'])
                 if row['_lat'] > 0 and row['_lon'] > 0 else 999,
                 axis=1
             )
