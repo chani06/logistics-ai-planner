@@ -3339,32 +3339,33 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                         suggested = max_allowed_vehicle  # ใช้รถตามข้อจำกัดสาขา (JB หรือ 4W)
                         source += f" ⚠️ Drop เกิน (แต่สาขาจำกัด {max_allowed_vehicle})"
         
-        # คำนวณ utilization
+        # คำนวณ utilization - ใช้ limits ตาม BU type
         max_util_threshold = buffer * 100  # 100% หรือ 110% ตาม BU
-        if suggested in LIMITS:
-            w_util = (total_w / LIMITS[suggested]['max_w']) * 100
-            c_util = (total_c / LIMITS[suggested]['max_c']) * 100
+        limits_for_util = PUNTHAI_LIMITS if is_punthai_only_trip else LIMITS
+        if suggested in limits_for_util:
+            w_util = (total_w / limits_for_util[suggested]['max_w']) * 100
+            c_util = (total_c / limits_for_util[suggested]['max_c']) * 100
             max_util = max(w_util, c_util)
             
             # ถ้าเกิน threshold ตาม BU ต้องเพิ่มขนาดรถ
             if max_util > max_util_threshold:
                 if suggested == '4W' and min_max_size >= 2:
-                    jb_util = max((total_w / LIMITS['JB']['max_w']), (total_c / LIMITS['JB']['max_c'])) * 100
+                    jb_util = max((total_w / limits_for_util['JB']['max_w']), (total_c / limits_for_util['JB']['max_c'])) * 100
                     if jb_util <= max_util_threshold:
                         suggested = 'JB'
                         source += " → JB"
-                        w_util = (total_w / LIMITS['JB']['max_w']) * 100
-                        c_util = (total_c / LIMITS['JB']['max_c']) * 100
+                        w_util = (total_w / limits_for_util['JB']['max_w']) * 100
+                        c_util = (total_c / limits_for_util['JB']['max_c']) * 100
                     elif min_max_size >= 3:
                         suggested = '6W'
                         source += " → 6W"
-                        w_util = (total_w / LIMITS['6W']['max_w']) * 100
-                        c_util = (total_c / LIMITS['6W']['max_c']) * 100
+                        w_util = (total_w / limits_for_util['6W']['max_w']) * 100
+                        c_util = (total_c / limits_for_util['6W']['max_c']) * 100
                 elif suggested == 'JB' and min_max_size >= 3:
                     suggested = '6W'
                     source += " → 6W"
-                    w_util = (total_w / LIMITS['6W']['max_w']) * 100
-                    c_util = (total_c / LIMITS['6W']['max_c']) * 100
+                    w_util = (total_w / limits_for_util['6W']['max_w']) * 100
+                    c_util = (total_c / limits_for_util['6W']['max_c']) * 100
         else:
             w_util = c_util = 0
         
