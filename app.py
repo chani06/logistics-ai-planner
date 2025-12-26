@@ -4548,17 +4548,83 @@ def main():
                                                 # แสดงแผนที่
                                                 folium_static(m, width=1200, height=700)
                                                 
-                                                # สรุประยะทางแต่ละทริป
+                                                # สรุประยะทางแต่ละทริป - แสดงข้อมูลละเอียด
                                                 st.markdown("#### 📏 ระยะทางแต่ละทริป (เรียงจากไกล→ใกล้)")
-                                                dist_cols = st.columns(min(5, len(sorted_trip_ids)))
-                                                for i, trip_id in enumerate(sorted_trip_ids[:10]):  # แสดง 10 ทริปแรก
-                                                    trip_data = valid_coords[valid_coords['Trip'] == trip_id]
-                                                    if len(trip_data) > 0:
-                                                        max_d = trip_max_dist.get(trip_id, 0)
-                                                        n_branches = len(trip_data)
-                                                        truck_info = summary[summary['Trip'] == trip_id]['Truck'].iloc[0] if trip_id in summary['Trip'].values else 'N/A'
-                                                        with dist_cols[i % 5]:
-                                                            st.metric(f"Trip {trip_id}", f"{max_d:.0f} km", f"{n_branches} สาขา")
+                                                
+                                                # สร้าง DataFrame สำหรับแสดงตาราง
+                                                trip_details = []
+                                                for trip_id in sorted_trip_ids:
+                                                    trip_data = valid_coords[valid_coords['Trip'] == trip_id].copy()
+                                                    if len(trip_data) == 0:
+                                                        continue
+                                                    
+                                                    # เรียงตามระยะทางจาก DC (ไกล → ใกล้)
+                                                    trip_data = trip_data.sort_values('_distance_from_dc', ascending=False).reset_index(drop=True)
+                                                    
+                                                    # ดึงข้อมูลรถจาก summary
+                                                    truck_info = summary[summary['Trip'] == trip_id]['Truck'].iloc[0] if trip_id in summary['Trip'].values else 'N/A'
+                                                    truck_type = truck_info.split()[0] if truck_info else 'N/A'
+                                                    
+                                                    # คำนวณน้ำหนักและคิวรวม
+                                                    total_weight = trip_data['Weight'].sum()
+                                                    total_cube = trip_data['Cube'].sum()
+                                                    
+                                                    # สาขาไกลสุดจาก DC
+                                                    max_dist_from_dc = trip_data['_distance_from_dc'].max()
+                                                    
+                                                    # คำนวณระยะทางรวม (DC → สาขา1 → สาขา2 → ... → สาขาสุดท้าย) - ไม่รวมกลับ DC
+                                                    points = []
+                                                    for _, row in trip_data.iterrows():
+                                                        if row['_lat'] > 0 and row['_lon'] > 0:
+                                                            points.append([row['_lat'], row['_lon']])
+                                                    
+                                                    route_distance = 0  # DC → สาขา1 → ... → สาขาสุดท้าย
+                                                    inter_branch_distance = 0  # สาขา → สาขา (ไม่รวม DC)
+                                                    
+                                                    if len(points) > 0:
+                                                        # DC → สาขาแรก (ไกลสุด)
+                                                        route_distance += haversine_distance(DC_LAT, DC_LON, points[0][0], points[0][1])
+                                                        
+                                                        # สาขา → สาขา
+                                                        for j in range(len(points) - 1):
+                                                            seg_dist = haversine_distance(points[j][0], points[j][1], points[j+1][0], points[j+1][1])
+                                                            route_distance += seg_dist
+                                                            inter_branch_distance += seg_dist
+                                                    
+                                                    trip_details.append({
+                                                        'ทริป': trip_id,
+                                                        'รถ': truck_type,
+                                                        'สาขา': len(trip_data),
+                                                        'น้ำหนัก (kg)': f"{total_weight:,.0f}",
+                                                        'คิว (m³)': f"{total_cube:.1f}",
+                                                        'ไกลสุดจาก DC': f"{max_dist_from_dc:.1f} km",
+                                                        'ระยะทางรวม': f"{route_distance:.1f} km",
+                                                        'ระหว่างสาขา': f"{inter_branch_distance:.1f} km"
+                                                    })
+                                                
+                                                # แสดงตาราง
+                                                if trip_details:
+                                                    trip_df = pd.DataFrame(trip_details)
+                                                    st.dataframe(
+                                                        trip_df,
+                                                        use_container_width=True,
+                                                        hide_index=True,
+                                                        column_config={
+                                                            'ทริป': st.column_config.NumberColumn('🚚 ทริป', width='small'),
+                                                            'รถ': st.column_config.TextColumn('🚛 รถ', width='small'),
+                                                            'สาขา': st.column_config.NumberColumn('📍 สาขา', width='small'),
+                                                            'น้ำหนัก (kg)': st.column_config.TextColumn('⚖️ น้ำหนัก', width='small'),
+                                                            'คิว (m³)': st.column_config.TextColumn('📦 คิว', width='small'),
+                                                            'ไกลสุดจาก DC': st.column_config.TextColumn('🎯 ไกลสุด', width='small'),
+                                                            'ระยะทางรวม': st.column_config.TextColumn('📏 รวม (DC→สาขา)', width='medium'),
+                                                            'ระหว่างสาขา': st.column_config.TextColumn('↔️ ระหว่างสาขา', width='small')
+                                                        }
+                                                    )
+                                                    
+                                                    # สรุปรวม
+                                                    total_route = sum(float(d['ระยะทางรวม'].replace(' km', '').replace(',', '')) for d in trip_details)
+                                                    total_inter = sum(float(d['ระหว่างสาขา'].replace(' km', '').replace(',', '')) for d in trip_details)
+                                                    st.caption(f"📊 **รวมทั้งหมด:** {len(trip_details)} ทริป | ระยะทางรวม: {total_route:,.1f} km | ระหว่างสาขา: {total_inter:,.1f} km")
                                                 
                                                 st.caption(f"📍 แสดง {len(valid_coords)} สาขาใน {len(sorted_trip_ids)} ทริป | 💡 คลิกปุ่มมุมซ้ายบนเพื่อเต็มจอ | ใช้ Layer Control ด้านขวาเพื่อเปิด/ปิดทริป")
                                     else:
