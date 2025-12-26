@@ -2,7 +2,7 @@ import pandas as pd
 
 """
 Logistics Planner
-Version: 2025-12-26-v3.2 
+Version: 2025-12-26-v3.3
 """
 
 import streamlit as st
@@ -3044,6 +3044,11 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     # 2️⃣ เรียงลำดับตาม zone priority (priority ต่ำ = ไกล DC = จัดก่อน)
     df = df.sort_values(['_zone_priority', '_distance_from_dc'], ascending=[True, False]).reset_index(drop=True)
     
+    # 🚗 คำนวณ MaxVehicle ของแต่ละสาขา (4W=1, JB=2, 6W=3)
+    vehicle_rank = {'4W': 1, 'JB': 2, '6W': 3}
+    df['_max_vehicle'] = df['Code'].apply(lambda c: get_max_vehicle_for_branch(c))
+    df['_vehicle_rank'] = df['_max_vehicle'].map(vehicle_rank).fillna(3).astype(int)
+    
     # รีเซ็ตทริปทั้งหมด
     df['Trip'] = 0
     trip_counter = 1
@@ -3051,20 +3056,27 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     # สร้าง set ของสาขาที่ยังไม่ได้จัด
     unassigned = set(df['Code'].tolist())
     
-    # 3️⃣ จัดทริปแยกตามโซน
+    # 3️⃣ จัดทริปแยกตามโซน + ประเภทรถ (4W ก่อน → JB → 6W)
     zones_processed = set()
     
     while unassigned:
-        # หาสาขาที่ไกล DC มากที่สุดในกลุ่มที่ยังไม่ได้จัด
+        # หาสาขาที่ยังไม่ได้จัด
         unassigned_df = df[df['Code'].isin(unassigned)]
         if unassigned_df.empty:
             break
         
-        # เรียงตามระยะทาง ไกลสุดก่อน
-        farthest_row = unassigned_df.loc[unassigned_df['_distance_from_dc'].idxmax()]
+        # 🚗 เรียงตาม: 1) zone priority (ไกลก่อน) 2) vehicle_rank (4W ก่อน) 3) ระยะทาง (ไกลก่อน)
+        unassigned_df = unassigned_df.sort_values(
+            ['_zone_priority', '_vehicle_rank', '_distance_from_dc'], 
+            ascending=[True, True, False]
+        )
+        
+        # เลือกสาขาแรก (ไกลสุด + ข้อจำกัดมากสุด)
+        farthest_row = unassigned_df.iloc[0]
         start_code = farthest_row['Code']
         start_lat = farthest_row['_lat']
         start_lon = farthest_row['_lon']
+        start_max_vehicle = farthest_row['_max_vehicle']  # 🚗 รถที่ใหญ่ที่สุดที่ใช้ได้
         
         # 🎯 กำหนดโซนของทริปจากสาขาแรก
         trip_province = farthest_row.get('_province', '')
@@ -3073,6 +3085,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         trip_bearing_zone = farthest_row.get('_bearing_zone', 0)
         trip_region = farthest_row.get('_region_name', '')
         trip_logistics_zone = farthest_row.get('_logistics_zone', '')  # 🎯 LOGISTICS_ZONE
+        trip_max_vehicle = start_max_vehicle  # 🚗 รถสูงสุดของทริป (จากสาขาแรก)
         
         # 🎯 เก็บ set ของตำบล/อำเภอที่อยู่ในทริป (ใช้หาสาขาตำบลเดียวกัน)
         trip_subdistricts = {trip_subdistrict} if trip_subdistrict else set()
@@ -3084,9 +3097,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         trip_cube = farthest_row['Cube']
         unassigned.remove(start_code)
         
-        print(f"   🚀 Trip {trip_counter}: {start_code} ({trip_province}) - {trip_logistics_zone} - {farthest_row['_distance_from_dc']:.0f}km")
+        print(f"   🚀 Trip {trip_counter}: {start_code} ({trip_province}) - {trip_logistics_zone} - {trip_max_vehicle} - {farthest_row['_distance_from_dc']:.0f}km")
         
-        # หา allowed vehicles จาก constraints
+        # หา allowed vehicles จาก constraints (จำกัดตาม trip_max_vehicle)
         trip_allowed = get_allowed_from_codes(trip_codes, ['4W', 'JB', '6W'])
         trip_is_punthai = branch_bu_cache.get(start_code, False)
         
