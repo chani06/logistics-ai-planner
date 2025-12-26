@@ -2983,6 +2983,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         trip_bearing_zone = farthest_row.get('_bearing_zone', 0)
         trip_region = farthest_row.get('_region_name', '')
         
+        # 🎯 เก็บ set ของตำบล/อำเภอที่อยู่ในทริป (ใช้หาสาขาตำบลเดียวกัน)
+        trip_subdistricts = {trip_subdistrict} if trip_subdistrict else set()
+        trip_districts = {trip_district} if trip_district else set()
+        
         # เริ่มทริปใหม่ด้วยสาขาไกลสุด
         trip_codes = [start_code]
         trip_weight = farthest_row['Weight']
@@ -2995,106 +2999,106 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         trip_allowed = get_allowed_from_codes(trip_codes, ['4W', 'JB', '6W'])
         trip_is_punthai = branch_bu_cache.get(start_code, False)
         
-        # 2️⃣ Greedy: หาสาขาใกล้สุดในโซนเดียวกันมาเติมจนเต็ม buffer
+        # 2️⃣ Greedy: หาสาขาใกล้สุดในจังหวัด → อำเภอ → ตำบล มาเติมจนเต็ม buffer
         while unassigned:
-            # คำนวณระยะห่างจากตำแหน่งปัจจุบัน (centroid ของทริป) ไปยังทุกสาขาที่ยังไม่ได้จัด
             remaining_df = df[df['Code'].isin(unassigned)].copy()
             if remaining_df.empty:
                 break
             
-            # 🚫 กรองเฉพาะสาขาในโซนเดียวกัน (จังหวัดเดียวกัน หรือ bearing zone ใกล้กัน)
-            same_zone_df = remaining_df[
-                (remaining_df['_province'] == trip_province) |  # จังหวัดเดียวกัน
-                (
-                    (remaining_df['_region_name'] == trip_region) &  # ภาคเดียวกัน
-                    (abs(remaining_df['_bearing_zone'] - trip_bearing_zone) <= 2)  # bearing zone ใกล้กัน (±2)
-                )
-            ].copy()
+            # 🚫 กรองเฉพาะสาขาในจังหวัดเดียวกันก่อน!
+            same_province_df = remaining_df[remaining_df['_province'] == trip_province].copy()
             
-            # 🎯 Priority: ตำบลเดียวกัน > อำเภอเดียวกัน > จังหวัดเดียวกัน
-            if not same_zone_df.empty:
-                same_zone_df['_priority'] = 99  # default low priority
-                # ตำบลเดียวกัน → priority 1 (สูงสุด)
-                same_zone_df.loc[
-                    (same_zone_df['_subdistrict'] == trip_subdistrict) & 
-                    (same_zone_df['_district'] == trip_district), '_priority'
-                ] = 1
-                # อำเภอเดียวกัน → priority 2
-                same_zone_df.loc[
-                    (same_zone_df['_district'] == trip_district) & 
-                    (same_zone_df['_priority'] > 2), '_priority'
-                ] = 2
-                # จังหวัดเดียวกัน → priority 3
-                same_zone_df.loc[
-                    (same_zone_df['_province'] == trip_province) & 
-                    (same_zone_df['_priority'] > 3), '_priority'
-                ] = 3
+            # ถ้ามีสาขาจังหวัดเดียวกัน → ใช้เฉพาะจังหวัดนั้น
+            if not same_province_df.empty:
+                same_zone_df = same_province_df
+            else:
+                # 🔄 หมดจังหวัดเดียวกันแล้ว → หาจังหวัดใกล้ที่สุด
+                # คำนวณระยะทางจากสาขาสุดท้ายในทริปไปยังแต่ละจังหวัดที่เหลือ
+                last_code = trip_codes[-1]
+                last_row = df[df['Code'] == last_code].iloc[0]
+                last_lat, last_lon = last_row['_lat'], last_row['_lon']
+                
+                if last_lat > 0 and last_lon > 0:
+                    # หาจังหวัดที่ใกล้ที่สุด
+                    remaining_provinces = remaining_df['_province'].unique()
+                    province_dists = {}
+                    for prov in remaining_provinces:
+                        prov_df = remaining_df[remaining_df['_province'] == prov]
+                        # หาสาขาที่ใกล้ที่สุดในจังหวัดนั้น
+                        min_dist = 999
+                        for _, r in prov_df.iterrows():
+                            if r['_lat'] > 0 and r['_lon'] > 0:
+                                d = haversine_distance(last_lat, last_lon, r['_lat'], r['_lon'])
+                                if d < min_dist:
+                                    min_dist = d
+                        province_dists[prov] = min_dist
+                    
+                    if province_dists:
+                        # เลือกจังหวัดที่ใกล้ที่สุด
+                        nearest_province = min(province_dists.keys(), key=lambda x: province_dists[x])
+                        nearest_dist = province_dists[nearest_province]
+                        
+                        # ถ้าจังหวัดใกล้เกินไป (< 60km) → ขยายเข้าไป
+                        if nearest_dist < 60:
+                            trip_province = nearest_province
+                            # รีเซ็ตตำบล/อำเภอสำหรับจังหวัดใหม่
+                            trip_subdistricts = set()
+                            trip_districts = set()
+                            print(f"      🔄 ขยายไป {nearest_province} (ห่าง {nearest_dist:.1f} km)")
+                            continue  # วนลูปใหม่กับจังหวัดใหม่
+                        else:
+                            # ไกลเกินไป → ปิดทริป
+                            break
+                    else:
+                        break
+                else:
+                    break
             
-            # ถ้าไม่มีสาขาในโซนเดียวกัน → ลองหาจังหวัดใกล้เคียง
-            if same_zone_df.empty:
-                # หาสาขาที่ใกล้สาขาใดในทริปมากที่สุด (< 50km)
-                trip_coords = []
-                for tc in trip_codes:
-                    tc_row = df[df['Code'] == tc].iloc[0]
-                    if tc_row['_lat'] > 0 and tc_row['_lon'] > 0:
-                        trip_coords.append((tc_row['_lat'], tc_row['_lon']))
-                
-                def min_dist_to_trip_fallback(row):
-                    if row['_lat'] <= 0 or row['_lon'] <= 0 or not trip_coords:
-                        return 999
-                    return min(haversine_distance(row['_lat'], row['_lon'], tc[0], tc[1]) for tc in trip_coords)
-                
-                remaining_df['_dist_to_trip'] = remaining_df.apply(min_dist_to_trip_fallback, axis=1)
-                
-                # หาสาขาที่ใกล้มาก (< 50km) และอยู่ภาคเดียวกัน
-                nearby_df = remaining_df[
-                    (remaining_df['_dist_to_trip'] < 50) & 
-                    (remaining_df['_region_name'] == trip_region)
-                ]
-                
-                if nearby_df.empty:
-                    break  # ไม่มีสาขาในโซนเดียวกันแล้ว → ปิดทริป
-                
-                same_zone_df = nearby_df.copy()
+            # 🎯 Priority: ตำบลเดียวกัน > อำเภอเดียวกัน (vectorized)
+            same_zone_df['_priority'] = 3  # default = จังหวัดเดียวกัน
             
-            # 🎯 หาสาขาที่ใกล้สาขาใดสาขาหนึ่งในทริปมากที่สุด
-            # ใช้ NEARBY_BRANCHES ที่ pre-compute ไว้ (เร็วมาก)
+            # ตำบลเดียวกัน → priority 1
+            if trip_subdistricts:
+                mask_subdistrict = same_zone_df['_subdistrict'].isin(trip_subdistricts) & same_zone_df['_district'].isin(trip_districts)
+                same_zone_df.loc[mask_subdistrict, '_priority'] = 1
             
-            # รวบรวม candidates จาก pre-computed nearby branches
+            # อำเภอเดียวกัน → priority 2
+            if trip_districts:
+                mask_district = same_zone_df['_district'].isin(trip_districts) & (same_zone_df['_priority'] > 2)
+                same_zone_df.loc[mask_district, '_priority'] = 2
+            
+            # 🎯 คำนวณระยะทาง - ใช้ pre-computed ถ้ามี
+            unassigned_upper = {str(c).strip().upper() for c in unassigned}
+            
             candidate_distances = {}
             for tc in trip_codes:
                 tc_upper = str(tc).strip().upper()
-                # ดึงสาขาใกล้เคียงจาก pre-computed data
                 if tc_upper in NEARBY_BRANCHES:
                     for nearby_code, dist in NEARBY_BRANCHES[tc_upper]:
-                        if nearby_code in [str(c).strip().upper() for c in unassigned]:
-                            # เก็บระยะทางที่น้อยที่สุด
+                        if nearby_code in unassigned_upper:
                             if nearby_code not in candidate_distances or dist < candidate_distances[nearby_code]:
                                 candidate_distances[nearby_code] = dist
             
-            # ถ้าไม่มี candidates จาก pre-compute ให้คำนวณแบบเดิม (fallback)
+            # คำนวณระยะทาง
             if not candidate_distances:
-                trip_coords = []
-                for tc in trip_codes:
-                    tc_row = df[df['Code'] == tc].iloc[0]
-                    if tc_row['_lat'] > 0 and tc_row['_lon'] > 0:
-                        trip_coords.append((tc_row['_lat'], tc_row['_lon']))
+                # ดึง coords ของสาขาล่าสุดในทริป (เร็วกว่าทุกสาขา)
+                last_code = trip_codes[-1]
+                last_row = df[df['Code'] == last_code].iloc[0]
+                last_lat, last_lon = last_row['_lat'], last_row['_lon']
                 
-                def min_dist_to_trip(row):
-                    if row['_lat'] <= 0 or row['_lon'] <= 0 or not trip_coords:
-                        return 999
-                    return min(haversine_distance(row['_lat'], row['_lon'], tc[0], tc[1]) for tc in trip_coords)
-                
-                same_zone_df['_dist_to_trip'] = same_zone_df.apply(min_dist_to_trip, axis=1)
+                if last_lat > 0 and last_lon > 0:
+                    same_zone_df['_dist_to_trip'] = same_zone_df.apply(
+                        lambda r: haversine_distance(r['_lat'], r['_lon'], last_lat, last_lon) 
+                        if r['_lat'] > 0 and r['_lon'] > 0 else 999, axis=1
+                    )
+                else:
+                    same_zone_df['_dist_to_trip'] = 999
             else:
-                # ใช้ระยะทางจาก pre-compute
-                same_zone_df['_dist_to_trip'] = same_zone_df['Code'].apply(
+                same_zone_df['_dist_to_trip'] = same_zone_df['Code'].map(
                     lambda x: candidate_distances.get(str(x).strip().upper(), 999)
                 )
             
             # เรียงตาม priority + distance
-            if '_priority' not in same_zone_df.columns:
-                same_zone_df['_priority'] = 99
             same_zone_df = same_zone_df.sort_values(['_priority', '_dist_to_trip'])
             
             found_candidate = False
@@ -3143,6 +3147,14 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 trip_is_punthai = test_is_punthai
                 unassigned.remove(candidate_code)
                 found_candidate = True
+                
+                # 🎯 อัพเดตตำบล/อำเภอของทริป (เพิ่มสาขาใหม่)
+                cand_subdistrict = candidate_row.get('_subdistrict', '')
+                cand_district = candidate_row.get('_district', '')
+                if cand_subdistrict:
+                    trip_subdistricts.add(cand_subdistrict)
+                if cand_district:
+                    trip_districts.add(cand_district)
                 
                 # เช็คว่าเต็มหรือยัง (>= 90%)
                 w_util = trip_weight / max_w
@@ -3854,8 +3866,40 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     trip_renumber = {old_trip: new_trip for new_trip, old_trip in enumerate(sorted_trips, 1)}
     df['Trip'] = df['Trip'].map(lambda x: trip_renumber.get(x, 0) if x > 0 else 0)
     
-    # อัพเดต summary_df ด้วย
-    summary_df['Trip'] = summary_df['Trip'].map(lambda x: trip_renumber.get(x, x))
+    # อัพเดต summary_df ใหม่ทั้งหมดหลัง renumber (ให้ข้อมูลตรงกับ df)
+    summary_data_new = []
+    for trip_num in sorted(df[df['Trip'] > 0]['Trip'].unique()):
+        trip_data = df[df['Trip'] == trip_num]
+        total_w = trip_data['Weight'].sum()
+        total_c = trip_data['Cube'].sum()
+        trip_codes_list = trip_data['Code'].tolist()
+        max_dist = trip_data['_distance_from_dc'].max() if '_distance_from_dc' in trip_data.columns else 0
+        
+        # หารถจากคอลัมน์ Truck ใน df
+        truck = trip_data['Truck'].iloc[0] if 'Truck' in trip_data.columns and len(trip_data) > 0 else '6W'
+        truck_str = str(truck).split()[0] if pd.notna(truck) else '6W'
+        
+        # หา BU type
+        is_punthai = all(str(r.get('BU', '')).upper() in ['211', 'PUNTHAI'] for _, r in trip_data.iterrows())
+        limits = PUNTHAI_LIMITS if is_punthai else LIMITS
+        
+        max_w = limits.get(truck_str, limits['6W'])['max_w']
+        max_c = limits.get(truck_str, limits['6W'])['max_c']
+        
+        summary_data_new.append({
+            'Trip': trip_num,
+            'Branches': len(trip_codes_list),
+            'Weight': total_w,
+            'Cube': total_c,
+            'Truck': truck,
+            'BU_Type': 'punthai' if is_punthai else 'maxmart',
+            'Buffer': f"🅿️ {int(punthai_buffer*100)}%" if is_punthai else f"🅼 {int(maxmart_buffer*100)}%",
+            'Weight_Use%': (total_w / max_w) * 100,
+            'Cube_Use%': (total_c / max_c) * 100,
+            'Total_Distance': max_dist if pd.notna(max_dist) else 0
+        })
+    
+    summary_df = pd.DataFrame(summary_data_new)
     summary_df = summary_df.sort_values('Trip').reset_index(drop=True)
     
     print(f"   ✅ เรียงใหม่: {len(sorted_trips)} ทริป (Trip 1 = ไกลสุด {trip_max_distances[sorted_trips[0]]:.0f} km)")
