@@ -2,7 +2,7 @@ import pandas as pd
 
 """
 Logistics Planner
-Version: 2025-12-26-v3 
+Version: 2025-12-26-v3.1 
 """
 
 import streamlit as st
