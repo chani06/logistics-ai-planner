@@ -3020,65 +3020,93 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             if remaining_df.empty:
                 break
             
-            # 🎯 1. กรองเฉพาะสาขาใน LOGISTICS_ZONE เดียวกันก่อน
-            same_zone_df = remaining_df[remaining_df['_logistics_zone'] == trip_logistics_zone].copy()
+            # 🎯 กรองลำดับ: ตำบล → อำเภอ → จังหวัด → โซน (ห้ามข้ามจนกว่าจะหมด!)
+            same_zone_df = None
+            filter_level = ""
             
-            # ถ้าไม่มีในโซนเดียวกัน → ลองจังหวัดเดียวกัน
-            if same_zone_df.empty:
-                same_zone_df = remaining_df[remaining_df['_province'] == trip_province].copy()
+            # 1️⃣ ตำบลเดียวกันก่อน (priority สูงสุด)
+            if trip_subdistricts and trip_districts:
+                subdistrict_df = remaining_df[
+                    (remaining_df['_subdistrict'].isin(trip_subdistricts)) & 
+                    (remaining_df['_district'].isin(trip_districts))
+                ].copy()
+                if not subdistrict_df.empty:
+                    same_zone_df = subdistrict_df
+                    filter_level = "ตำบล"
             
-            # ถ้ามีสาขาในโซน/จังหวัดเดียวกัน → ใช้
-            if not same_zone_df.empty:
-                pass  # ใช้ same_zone_df ที่กรองแล้ว
-            else:
-                # 🔄 หมดโซน/จังหวัดเดียวกันแล้ว → หาจังหวัดใกล้ที่สุด (เช็ค NO_CROSS_ZONE)
+            # 2️⃣ อำเภอเดียวกัน (ถ้าหมดตำบลแล้ว)
+            if same_zone_df is None and trip_districts:
+                district_df = remaining_df[remaining_df['_district'].isin(trip_districts)].copy()
+                if not district_df.empty:
+                    same_zone_df = district_df
+                    filter_level = "อำเภอ"
+            
+            # 3️⃣ จังหวัดเดียวกัน (ถ้าหมดอำเภอแล้ว)
+            if same_zone_df is None:
+                province_df = remaining_df[remaining_df['_province'] == trip_province].copy()
+                if not province_df.empty:
+                    same_zone_df = province_df
+                    filter_level = "จังหวัด"
+            
+            # 4️⃣ LOGISTICS_ZONE เดียวกัน (ถ้าหมดจังหวัดแล้ว)
+            if same_zone_df is None and trip_logistics_zone:
+                zone_df = remaining_df[remaining_df['_logistics_zone'] == trip_logistics_zone].copy()
+                if not zone_df.empty:
+                    same_zone_df = zone_df
+                    filter_level = "โซน"
+                    # รีเซ็ตตำบล/อำเภอ เพราะเปลี่ยนจังหวัดแล้ว
+                    trip_subdistricts = set()
+                    trip_districts = set()
+            
+            # 5️⃣ หาโซน/จังหวัดใกล้ที่สุด (ถ้าหมดโซนแล้ว)
+            if same_zone_df is None:
                 last_code = trip_codes[-1]
                 last_row = df[df['Code'] == last_code].iloc[0]
                 last_lat, last_lon = last_row['_lat'], last_row['_lon']
                 
                 if last_lat > 0 and last_lon > 0:
-                    # หาจังหวัดที่ใกล้ที่สุด (ที่ไม่ละเมิด NO_CROSS_ZONE_PAIRS)
-                    remaining_provinces = remaining_df['_province'].unique()
-                    province_dists = {}
+                    # หาโซนที่ใกล้ที่สุด (ที่ไม่ละเมิด NO_CROSS_ZONE_PAIRS)
+                    remaining_zones = remaining_df['_logistics_zone'].unique()
+                    zone_dists = {}
                     
-                    for prov in remaining_provinces:
-                        # 🚫 เช็ค NO_CROSS_ZONE_PAIRS ก่อน!
-                        if is_cross_zone_violation(trip_province, prov):
-                            continue  # ข้ามจังหวัดที่ห้ามข้าม
+                    for zone in remaining_zones:
+                        zone_df = remaining_df[remaining_df['_logistics_zone'] == zone]
+                        # เช็ค NO_CROSS_ZONE กับจังหวัดในโซน
+                        zone_province = zone_df['_province'].iloc[0] if not zone_df.empty else ''
+                        if is_cross_zone_violation(trip_province, zone_province):
+                            continue
                         
-                        prov_df = remaining_df[remaining_df['_province'] == prov]
-                        # ใช้ vectorized min distance
-                        valid_coords = prov_df[(prov_df['_lat'] > 0) & (prov_df['_lon'] > 0)]
+                        valid_coords = zone_df[(zone_df['_lat'] > 0) & (zone_df['_lon'] > 0)]
                         if not valid_coords.empty:
                             dists = valid_coords.apply(
                                 lambda r: haversine_distance(last_lat, last_lon, r['_lat'], r['_lon']), axis=1
                             )
-                            province_dists[prov] = dists.min()
+                            zone_dists[zone] = dists.min()
                     
-                    if province_dists:
-                        # เลือกจังหวัดที่ใกล้ที่สุด
-                        nearest_province = min(province_dists.keys(), key=lambda x: province_dists[x])
-                        nearest_dist = province_dists[nearest_province]
+                    if zone_dists:
+                        nearest_zone = min(zone_dists.keys(), key=lambda x: zone_dists[x])
+                        nearest_dist = zone_dists[nearest_zone]
                         
-                        # ถ้าจังหวัดใกล้ (< 60km) → ขยายเข้าไป
-                        if nearest_dist < 60:
-                            trip_province = nearest_province
+                        if nearest_dist < 80:  # ขยายได้ถ้าใกล้กว่า 80km
+                            trip_logistics_zone = nearest_zone
+                            nearest_prov = remaining_df[remaining_df['_logistics_zone'] == nearest_zone]['_province'].iloc[0]
+                            trip_province = nearest_prov
                             trip_subdistricts = set()
                             trip_districts = set()
-                            print(f"      🔄 ขยายไป {nearest_province} (ห่าง {nearest_dist:.1f} km)")
+                            print(f"      🔄 ขยายไปโซน {nearest_zone} (ห่าง {nearest_dist:.1f} km)")
                             continue
                         else:
                             break  # ไกลเกินไป → ปิดทริป
                     else:
-                        break  # ไม่มีจังหวัดที่ขยายได้ (ทั้งหมดละเมิด NO_CROSS_ZONE)
+                        break  # ไม่มีโซนที่ขยายได้
                 else:
                     break
             
-            # 🎯 Priority: ตำบลเดียวกัน > อำเภอเดียวกัน (vectorized)
-            same_zone_df['_priority'] = 3  # default = จังหวัดเดียวกัน
+            # 🎯 Priority: ตำบลเดียวกัน > อำเภอเดียวกัน > จังหวัด > โซน
+            same_zone_df['_priority'] = 4  # default = โซนเดียวกัน
             
             # ตำบลเดียวกัน → priority 1
-            if trip_subdistricts:
+            if trip_subdistricts and trip_districts:
                 mask_subdistrict = same_zone_df['_subdistrict'].isin(trip_subdistricts) & same_zone_df['_district'].isin(trip_districts)
                 same_zone_df.loc[mask_subdistrict, '_priority'] = 1
             
@@ -3086,6 +3114,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             if trip_districts:
                 mask_district = same_zone_df['_district'].isin(trip_districts) & (same_zone_df['_priority'] > 2)
                 same_zone_df.loc[mask_district, '_priority'] = 2
+            
+            # จังหวัดเดียวกัน → priority 3
+            mask_province = (same_zone_df['_province'] == trip_province) & (same_zone_df['_priority'] > 3)
+            same_zone_df.loc[mask_province, '_priority'] = 3
             
             # 🎯 คำนวณระยะทาง - ใช้ pre-computed ถ้ามี
             unassigned_upper = {str(c).strip().upper() for c in unassigned}
