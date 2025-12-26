@@ -2848,6 +2848,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         
         # 🎯 กำหนดโซนของทริปจากสาขาแรก
         trip_province = farthest_row.get('_province', '')
+        trip_district = farthest_row.get('_district', '')  # เพิ่มอำเภอ
+        trip_subdistrict = farthest_row.get('_subdistrict', '')  # เพิ่มตำบล
         trip_bearing_zone = farthest_row.get('_bearing_zone', 0)
         trip_region = farthest_row.get('_region_name', '')
         
@@ -2878,6 +2880,25 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     (abs(remaining_df['_bearing_zone'] - trip_bearing_zone) <= 2)  # bearing zone ใกล้กัน (±2)
                 )
             ].copy()
+            
+            # 🎯 Priority: ตำบลเดียวกัน > อำเภอเดียวกัน > จังหวัดเดียวกัน
+            if not same_zone_df.empty:
+                same_zone_df['_priority'] = 99  # default low priority
+                # ตำบลเดียวกัน → priority 1 (สูงสุด)
+                same_zone_df.loc[
+                    (same_zone_df['_subdistrict'] == trip_subdistrict) & 
+                    (same_zone_df['_district'] == trip_district), '_priority'
+                ] = 1
+                # อำเภอเดียวกัน → priority 2
+                same_zone_df.loc[
+                    (same_zone_df['_district'] == trip_district) & 
+                    (same_zone_df['_priority'] > 2), '_priority'
+                ] = 2
+                # จังหวัดเดียวกัน → priority 3
+                same_zone_df.loc[
+                    (same_zone_df['_province'] == trip_province) & 
+                    (same_zone_df['_priority'] > 3), '_priority'
+                ] = 3
             
             # ถ้าไม่มีสาขาในโซนเดียวกัน → ลองหาจังหวัดใกล้เคียง
             if same_zone_df.empty:
@@ -2914,8 +2935,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 if row['_lat'] > 0 and row['_lon'] > 0 else 999,
                 axis=1
             )
-            same_zone_df = same_zone_df.sort_values('_dist_to_trip')
-            same_zone_df = same_zone_df.sort_values('_dist_to_trip')
+            # 🎯 เรียงตาม priority ก่อน (ตำบล > อำเภอ > จังหวัด) แล้วค่อยระยะทาง
+            if '_priority' not in same_zone_df.columns:
+                same_zone_df['_priority'] = 99
+            same_zone_df = same_zone_df.sort_values(['_priority', '_dist_to_trip'])
             
             found_candidate = False
             
@@ -3553,12 +3576,32 @@ def main():
             df = process_dataframe(df)
             
             if df is not None and 'Code' in df.columns:
-                st.success(f"✅ อ่านข้อมูลสำเร็จ: **{len(df):,}** รายการ")
+                total_rows = len(df)
+                unique_codes = df['Code'].nunique()
+                duplicate_count = total_rows - unique_codes
+                
+                st.success(f"✅ อ่านข้อมูลสำเร็จ: **{total_rows:,}** รายการ")
+                
+                # ⚠️ แจ้งเตือนถ้ามี duplicate
+                if duplicate_count > 0:
+                    st.warning(f"⚠️ พบ **{duplicate_count}** รายการซ้ำ (Code ซ้ำกัน) - จะรวมยอดให้อัตโนมัติ")
+                    with st.expander("🔍 ดู Code ที่ซ้ำ"):
+                        dup_codes = df[df.duplicated(subset=['Code'], keep=False)].groupby('Code').size().reset_index(name='จำนวนซ้ำ')
+                        st.dataframe(dup_codes[dup_codes['จำนวนซ้ำ'] > 1], use_container_width=True)
+                    
+                    # รวมยอด duplicate codes
+                    agg_cols = {'Weight': 'sum', 'Cube': 'sum'}
+                    # เก็บ column อื่นๆ ไว้ (ใช้ค่าแรก)
+                    for col in df.columns:
+                        if col not in ['Code', 'Weight', 'Cube']:
+                            agg_cols[col] = 'first'
+                    df = df.groupby('Code', as_index=False).agg(agg_cols)
+                    st.info(f"📊 หลังรวมยอดซ้ำ: **{len(df):,}** สาขา")
                 
                 # แสดงข้อมูลพื้นฐาน
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("📍 จำนวนสาขา", f"{df['Code'].nunique():,}")
+                    st.metric("📍 จำนวนสาขา", f"{len(df):,}")
                 with col2:
                     st.metric("⚖️ น้ำหนักรวม", f"{df['Weight'].sum():,.0f} kg")
                 with col3:
