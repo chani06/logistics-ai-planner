@@ -2856,21 +2856,12 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         branch_code = branch_row['Code']
         branch_w = branch_row['Weight']
         branch_c = branch_row['Cube']
-        branch_bu = branch_bu_cache.get(branch_code, False)
         branch_vehicle = branch_max_vehicle_cache.get(branch_code, '6W')
         branch_priority = vehicle_priority.get(branch_vehicle, 3)
         
-        # 1. เช็ค BU ต้องตรงกัน
-        if branch_bu != trip_capacity['is_punthai']:
-            return False, "BU ไม่ตรง"
+        # 🚫 ไม่เช็ค BU อีกต่อไป - Punthai กับ Maxmart รวมได้
         
-        # 2. เช็คข้อจำกัดรถ - สาขาใหม่ต้องไม่ต้องการรถใหญ่กว่าที่ทริปรับได้
-        if branch_priority < trip_capacity['min_priority']:
-            # สาขาต้องการรถเล็กกว่า (เช่น 4W) แต่ทริปมีสาขา JB อยู่แล้ว → ไม่ได้
-            # จริงๆ แล้วนี่ OK เพราะ JB รับ 4W ได้
-            pass
-        
-        # 3. เช็คน้ำหนัก/ปริมาตร
+        # เช็คน้ำหนัก/ปริมาตร
         new_w = trip_capacity['weight'] + branch_w
         new_c = trip_capacity['cube'] + branch_c
         new_drops = trip_capacity['drops'] + 1
@@ -2883,6 +2874,35 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             return False, "Drop เกิน"
         
         return True, "OK"
+    
+    def get_nearby_branches(branch_row, all_branches_df, max_dist_km=6.0):
+        """หาสาขาที่อยู่ใกล้กัน (ตำบลเดียวกัน หรือ ห่างกัน < 6 km)"""
+        branch_lat = branch_row['_lat']
+        branch_lon = branch_row['_lon']
+        branch_subdistrict = branch_row.get('_subdistrict', '')
+        branch_code = branch_row['Code']
+        
+        nearby_codes = []
+        
+        for _, other_row in all_branches_df.iterrows():
+            other_code = other_row['Code']
+            if other_code == branch_code:
+                continue
+            
+            # 1. ตำบลเดียวกัน → ต้องมาด้วยกัน
+            if other_row.get('_subdistrict', '') == branch_subdistrict and branch_subdistrict:
+                nearby_codes.append(other_code)
+                continue
+            
+            # 2. ห่างกัน < 6 km → ต้องมาด้วยกัน
+            other_lat = other_row['_lat']
+            other_lon = other_row['_lon']
+            if other_lat > 0 and other_lon > 0 and branch_lat > 0 and branch_lon > 0:
+                dist = haversine_distance(branch_lat, branch_lon, other_lat, other_lon)
+                if dist <= max_dist_km:
+                    nearby_codes.append(other_code)
+        
+        return nearby_codes
     
     # วนลูปทริปจากไกลสุด (1) ไปใกล้สุด
     all_trips = sorted(df[df['Trip'] > 0]['Trip'].unique())
@@ -2918,8 +2938,17 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             # เรียงตามระยะใกล้สุดก่อน
             next_trip_data = next_trip_data.sort_values('_dist_to_current')
             
+            # เก็บสาขาที่ย้ายแล้วเพื่อไม่ให้ซ้ำ
+            already_moved = set()
+            
             # ดึงสาขาที่ใกล้และเข้ากันได้
             for _, branch_row in next_trip_data.iterrows():
+                branch_code = branch_row['Code']
+                
+                # ข้ามถ้าย้ายไปแล้ว
+                if branch_code in already_moved:
+                    continue
+                
                 dist_to_trip = branch_row['_dist_to_current']
                 
                 # ไกลเกิน 80 km ไม่ดึง
@@ -2942,10 +2971,40 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 
                 if can_add:
                     # ✅ ย้ายสาขานี้มาทริปปัจจุบัน
-                    branch_code = branch_row['Code']
                     df.loc[df['Code'] == branch_code, 'Trip'] = current_trip
+                    already_moved.add(branch_code)
                     moved_branches += 1
                     print(f"   ✅ ย้าย {branch_code} จาก Trip {next_trip} → Trip {current_trip} (ห่าง {dist_to_trip:.1f} km)")
+                    
+                    # 🔗 หาสาขาใกล้เคียง (ตำบลเดียวกัน หรือ ห่าง < 6 km) แล้วย้ายมาด้วย
+                    nearby_codes = get_nearby_branches(branch_row, next_trip_data[~next_trip_data['Code'].isin(already_moved)])
+                    
+                    for nearby_code in nearby_codes:
+                        if nearby_code in already_moved:
+                            continue
+                        
+                        # อัพเดต trip_cap อีกครั้ง
+                        trip_cap = get_trip_capacity(current_trip)
+                        if not trip_cap:
+                            break
+                        
+                        # เช็คว่าเต็มหรือยัง
+                        w_util = trip_cap['weight'] / trip_cap['max_w']
+                        c_util = trip_cap['cube'] / trip_cap['max_c']
+                        if max(w_util, c_util) >= 0.95:
+                            break
+                        
+                        nearby_row = next_trip_data[next_trip_data['Code'] == nearby_code]
+                        if len(nearby_row) == 0:
+                            continue
+                        nearby_row = nearby_row.iloc[0]
+                        
+                        can_add_nearby, _ = can_add_branch_to_trip(nearby_row, trip_cap)
+                        if can_add_nearby:
+                            df.loc[df['Code'] == nearby_code, 'Trip'] = current_trip
+                            already_moved.add(nearby_code)
+                            moved_branches += 1
+                            print(f"   🔗 ย้ายด้วย {nearby_code} (ใกล้กัน/ตำบลเดียวกัน)")
         
         # หลังจากเติมเสร็จ เช็คอีกครั้ง
         trip_cap = get_trip_capacity(current_trip)
