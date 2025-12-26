@@ -2969,25 +2969,49 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 
                 same_zone_df = nearby_df.copy()
             
-            # 🎯 หาสาขาที่ใกล้สาขาใดสาขาหนึ่งในทริปมากที่สุด
+            # 🎯 หาสาขาที่ใกล้สาขาใดสาขาหนึ่งในทริปมากที่สุด (ใช้ OSRM เส้นทางจริง)
             trip_coords = []
             for tc in trip_codes:
                 tc_row = df[df['Code'] == tc].iloc[0]
                 if tc_row['_lat'] > 0 and tc_row['_lon'] > 0:
                     trip_coords.append((tc_row['_lat'], tc_row['_lon']))
             
-            # คำนวณระยะทางจาก candidate ไปยังสาขาใกล้ที่สุดในทริป
-            def min_dist_to_trip(row):
+            # คำนวณระยะทาง Haversine ก่อน (เร็ว) เพื่อกรอง top candidates
+            def min_haversine_to_trip(row):
                 if row['_lat'] <= 0 or row['_lon'] <= 0 or not trip_coords:
                     return 999
                 return min(haversine_distance(row['_lat'], row['_lon'], tc[0], tc[1]) for tc in trip_coords)
             
-            same_zone_df['_dist_to_trip'] = same_zone_df.apply(min_dist_to_trip, axis=1)
+            same_zone_df['_haversine_dist'] = same_zone_df.apply(min_haversine_to_trip, axis=1)
             
-            # 🎯 เรียงตาม priority ก่อน (ตำบล > อำเภอ > จังหวัด) แล้วค่อยระยะทาง
+            # เรียงตาม priority + haversine แล้วเอา top 15 candidates
             if '_priority' not in same_zone_df.columns:
                 same_zone_df['_priority'] = 99
-            same_zone_df = same_zone_df.sort_values(['_priority', '_dist_to_trip'])
+            same_zone_df = same_zone_df.sort_values(['_priority', '_haversine_dist'])
+            top_candidates = same_zone_df.head(15).copy()
+            
+            # 🛣️ คำนวณระยะทางจริง (OSRM) สำหรับ top candidates
+            def min_osrm_to_trip(row):
+                if row['_lat'] <= 0 or row['_lon'] <= 0 or not trip_coords:
+                    return 999
+                
+                # หาระยะทางจริงไปยังสาขาที่ใกล้ที่สุดในทริป
+                min_dist = 999
+                for tc in trip_coords:
+                    # ใช้ OSRM API
+                    try:
+                        route_coords, dist_km = get_multi_point_route_osrm([[row['_lat'], row['_lon']], [tc[0], tc[1]]])
+                        if dist_km > 0 and dist_km < min_dist:
+                            min_dist = dist_km
+                    except:
+                        # Fallback to Haversine
+                        h_dist = haversine_distance(row['_lat'], row['_lon'], tc[0], tc[1])
+                        if h_dist < min_dist:
+                            min_dist = h_dist
+                return min_dist
+            
+            top_candidates['_dist_to_trip'] = top_candidates.apply(min_osrm_to_trip, axis=1)
+            same_zone_df = top_candidates.sort_values(['_priority', '_dist_to_trip'])
             
             found_candidate = False
             
