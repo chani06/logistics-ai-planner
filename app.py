@@ -2944,17 +2944,19 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             
             # ถ้าไม่มีสาขาในโซนเดียวกัน → ลองหาจังหวัดใกล้เคียง
             if same_zone_df.empty:
-                # ลองหาสาขาที่อยู่ใกล้สาขาสุดท้ายมาก (< 50km) แม้จะต่างจังหวัด
-                last_code = trip_codes[-1]
-                last_branch = df[df['Code'] == last_code].iloc[0]
-                last_lat = last_branch['_lat']
-                last_lon = last_branch['_lon']
+                # หาสาขาที่ใกล้สาขาใดในทริปมากที่สุด (< 50km)
+                trip_coords = []
+                for tc in trip_codes:
+                    tc_row = df[df['Code'] == tc].iloc[0]
+                    if tc_row['_lat'] > 0 and tc_row['_lon'] > 0:
+                        trip_coords.append((tc_row['_lat'], tc_row['_lon']))
                 
-                remaining_df['_dist_to_trip'] = remaining_df.apply(
-                    lambda row: haversine_distance(last_lat, last_lon, row['_lat'], row['_lon'])
-                    if row['_lat'] > 0 and row['_lon'] > 0 else 999,
-                    axis=1
-                )
+                def min_dist_to_trip_fallback(row):
+                    if row['_lat'] <= 0 or row['_lon'] <= 0 or not trip_coords:
+                        return 999
+                    return min(haversine_distance(row['_lat'], row['_lon'], tc[0], tc[1]) for tc in trip_coords)
+                
+                remaining_df['_dist_to_trip'] = remaining_df.apply(min_dist_to_trip_fallback, axis=1)
                 
                 # หาสาขาที่ใกล้มาก (< 50km) และอยู่ภาคเดียวกัน
                 nearby_df = remaining_df[
@@ -2967,18 +2969,21 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 
                 same_zone_df = nearby_df.copy()
             
-            # 🎯 หาสาขาถัดไปจากสาขาสุดท้ายในทริป (ไม่ใช่ centroid)
-            last_code = trip_codes[-1]
-            last_branch = df[df['Code'] == last_code].iloc[0]
-            last_lat = last_branch['_lat']
-            last_lon = last_branch['_lon']
+            # 🎯 หาสาขาที่ใกล้สาขาใดสาขาหนึ่งในทริปมากที่สุด
+            trip_coords = []
+            for tc in trip_codes:
+                tc_row = df[df['Code'] == tc].iloc[0]
+                if tc_row['_lat'] > 0 and tc_row['_lon'] > 0:
+                    trip_coords.append((tc_row['_lat'], tc_row['_lon']))
             
-            # หาสาขาที่ใกล้สาขาสุดท้ายมากที่สุด
-            same_zone_df['_dist_to_trip'] = same_zone_df.apply(
-                lambda row: haversine_distance(last_lat, last_lon, row['_lat'], row['_lon'])
-                if row['_lat'] > 0 and row['_lon'] > 0 else 999,
-                axis=1
-            )
+            # คำนวณระยะทางจาก candidate ไปยังสาขาใกล้ที่สุดในทริป
+            def min_dist_to_trip(row):
+                if row['_lat'] <= 0 or row['_lon'] <= 0 or not trip_coords:
+                    return 999
+                return min(haversine_distance(row['_lat'], row['_lon'], tc[0], tc[1]) for tc in trip_coords)
+            
+            same_zone_df['_dist_to_trip'] = same_zone_df.apply(min_dist_to_trip, axis=1)
+            
             # 🎯 เรียงตาม priority ก่อน (ตำบล > อำเภอ > จังหวัด) แล้วค่อยระยะทาง
             if '_priority' not in same_zone_df.columns:
                 same_zone_df['_priority'] = 99
@@ -3629,8 +3634,118 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     df['VehicleCheck'] = df.apply(check_vehicle_compliance, axis=1)
     
     # ==========================================
-    # Step 9: เรียงทริปใหม่ให้ทริปติดกัน (สำหรับ export)
+    # 🚨 Step 8.5: บังคับแก้ไขสาขาที่เกินข้อจำกัดรถ (Enforce Vehicle Constraints)
     # ==========================================
+    print("\n📋 Step 8.5: บังคับข้อจำกัดรถ...")
+    vehicle_violations = df[df['VehicleCheck'].str.contains('❌', na=False)]
+    
+    if len(vehicle_violations) > 0:
+        print(f"   ⚠️ พบ {len(vehicle_violations)} สาขาที่ใช้รถเกินข้อจำกัด")
+        
+        # แยกสาขาที่เกินข้อจำกัดออกมาจัดทริปใหม่
+        for _, viol_row in vehicle_violations.iterrows():
+            viol_code = viol_row['Code']
+            viol_trip = viol_row['Trip']
+            max_allowed = viol_row['_max_vehicle']
+            
+            # หาสาขาอื่นในทริปเดียวกันที่มีข้อจำกัดเดียวกันหรือน้อยกว่า
+            same_trip = df[df['Trip'] == viol_trip]
+            
+            # ตรวจสอบว่าสาขาอื่นในทริปมีข้อจำกัดอย่างไร
+            vehicle_rank = {'4W': 1, 'JB': 2, '6W': 3}
+            max_allowed_rank = vehicle_rank.get(max_allowed, 3)
+            
+            # หาสาขาที่ทำให้ต้องใช้รถใหญ่ (น้ำหนัก/คิวมาก หรือ max vehicle ใหญ่กว่า)
+            other_branches = same_trip[same_trip['Code'] != viol_code]
+            
+            if len(other_branches) > 0:
+                # ตรวจสอบว่าสาขาอื่นมีข้อจำกัดใหญ่กว่าหรือไม่
+                other_max_vehicles = other_branches['_max_vehicle'].apply(lambda x: vehicle_rank.get(x, 3))
+                min_other_rank = other_max_vehicles.min()
+                
+                if min_other_rank > max_allowed_rank:
+                    # สาขาอื่นมีข้อจำกัดใหญ่กว่า → ย้ายสาขานี้ออก
+                    df.loc[df['Code'] == viol_code, 'Trip'] = 0  # ย้ายออกไปจัดใหม่
+                    print(f"      🔄 ย้าย {viol_code} ออกจาก Trip {viol_trip} (Max: {max_allowed})")
+    
+    # จัดทริปใหม่สำหรับสาขาที่ถูกย้ายออก
+    unassigned_violations = df[df['Trip'] == 0]
+    if len(unassigned_violations) > 0:
+        print(f"   📦 จัดทริปใหม่สำหรับ {len(unassigned_violations)} สาขา...")
+        max_trip = df[df['Trip'] > 0]['Trip'].max() if len(df[df['Trip'] > 0]) > 0 else 0
+        
+        # จัดกลุ่มตาม max_vehicle
+        for max_veh in ['4W', 'JB', '6W']:
+            veh_branches = unassigned_violations[unassigned_violations['_max_vehicle'] == max_veh]
+            if len(veh_branches) == 0:
+                continue
+            
+            # สร้างทริปใหม่สำหรับสาขาที่มี max_vehicle เดียวกัน
+            new_trip = max_trip + 1
+            limits = PUNTHAI_LIMITS if all(str(veh_branches['BU'].iloc[0]).upper() in ['211', 'PUNTHAI']) else LIMITS
+            
+            current_w = 0
+            current_c = 0
+            current_drops = 0
+            max_w = limits[max_veh]['max_w']
+            max_c = limits[max_veh]['max_c']
+            max_d = limits[max_veh]['max_drops']
+            
+            for _, br in veh_branches.iterrows():
+                br_w = br['Weight']
+                br_c = br['Cube']
+                
+                if current_w + br_w > max_w or current_c + br_c > max_c or current_drops >= max_d:
+                    # ปิดทริปปัจจุบัน เริ่มทริปใหม่
+                    new_trip += 1
+                    current_w = 0
+                    current_c = 0
+                    current_drops = 0
+                
+                df.loc[df['Code'] == br['Code'], 'Trip'] = new_trip
+                current_w += br_w
+                current_c += br_c
+                current_drops += 1
+            
+            max_trip = new_trip
+            print(f"      ✅ จัด {len(veh_branches)} สาขา {max_veh} เสร็จ")
+        
+        # อัพเดต Truck และ VehicleCheck หลังจัดใหม่
+        for trip_num in df[df['Trip'] > 0]['Trip'].unique():
+            trip_codes = df[df['Trip'] == trip_num]['Code'].tolist()
+            max_vehicles = [get_max_vehicle_for_branch(c) for c in trip_codes]
+            vehicle_priority = {'4W': 1, 'JB': 2, '6W': 3}
+            min_rank = min(vehicle_priority.get(v, 3) for v in max_vehicles)
+            suggested = {1: '4W', 2: 'JB', 3: '6W'}.get(min_rank, '6W')
+            df.loc[df['Trip'] == trip_num, 'Truck'] = f"{suggested} 📋 จัดใหม่"
+        
+        df['VehicleCheck'] = df.apply(check_vehicle_compliance, axis=1)
+    
+    # ==========================================
+    # Step 9: เรียงทริปใหม่ตามระยะทาง (ไกล→ใกล้, เลขไม่กระโดด)
+    # ==========================================
+    print("\n📋 Step 9: เรียงทริปใหม่ตามระยะทาง...")
+    
+    # หาระยะทางไกลสุดของแต่ละทริป
+    trip_max_distances = {}
+    for trip_num in df[df['Trip'] > 0]['Trip'].unique():
+        trip_data = df[df['Trip'] == trip_num]
+        max_dist = trip_data['_distance_from_dc'].max() if '_distance_from_dc' in trip_data.columns else 0
+        trip_max_distances[trip_num] = max_dist if pd.notna(max_dist) else 0
+    
+    # เรียงทริปตามระยะทาง (ไกลสุดก่อน)
+    sorted_trips = sorted(trip_max_distances.keys(), key=lambda x: trip_max_distances[x], reverse=True)
+    
+    # สร้าง mapping ใหม่
+    trip_renumber = {old_trip: new_trip for new_trip, old_trip in enumerate(sorted_trips, 1)}
+    df['Trip'] = df['Trip'].map(lambda x: trip_renumber.get(x, 0) if x > 0 else 0)
+    
+    # อัพเดต summary_df ด้วย
+    summary_df['Trip'] = summary_df['Trip'].map(lambda x: trip_renumber.get(x, x))
+    summary_df = summary_df.sort_values('Trip').reset_index(drop=True)
+    
+    print(f"   ✅ เรียงใหม่: {len(sorted_trips)} ทริป (Trip 1 = ไกลสุด {trip_max_distances[sorted_trips[0]]:.0f} km)")
+    
     df = df.sort_values(['Trip', '_distance_from_dc'], ascending=[True, False]).reset_index(drop=True)
     
     # ลบคอลัมน์ชั่วคราว (เก็บ _province, _district, _subdistrict, _max_vehicle, _lat, _lon, _distance_from_dc ไว้สำหรับแผนที่)
@@ -4431,13 +4546,21 @@ def main():
                                                     icon=folium.Icon(color='black', icon='home', prefix='fa')
                                                 ).add_to(m)
                                                 
-                                                # สี palette สำหรับแต่ละทริป
-                                                colors = ['#e41a1c', '#377eb8', '#4daf4a', '#984ea3', '#ff7f00', 
-                                                         '#a65628', '#f781bf', '#1b9e77', '#d95f02', '#7570b3',
-                                                         '#e7298a', '#66a61e', '#e6ab02', '#a6761d', '#666666',
-                                                         '#1f78b4', '#33a02c', '#fb9a99']
+                                                # สี palette สำหรับแต่ละทริป - 50 สีไม่ซ้ำกัน
+                                                colors = [
+                                                    '#e41a1c', '#377eb8', '#4daf4a', '#984ea3', '#ff7f00',  # 1-5
+                                                    '#a65628', '#f781bf', '#1b9e77', '#d95f02', '#7570b3',  # 6-10
+                                                    '#e7298a', '#66a61e', '#e6ab02', '#a6761d', '#666666',  # 11-15
+                                                    '#1f78b4', '#33a02c', '#fb9a99', '#fdbf6f', '#cab2d6',  # 16-20
+                                                    '#b15928', '#8dd3c7', '#ffffb3', '#bebada', '#fb8072',  # 21-25
+                                                    '#80b1d3', '#fdb462', '#b3de69', '#fccde5', '#d9d9d9',  # 26-30
+                                                    '#bc80bd', '#ccebc5', '#ffed6f', '#e31a1c', '#1b7837',  # 31-35
+                                                    '#762a83', '#e66101', '#5e3c99', '#d53e4f', '#3288bd',  # 36-40
+                                                    '#f46d43', '#fdae61', '#fee08b', '#66c2a5', '#3d9970',  # 41-45
+                                                    '#001f3f', '#39cccc', '#85144b', '#ff4136', '#2ecc40'   # 46-50
+                                                ]
                                                 
-                                                # เรียงทริปตามระยะทางไกลสุด (ไกล→ใกล้)
+                                                # เรียงทริปตามเลข (Trip 1, 2, 3...) เพราะ renumber แล้ว
                                                 trip_max_dist = {}
                                                 for trip_id in valid_coords['Trip'].unique():
                                                     if '_distance_from_dc' in valid_coords.columns:
