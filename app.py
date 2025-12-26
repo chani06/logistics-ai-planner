@@ -2301,7 +2301,23 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 break
             
             if len(current_trip['codes']) <= 1:
-                # ถ้าเหลือ 1 สาขาแต่ยังเกิน → ยอมรับ (ไม่มีทางแยกได้)
+                # 🚨 ถ้าเหลือ 1 สาขาแต่ยังเกิน → ตัดออกไป overflow (ไม่ยอมรับ!)
+                if current_trip['codes']:
+                    overflow_code = current_trip['codes'].pop()
+                    overflow_weight = df.loc[df['Code'] == overflow_code, 'Weight'].iloc[0]
+                    overflow_cube = df.loc[df['Code'] == overflow_code, 'Cube'].iloc[0]
+                    current_trip['weight'] = 0
+                    current_trip['cube'] = 0
+                    current_trip['drops'] = 0
+                    print(f"   🚨 สาขา {overflow_code} เกิน buffer (W:{overflow_weight:.0f}, C:{overflow_cube:.1f}) → ตัดไป overflow")
+                    
+                    overflow_queue.append({
+                        'code': overflow_code,
+                        'weight': overflow_weight,
+                        'cube': overflow_cube,
+                        'region': region,
+                        'allowed_vehicles': allowed_vehicles
+                    })
                 break
             
             # ตัด store สุดท้ายออก
@@ -3775,8 +3791,21 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             
             # ดึงข้อมูลทริป
             trip_data = df[df['Trip'] == trip_num].copy()
+            
+            # 🚨 ถ้ามีแค่ 1 สาขา แต่เกิน buffer → ตัดสาขานั้นไป overflow ทั้งหมด
             if len(trip_data) <= 1:
-                continue  # มีแค่ 1 สาขา ไม่สามารถตัดได้
+                code = trip_data.iloc[0]['Code'] if len(trip_data) == 1 else None
+                if code:
+                    df.loc[df['Code'] == code, 'Trip'] = 0
+                    overflow_branches.append(code)
+                    print(f"      🔪 ตัด {code} ออก (1 สาขาแต่เกิน buffer → overflow)")
+                    # ลบ summary ของทริปนี้
+                    summary_data[i]['Branches'] = 0
+                    summary_data[i]['Weight'] = 0
+                    summary_data[i]['Cube'] = 0
+                    summary_data[i]['Weight_Use%'] = 0
+                    summary_data[i]['Cube_Use%'] = 0
+                continue
             
             # เรียงตามระยะทางใกล้สุดก่อน (ตัดสาขาใกล้ออก)
             trip_data = trip_data.sort_values('_distance_from_dc', ascending=True)
