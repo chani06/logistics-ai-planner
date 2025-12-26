@@ -1389,6 +1389,48 @@ def get_route_osrm(pickup_lat, pickup_lon, dropoff_lat, dropoff_lon, max_retries
     
     return [[pickup_lat, pickup_lon], [dropoff_lat, dropoff_lon]]
 
+
+def get_multi_point_route_osrm(waypoints, max_retries=2):
+    """
+    ขอเส้นทางจริงจาก OSRM API สำหรับหลายจุด
+    
+    Args:
+        waypoints: list ของ [lat, lon] เช่น [[14.1, 100.6], [14.2, 100.7], ...]
+        max_retries: จำนวนครั้งที่ลองใหม่
+    
+    Returns:
+        tuple: (route_coords, distance_km) - พิกัดเส้นทาง และระยะทางรวม
+    """
+    if not FOLIUM_AVAILABLE or len(waypoints) < 2:
+        return waypoints, 0
+    
+    # OSRM รับพิกัดแบบ lon,lat (ไม่ใช่ lat,lon!)
+    coords_str = ";".join([f"{lon},{lat}" for lat, lon in waypoints])
+    url = f"http://router.project-osrm.org/route/v1/driving/{coords_str}?overview=full&geometries=geojson"
+    
+    for attempt in range(max_retries):
+        try:
+            r = requests.get(url, timeout=10)
+            res = r.json()
+            
+            if "routes" in res and len(res["routes"]) > 0:
+                route = res["routes"][0]
+                # แปลง GeoJSON coordinates (lon, lat) เป็น (lat, lon)
+                coords = route["geometry"]["coordinates"]
+                route_coords = [[lat, lon] for lon, lat in coords]
+                # ระยะทางจาก OSRM เป็นเมตร
+                distance_km = route.get("distance", 0) / 1000
+                return route_coords, distance_km
+            else:
+                return waypoints, 0
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time_module.sleep(0.3)
+                continue
+            return waypoints, 0
+    
+    return waypoints, 0
+
 def calculate_bearing(lat1, lon1, lat2, lon2):
     """
     คำนวณทิศทาง (bearing) จากจุด 1 ไปจุด 2 เป็นองศา (0-360)
@@ -3426,6 +3468,109 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             'Total_Distance': round(total_distance, 1)
         })
     
+    # ==========================================
+    # 🚨 Step 7.5: ตัดสาขาออกถ้าเกิน buffer (Strict Enforcement)
+    # ==========================================
+    print("\n📋 Step 7.5: ตรวจสอบและตัดสาขาที่เกิน Buffer...")
+    overflow_branches = []
+    
+    for i, trip_summary in enumerate(summary_data):
+        trip_num = trip_summary['Trip']
+        max_util = max(trip_summary['Weight_Use%'], trip_summary['Cube_Use%'])
+        buffer_pct = float(trip_summary['Buffer'].replace('🅿️ ', '').replace('🅼 ', '').replace('%', ''))
+        
+        # ถ้าเกิน buffer threshold
+        if max_util > buffer_pct:
+            print(f"   ⚠️ Trip {trip_num} เกิน buffer: {max_util:.1f}% > {buffer_pct}%")
+            
+            # ดึงข้อมูลทริป
+            trip_data = df[df['Trip'] == trip_num].copy()
+            if len(trip_data) <= 1:
+                continue  # มีแค่ 1 สาขา ไม่สามารถตัดได้
+            
+            # เรียงตามระยะทางใกล้สุดก่อน (ตัดสาขาใกล้ออก)
+            trip_data = trip_data.sort_values('_distance_from_dc', ascending=True)
+            
+            # ดึง limits
+            bu_type = trip_summary['BU_Type']
+            is_punthai = (bu_type == 'punthai')
+            buffer = punthai_buffer if is_punthai else maxmart_buffer
+            truck_str = trip_summary['Truck'].split()[0]
+            limits = PUNTHAI_LIMITS if is_punthai else LIMITS
+            
+            if truck_str not in limits:
+                continue
+            
+            max_w = limits[truck_str]['max_w'] * buffer
+            max_c = limits[truck_str]['max_c'] * buffer
+            
+            # คำนวณน้ำหนัก/คิวปัจจุบัน
+            current_w = trip_data['Weight'].sum()
+            current_c = trip_data['Cube'].sum()
+            
+            # ตัดสาขาออกจนกว่าจะไม่เกิน
+            codes_to_remove = []
+            for _, row in trip_data.iterrows():
+                if current_w <= max_w and current_c <= max_c:
+                    break  # พอดีแล้ว
+                
+                if len(trip_data) - len(codes_to_remove) <= 1:
+                    break  # เหลือแค่ 1 สาขา หยุด
+                
+                code = row['Code']
+                codes_to_remove.append(code)
+                current_w -= row['Weight']
+                current_c -= row['Cube']
+                overflow_branches.append(code)
+                print(f"      🔪 ตัด {code} ออก (ใกล้สุด {row['_distance_from_dc']:.1f} km)")
+            
+            # ลบสาขาออกจากทริป (Trip = 0)
+            for code in codes_to_remove:
+                df.loc[df['Code'] == code, 'Trip'] = 0
+            
+            # อัพเดต summary
+            if codes_to_remove:
+                new_trip_data = df[df['Trip'] == trip_num]
+                new_w = new_trip_data['Weight'].sum()
+                new_c = new_trip_data['Cube'].sum()
+                new_w_util = (new_w / (limits[truck_str]['max_w'])) * 100
+                new_c_util = (new_c / (limits[truck_str]['max_c'])) * 100
+                
+                summary_data[i]['Branches'] = len(new_trip_data)
+                summary_data[i]['Weight'] = new_w
+                summary_data[i]['Cube'] = new_c
+                summary_data[i]['Weight_Use%'] = new_w_util
+                summary_data[i]['Cube_Use%'] = new_c_util
+    
+    # จัดทริปใหม่สำหรับ overflow branches
+    if overflow_branches:
+        print(f"\n   📦 สาขาที่ถูกตัด: {len(overflow_branches)} สาขา → จัดทริปใหม่...")
+        max_trip = df['Trip'].max()
+        new_trip = max_trip + 1 if max_trip > 0 else 1
+        
+        for code in overflow_branches:
+            df.loc[df['Code'] == code, 'Trip'] = new_trip
+        
+        # เพิ่ม summary ใหม่
+        overflow_data = df[df['Trip'] == new_trip]
+        if not overflow_data.empty:
+            new_w = overflow_data['Weight'].sum()
+            new_c = overflow_data['Cube'].sum()
+            
+            summary_data.append({
+                'Trip': new_trip,
+                'Branches': len(overflow_data),
+                'Weight': new_w,
+                'Cube': new_c,
+                'Truck': '6W 🔪 ตัดออก',
+                'BU_Type': 'mixed',
+                'Buffer': '🅼 110%',
+                'Weight_Use%': (new_w / LIMITS['6W']['max_w']) * 100,
+                'Cube_Use%': (new_c / LIMITS['6W']['max_c']) * 100,
+                'Total_Distance': 0
+            })
+        print(f"   ✅ สร้าง Trip {new_trip} ใหม่สำหรับสาขาที่ถูกตัด")
+    
     summary_df = pd.DataFrame(summary_data)
     
     # ==========================================
@@ -4333,18 +4478,30 @@ def main():
                                                     if len(points) == 0:
                                                         continue
                                                     
-                                                    # คำนวณระยะทางรวมของทริป (DC → สาขา1 → สาขา2 → ... → DC)
-                                                    total_trip_distance = 0
-                                                    route_points = [[DC_LAT, DC_LON]] + points + [[DC_LAT, DC_LON]]
-                                                    for i in range(len(route_points) - 1):
-                                                        lat1, lon1 = route_points[i]
-                                                        lat2, lon2 = route_points[i + 1]
-                                                        # Haversine
-                                                        dlat = radians(lat2 - lat1)
-                                                        dlon = radians(lon2 - lon1)
-                                                        a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
-                                                        c = 2 * atan2(sqrt(a), sqrt(1-a))
-                                                        total_trip_distance += 6371 * c
+                                                    # 🛣️ ดึงเส้นทางจริงจาก OSRM (DC → สาขา1 → สาขา2 → ... → DC)
+                                                    waypoints = [[DC_LAT, DC_LON]] + points + [[DC_LAT, DC_LON]]
+                                                    
+                                                    # ลองดึงเส้นทางจริง - ใช้ cache
+                                                    cache_key = f"route_{trip_id}_{len(points)}"
+                                                    if 'route_cache' not in st.session_state:
+                                                        st.session_state['route_cache'] = {}
+                                                    
+                                                    if cache_key in st.session_state['route_cache']:
+                                                        real_route_coords, total_trip_distance = st.session_state['route_cache'][cache_key]
+                                                    else:
+                                                        real_route_coords, total_trip_distance = get_multi_point_route_osrm(waypoints)
+                                                        st.session_state['route_cache'][cache_key] = (real_route_coords, total_trip_distance)
+                                                    
+                                                    # ถ้า OSRM ไม่ได้ระยะทาง ใช้ Haversine แทน
+                                                    if total_trip_distance == 0:
+                                                        for i in range(len(waypoints) - 1):
+                                                            lat1, lon1 = waypoints[i]
+                                                            lat2, lon2 = waypoints[i + 1]
+                                                            dlat = radians(lat2 - lat1)
+                                                            dlon = radians(lon2 - lon1)
+                                                            a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
+                                                            c = 2 * atan2(sqrt(a), sqrt(1-a))
+                                                            total_trip_distance += 6371 * c
                                                     
                                                     # ปักหมุดแต่ละจุด
                                                     for i, (point, name, dist) in enumerate(zip(points, point_names, point_distances)):
@@ -4371,16 +4528,16 @@ def main():
                                                             icon=folium.DivIcon(html=trip_label)
                                                         ).add_to(fg)
                                                     
-                                                    # วาดเส้นทาง DC → สาขา → DC (ถ้าเปิด)
+                                                    # วาดเส้นทางจริง DC → สาขา → DC (ถ้าเปิด)
                                                     if show_route and len(points) >= 1:
-                                                        route_coords = [[DC_LAT, DC_LON]] + points + [[DC_LAT, DC_LON]]
+                                                        # ใช้เส้นทางจริงจาก OSRM
                                                         folium.PolyLine(
-                                                            locations=route_coords,
-                                                            weight=3,
+                                                            locations=real_route_coords,
+                                                            weight=4,
                                                             color=trip_color,
-                                                            opacity=0.7,
-                                                            popup=f"Trip {trip_id}: {total_trip_distance:.1f} km",
-                                                            tooltip=f"Trip {trip_id} - ระยะทาง {total_trip_distance:.1f} km"
+                                                            opacity=0.8,
+                                                            popup=f"Trip {trip_id}: {total_trip_distance:.1f} km (เส้นทางจริง)",
+                                                            tooltip=f"🛣️ Trip {trip_id} - ระยะทาง {total_trip_distance:.1f} km"
                                                         ).add_to(fg)
                                                     
                                                     fg.add_to(m)
