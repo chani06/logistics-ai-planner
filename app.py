@@ -4745,46 +4745,18 @@ def main():
                                 
                                 # ใช้ LIMITS/PUNTHAI_LIMITS ที่ถูกต้อง
                                 limits = PUNTHAI_LIMITS.get(veh_type, PUNTHAI_LIMITS['6W']) if is_punthai else LIMITS.get(veh_type, LIMITS['6W'])
-                                max_w = limits['max_w'] * buffer
-                                max_c = limits['max_c'] * buffer
+                                max_w = limits['max_w']
+                                max_c = limits['max_c']
                                 
-                                # 2️⃣ ตรวจสอบ utilization (ใช้ buffer)
+                                # 🎯 คำนวณ utilization (ไม่ใช้ buffer)
                                 w_util = (trip_weight / max_w) * 100
                                 c_util = (trip_cube / max_c) * 100
-                                max_util = max(w_util, c_util)
                                 
-                                if max_util > 100:  # เกิน buffer → แดง
+                                # 🔴 ถ้าทั้ง Cube% และ Weight% ต่ำกว่า 90% → แดง
+                                if w_util < 90 and c_util < 90:
                                     failed_trips.add(t)
-                                    failed_reasons[t] = f"เกิน buffer ({max_util:.0f}%)"
+                                    failed_reasons[t] = f"Utilization ต่ำ (W:{w_util:.0f}%, C:{c_util:.0f}%)"
                                     continue
-                                
-                                # 3️⃣ ตรวจสอบ vehicle constraint (สาขาอนุญาตรถเล็กกว่าที่จัด)
-                                vehicle_rank = {'4W': 1, 'JB': 2, '6W': 3}
-                                veh_rank = vehicle_rank.get(veh_type, 3)
-                                has_violation = False
-                                for c in trip_codes:
-                                    max_allowed = get_max_vehicle_for_branch(c)
-                                    max_allowed_rank = vehicle_rank.get(max_allowed, 3)
-                                    if veh_rank > max_allowed_rank:
-                                        has_violation = True
-                                        break
-                                
-                                if has_violation:
-                                    failed_trips.add(t)
-                                    failed_reasons[t] = f"รถเกินข้อจำกัดสาขา"
-                                    continue
-                                
-                                # 4️⃣ ตรวจสอบ NO_CROSS_ZONE_PAIRS (มีจังหวัดที่ห้ามอยู่ด้วยกัน)
-                                provinces = trip_data['_province'].unique() if '_province' in trip_data.columns else []
-                                if len(provinces) > 1:
-                                    for i, p1 in enumerate(provinces):
-                                        for p2 in provinces[i+1:]:
-                                            if is_cross_zone_violation(p1, p2):
-                                                failed_trips.add(t)
-                                                failed_reasons[t] = f"ข้ามโซนห้าม ({p1}-{p2})"
-                                                break
-                                        if t in failed_trips:
-                                            break
                             
                             current_trip = None
                             use_yellow = True
@@ -5300,46 +5272,18 @@ def main():
                                 veh_type = 'JB' if trip_no.startswith('4WJ') else ('4W' if trip_no.startswith('4W') else '6W')
                                 
                                 limits = PUNTHAI_LIMITS.get(veh_type, PUNTHAI_LIMITS['6W']) if is_punthai else LIMITS.get(veh_type, LIMITS['6W'])
-                                max_w = limits['max_w'] * buffer
-                                max_c = limits['max_c'] * buffer
+                                max_w = limits['max_w']
+                                max_c = limits['max_c']
                                 
-                                # 2️⃣ ตรวจสอบ utilization
+                                # 🎯 คำนวณ utilization (ไม่ใช้ buffer)
                                 w_util = (trip_weight / max_w) * 100
                                 c_util = (trip_cube / max_c) * 100
-                                max_util = max(w_util, c_util)
                                 
-                                if max_util > 100:
+                                # 🔴 ถ้าทั้ง Cube% และ Weight% ต่ำกว่า 90% → แดง
+                                if w_util < 90 and c_util < 90:
                                     failed_trips.add(t)
-                                    failed_reasons[t] = f"เกิน buffer ({max_util:.0f}%)"
+                                    failed_reasons[t] = f"Utilization ต่ำ (W:{w_util:.0f}%, C:{c_util:.0f}%)"
                                     continue
-                                
-                                # 3️⃣ ตรวจสอบ vehicle constraint
-                                vehicle_rank = {'4W': 1, 'JB': 2, '6W': 3}
-                                veh_rank = vehicle_rank.get(veh_type, 3)
-                                has_violation = False
-                                for c in trip_codes:
-                                    max_allowed = get_max_vehicle_for_branch(c)
-                                    max_allowed_rank = vehicle_rank.get(max_allowed, 3)
-                                    if veh_rank > max_allowed_rank:
-                                        has_violation = True
-                                        break
-                                
-                                if has_violation:
-                                    failed_trips.add(t)
-                                    failed_reasons[t] = f"รถเกินข้อจำกัดสาขา"
-                                    continue
-                                
-                                # 4️⃣ ตรวจสอบ NO_CROSS_ZONE_PAIRS
-                                provinces = trip_data['_province'].unique() if '_province' in trip_data.columns else []
-                                if len(provinces) > 1:
-                                    for i, p1 in enumerate(provinces):
-                                        for p2 in provinces[i+1:]:
-                                            if is_cross_zone_violation(p1, p2):
-                                                failed_trips.add(t)
-                                                failed_reasons[t] = f"ข้ามโซนห้าม ({p1}-{p2})"
-                                                break
-                                        if t in failed_trips:
-                                            break
                             
                             # เขียนข้อมูล
                             current_trip = None
