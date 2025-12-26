@@ -3276,7 +3276,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 test_codes = trip_codes + [candidate_code]
                 test_allowed = get_allowed_from_codes(test_codes, ['4W', 'JB', '6W'])
                 if not test_allowed:
-                    continue  # ข้อจำกัดรถไม่เข้ากัน
+                    # 🚨 สาขาใกล้สุดมีข้อจำกัดรถไม่เข้ากัน → ปิดทริป
+                    print(f"      🛑 สาขา {candidate_code} (ใกล้สุด) ข้อจำกัดรถไม่เข้ากัน → ปิดทริป {trip_counter}")
+                    break
                 
                 # 🎯 หารถที่เล็กที่สุดที่ใช้ได้ (ไม่เกินข้อจำกัดสาขา)
                 # เรียงจากเล็กไปใหญ่: 4W → JB → 6W
@@ -3289,7 +3291,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                             break
                 
                 if not selected_vehicle:
-                    continue  # ไม่มีรถที่ใช้ได้โดยไม่เกินข้อจำกัด
+                    # 🚨 ไม่มีรถที่ใช้ได้โดยไม่เกินข้อจำกัด → ปิดทริป
+                    print(f"      🛑 สาขา {candidate_code} (ใกล้สุด) ไม่มีรถที่ใช้ได้ → ปิดทริป {trip_counter}")
+                    break
                 
                 # เช็คน้ำหนัก/ปริมาตร
                 test_weight = trip_weight + candidate_w
@@ -3309,9 +3313,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 
                 # เช็คว่าเกิน buffer หรือไม่
                 if test_weight > max_w or test_cube > max_c or test_drops > max_d:
-                    # 🚨 เกิน buffer → ปิดทริปเลย! (ตัดทันทีเมื่อเกิน)
-                    print(f"      🛑 สาขา {candidate_code} ทำให้เกิน buffer → ปิดทริป {trip_counter}")
-                    break  # ปิดทริปเลย ไม่ลองสาขาอื่น
+                    # 🚨 สาขาใกล้สุดเกิน buffer → ปิดทริปเลย! (ไม่ลองสาขาอื่น)
+                    print(f"      🛑 สาขา {candidate_code} (ใกล้สุด) เกิน buffer → ปิดทริป {trip_counter}")
+                    break
                 
                 # ✅ เพิ่มสาขานี้เข้าทริป
                 trip_codes.append(candidate_code)
