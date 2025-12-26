@@ -2821,10 +2821,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     finalize_current_trip(force=True)  # force=True เพราะหมดสาขาแล้ว
 
     # ==========================================
-    # Step 6.4: 🎯 ZONE-GREEDY REBALANCE - จัดทริปใหม่แบบ Nearest Neighbor
-    # หลักการ: เริ่มจากสาขาไกลสุด หาสาขาใกล้สุดมาเติมจนเต็ม buffer แล้วค่อยเริ่มทริปใหม่
+    # Step 6.4: 🎯 ZONE-STRICT GREEDY - จัดทริปใหม่แบบ Nearest Neighbor ห้ามข้ามโซน
+    # หลักการ: เริ่มจากสาขาไกลสุด หาสาขาใกล้สุดในโซนเดียวกันมาเติมจนเต็ม
     # ==========================================
-    print("🎯 กำลังจัดทริปใหม่แบบ Zone-Greedy (ไกล→ใกล้, เติมให้เต็ม)...")
+    print("🎯 กำลังจัดทริปใหม่แบบ Zone-Strict (ห้ามข้ามโซน)...")
     
     # รีเซ็ตทริปทั้งหมด
     df['Trip'] = 0
@@ -2845,27 +2845,62 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         start_lat = farthest_row['_lat']
         start_lon = farthest_row['_lon']
         
+        # 🎯 กำหนดโซนของทริปจากสาขาแรก
+        trip_province = farthest_row.get('_province', '')
+        trip_bearing_zone = farthest_row.get('_bearing_zone', 0)
+        trip_region = farthest_row.get('_region_name', '')
+        
         # เริ่มทริปใหม่ด้วยสาขาไกลสุด
         trip_codes = [start_code]
         trip_weight = farthest_row['Weight']
         trip_cube = farthest_row['Cube']
         unassigned.remove(start_code)
         
-        print(f"   🚀 เริ่ม Trip {trip_counter} จาก {start_code} ({farthest_row.get('_province', 'N/A')}) - ห่าง {farthest_row['_distance_from_dc']:.1f} km")
+        print(f"   🚀 เริ่ม Trip {trip_counter} จาก {start_code} ({trip_province}) - โซน {trip_bearing_zone} - ห่าง {farthest_row['_distance_from_dc']:.1f} km")
         
         # หา allowed vehicles จาก constraints
         trip_allowed = get_allowed_from_codes(trip_codes, ['4W', 'JB', '6W'])
         trip_is_punthai = branch_bu_cache.get(start_code, False)
         
-        # 2️⃣ Greedy: หาสาขาใกล้สุดมาเติมจนเต็ม buffer
-        current_lat = start_lat
-        current_lon = start_lon
-        
+        # 2️⃣ Greedy: หาสาขาใกล้สุดในโซนเดียวกันมาเติมจนเต็ม buffer
         while unassigned:
             # คำนวณระยะห่างจากตำแหน่งปัจจุบัน (centroid ของทริป) ไปยังทุกสาขาที่ยังไม่ได้จัด
             remaining_df = df[df['Code'].isin(unassigned)].copy()
             if remaining_df.empty:
                 break
+            
+            # 🚫 กรองเฉพาะสาขาในโซนเดียวกัน (จังหวัดเดียวกัน หรือ bearing zone ใกล้กัน)
+            same_zone_df = remaining_df[
+                (remaining_df['_province'] == trip_province) |  # จังหวัดเดียวกัน
+                (
+                    (remaining_df['_region_name'] == trip_region) &  # ภาคเดียวกัน
+                    (abs(remaining_df['_bearing_zone'] - trip_bearing_zone) <= 2)  # bearing zone ใกล้กัน (±2)
+                )
+            ].copy()
+            
+            # ถ้าไม่มีสาขาในโซนเดียวกัน → ลองหาจังหวัดใกล้เคียง
+            if same_zone_df.empty:
+                # ลองหาสาขาที่อยู่ใกล้ centroid มาก (< 50km) แม้จะต่างจังหวัด
+                trip_df = df[df['Code'].isin(trip_codes)]
+                centroid_lat = trip_df['_lat'].mean()
+                centroid_lon = trip_df['_lon'].mean()
+                
+                remaining_df['_dist_to_trip'] = remaining_df.apply(
+                    lambda row: haversine_distance(centroid_lat, centroid_lon, row['_lat'], row['_lon'])
+                    if row['_lat'] > 0 and row['_lon'] > 0 else 999,
+                    axis=1
+                )
+                
+                # หาสาขาที่ใกล้มาก (< 50km) และอยู่ภาคเดียวกัน
+                nearby_df = remaining_df[
+                    (remaining_df['_dist_to_trip'] < 50) & 
+                    (remaining_df['_region_name'] == trip_region)
+                ]
+                
+                if nearby_df.empty:
+                    break  # ไม่มีสาขาในโซนเดียวกันแล้ว → ปิดทริป
+                
+                same_zone_df = nearby_df.copy()
             
             # คำนวณ centroid ของทริปปัจจุบัน
             trip_df = df[df['Code'].isin(trip_codes)]
@@ -2873,24 +2908,25 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             centroid_lon = trip_df['_lon'].mean()
             
             # หาสาขาที่ใกล้ centroid มากที่สุด
-            remaining_df['_dist_to_trip'] = remaining_df.apply(
+            same_zone_df['_dist_to_trip'] = same_zone_df.apply(
                 lambda row: haversine_distance(centroid_lat, centroid_lon, row['_lat'], row['_lon'])
                 if row['_lat'] > 0 and row['_lon'] > 0 else 999,
                 axis=1
             )
-            remaining_df = remaining_df.sort_values('_dist_to_trip')
+            same_zone_df = same_zone_df.sort_values('_dist_to_trip')
+            same_zone_df = same_zone_df.sort_values('_dist_to_trip')
             
             found_candidate = False
             
-            for _, candidate_row in remaining_df.iterrows():
+            for _, candidate_row in same_zone_df.iterrows():
                 candidate_code = candidate_row['Code']
                 candidate_w = candidate_row['Weight']
                 candidate_c = candidate_row['Cube']
                 candidate_dist = candidate_row['_dist_to_trip']
                 
-                # 🚫 ถ้าไกลจาก centroid เกิน 100km → ไม่เพิ่ม (คนละโซน)
-                if candidate_dist > 100:
-                    break  # ไม่มีสาขาใกล้แล้ว ปิดทริป
+                # 🚫 ถ้าไกลจาก centroid เกิน 80km → ไม่เพิ่ม (หลุดโซน)
+                if candidate_dist > 80:
+                    break  # ไม่มีสาขาใกล้ในโซนแล้ว ปิดทริป
                 
                 # เช็ค allowed vehicles
                 test_codes = trip_codes + [candidate_code]
