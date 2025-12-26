@@ -1139,6 +1139,94 @@ def load_master_data():
 MASTER_DATA = load_master_data()
 
 # ==========================================
+# 🚀 PRE-COMPUTE: Distance Matrix & Nearby Branches
+# ==========================================
+@st.cache_data(ttl=3600)  # Cache 1 ชั่วโมง
+def precompute_branch_distances(master_df):
+    """
+    Pre-compute ระยะทางระหว่างสาขาทั้งหมด และจัดกลุ่มสาขาใกล้เคียง
+    เพื่อใช้ใน algorithm โดยไม่ต้องคำนวณซ้ำ
+    """
+    if master_df.empty:
+        return {}, {}, {}
+    
+    print("🚀 Pre-computing branch distances...")
+    
+    # ดึงพิกัดสาขาทั้งหมด
+    branch_coords = {}
+    for _, row in master_df.iterrows():
+        code = str(row.get('Plan Code', '')).strip().upper()
+        lat = row.get('Latitude', 0)
+        lon = row.get('Longitude', 0)
+        if code and lat and lon and lat > 0 and lon > 0:
+            branch_coords[code] = (float(lat), float(lon))
+    
+    print(f"   📍 พบ {len(branch_coords)} สาขาที่มีพิกัด")
+    
+    # สร้าง nearby_branches dict (สาขาที่ห่างกัน < 15km)
+    nearby_branches = {}  # {code: [(nearby_code, distance), ...]}
+    same_area_branches = {}  # {code: [codes in same subdistrict/district]}
+    
+    # สร้าง area mapping
+    area_map = {}  # {code: (subdistrict, district, province)}
+    for _, row in master_df.iterrows():
+        code = str(row.get('Plan Code', '')).strip().upper()
+        if code:
+            area_map[code] = (
+                str(row.get('ตำบล', '')).strip(),
+                str(row.get('อำเภอ', '')).strip(),
+                str(row.get('จังหวัด', '')).strip()
+            )
+    
+    codes = list(branch_coords.keys())
+    n_codes = len(codes)
+    
+    for i, code1 in enumerate(codes):
+        lat1, lon1 = branch_coords[code1]
+        nearby_list = []
+        same_area = []
+        
+        for j, code2 in enumerate(codes):
+            if i == j:
+                continue
+            
+            lat2, lon2 = branch_coords[code2]
+            
+            # คำนวณระยะทาง Haversine
+            dlat = radians(lat2 - lat1)
+            dlon = radians(lon2 - lon1)
+            a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
+            c = 2 * atan2(sqrt(a), sqrt(1-a))
+            dist = 6371 * c
+            
+            # เก็บสาขาที่ห่างกัน < 15km
+            if dist < 15:
+                nearby_list.append((code2, round(dist, 2)))
+            
+            # เก็บสาขาในพื้นที่เดียวกัน (ตำบล/อำเภอ)
+            area1 = area_map.get(code1, ('', '', ''))
+            area2 = area_map.get(code2, ('', '', ''))
+            
+            if area1[0] == area2[0] and area1[1] == area2[1] and area1[0]:  # ตำบลเดียวกัน
+                if code2 not in same_area:
+                    same_area.append(code2)
+            elif area1[1] == area2[1] and area1[2] == area2[2] and area1[1]:  # อำเภอเดียวกัน
+                if code2 not in same_area:
+                    same_area.append(code2)
+        
+        # เรียงตามระยะทาง
+        nearby_list.sort(key=lambda x: x[1])
+        nearby_branches[code1] = nearby_list
+        same_area_branches[code1] = same_area
+    
+    print(f"   ✅ Pre-compute เสร็จสิ้น: {n_codes} สาขา")
+    
+    return branch_coords, nearby_branches, same_area_branches
+
+# Pre-compute distances
+BRANCH_COORDS, NEARBY_BRANCHES, SAME_AREA_BRANCHES = precompute_branch_distances(MASTER_DATA)
+
+# ==========================================
 # CLEAN NAME FUNCTION (สำหรับทำ Join_Key)
 # ==========================================
 def clean_name(text):
@@ -2969,20 +3057,40 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 
                 same_zone_df = nearby_df.copy()
             
-            # 🎯 หาสาขาที่ใกล้สาขาใดสาขาหนึ่งในทริปมากที่สุด (ใช้ Haversine - เร็ว)
-            trip_coords = []
+            # 🎯 หาสาขาที่ใกล้สาขาใดสาขาหนึ่งในทริปมากที่สุด
+            # ใช้ NEARBY_BRANCHES ที่ pre-compute ไว้ (เร็วมาก)
+            
+            # รวบรวม candidates จาก pre-computed nearby branches
+            candidate_distances = {}
             for tc in trip_codes:
-                tc_row = df[df['Code'] == tc].iloc[0]
-                if tc_row['_lat'] > 0 and tc_row['_lon'] > 0:
-                    trip_coords.append((tc_row['_lat'], tc_row['_lon']))
+                tc_upper = str(tc).strip().upper()
+                # ดึงสาขาใกล้เคียงจาก pre-computed data
+                if tc_upper in NEARBY_BRANCHES:
+                    for nearby_code, dist in NEARBY_BRANCHES[tc_upper]:
+                        if nearby_code in [str(c).strip().upper() for c in unassigned]:
+                            # เก็บระยะทางที่น้อยที่สุด
+                            if nearby_code not in candidate_distances or dist < candidate_distances[nearby_code]:
+                                candidate_distances[nearby_code] = dist
             
-            # คำนวณระยะทาง Haversine (เร็ว)
-            def min_dist_to_trip(row):
-                if row['_lat'] <= 0 or row['_lon'] <= 0 or not trip_coords:
-                    return 999
-                return min(haversine_distance(row['_lat'], row['_lon'], tc[0], tc[1]) for tc in trip_coords)
-            
-            same_zone_df['_dist_to_trip'] = same_zone_df.apply(min_dist_to_trip, axis=1)
+            # ถ้าไม่มี candidates จาก pre-compute ให้คำนวณแบบเดิม (fallback)
+            if not candidate_distances:
+                trip_coords = []
+                for tc in trip_codes:
+                    tc_row = df[df['Code'] == tc].iloc[0]
+                    if tc_row['_lat'] > 0 and tc_row['_lon'] > 0:
+                        trip_coords.append((tc_row['_lat'], tc_row['_lon']))
+                
+                def min_dist_to_trip(row):
+                    if row['_lat'] <= 0 or row['_lon'] <= 0 or not trip_coords:
+                        return 999
+                    return min(haversine_distance(row['_lat'], row['_lon'], tc[0], tc[1]) for tc in trip_coords)
+                
+                same_zone_df['_dist_to_trip'] = same_zone_df.apply(min_dist_to_trip, axis=1)
+            else:
+                # ใช้ระยะทางจาก pre-compute
+                same_zone_df['_dist_to_trip'] = same_zone_df['Code'].apply(
+                    lambda x: candidate_distances.get(str(x).strip().upper(), 999)
+                )
             
             # เรียงตาม priority + distance
             if '_priority' not in same_zone_df.columns:
