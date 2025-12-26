@@ -2,7 +2,7 @@ import pandas as pd
 
 """
 Logistics Planner
-Version: 2024-12-25-v2 (Master data only, buffer enforcement)
+Version: 2025-12-26-v3 
 """
 
 import streamlit as st
@@ -3691,6 +3691,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             
             # ถ้าเกิน threshold ตาม BU ต้องเพิ่มขนาดรถ
             if max_util > max_util_threshold:
+                # 🚫 ห้าม upgrade เกินข้อจำกัดสาขา!
                 if suggested == '4W' and min_max_size >= 2:
                     jb_util = max((total_w / limits_for_util['JB']['max_w']), (total_c / limits_for_util['JB']['max_c'])) * 100
                     if jb_util <= max_util_threshold:
@@ -3698,16 +3699,28 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                         source += " → JB"
                         w_util = (total_w / limits_for_util['JB']['max_w']) * 100
                         c_util = (total_c / limits_for_util['JB']['max_c']) * 100
-                    elif min_max_size >= 3:
+                    elif min_max_size >= 3:  # สาขาอนุญาต 6W
                         suggested = '6W'
                         source += " → 6W"
                         w_util = (total_w / limits_for_util['6W']['max_w']) * 100
                         c_util = (total_c / limits_for_util['6W']['max_c']) * 100
-                elif suggested == 'JB' and min_max_size >= 3:
+                    else:
+                        # 🚫 ไม่สามารถ upgrade ได้ (สาขาจำกัด JB) → ยังคงใช้ JB (จะเกิน buffer)
+                        suggested = 'JB'
+                        source += " ⚠️ เกินแต่สาขาจำกัด"
+                        w_util = (total_w / limits_for_util['JB']['max_w']) * 100
+                        c_util = (total_c / limits_for_util['JB']['max_c']) * 100
+                elif suggested == 'JB' and min_max_size >= 3:  # สาขาอนุญาต 6W
                     suggested = '6W'
                     source += " → 6W"
                     w_util = (total_w / limits_for_util['6W']['max_w']) * 100
                     c_util = (total_c / limits_for_util['6W']['max_c']) * 100
+                elif suggested == 'JB' and min_max_size < 3:
+                    # 🚫 ไม่สามารถ upgrade เป็น 6W ได้ (สาขาจำกัด JB)
+                    source += " ⚠️ เกินแต่สาขาจำกัด"
+                elif suggested == '4W' and min_max_size < 2:
+                    # 🚫 ไม่สามารถ upgrade ได้ (สาขาจำกัด 4W)
+                    source += " ⚠️ เกินแต่สาขาจำกัด"
         else:
             w_util = c_util = 0
         
@@ -3823,30 +3836,56 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     if overflow_branches:
         print(f"\n   📦 สาขาที่ถูกตัด: {len(overflow_branches)} สาขา → จัดทริปใหม่...")
         max_trip = df['Trip'].max()
-        new_trip = max_trip + 1 if max_trip > 0 else 1
         
+        # 🎯 แยกตามข้อจำกัดรถ เพื่อไม่ให้ JB/4W ไปรวมกับ 6W
+        overflow_by_max_vehicle = {}
         for code in overflow_branches:
-            df.loc[df['Code'] == code, 'Trip'] = new_trip
+            max_veh = get_max_vehicle_for_branch(code)
+            if max_veh not in overflow_by_max_vehicle:
+                overflow_by_max_vehicle[max_veh] = []
+            overflow_by_max_vehicle[max_veh].append(code)
         
-        # เพิ่ม summary ใหม่
-        overflow_data = df[df['Trip'] == new_trip]
-        if not overflow_data.empty:
-            new_w = overflow_data['Weight'].sum()
-            new_c = overflow_data['Cube'].sum()
+        # จัดทริปแยกตามข้อจำกัด
+        for max_veh in ['4W', 'JB', '6W']:
+            if max_veh not in overflow_by_max_vehicle:
+                continue
             
-            summary_data.append({
-                'Trip': new_trip,
-                'Branches': len(overflow_data),
-                'Weight': new_w,
-                'Cube': new_c,
-                'Truck': '6W 🔪 ตัดออก',
-                'BU_Type': 'mixed',
-                'Buffer': '🅼 110%',
-                'Weight_Use%': (new_w / LIMITS['6W']['max_w']) * 100,
-                'Cube_Use%': (new_c / LIMITS['6W']['max_c']) * 100,
-                'Total_Distance': 0
-            })
-        print(f"   ✅ สร้าง Trip {new_trip} ใหม่สำหรับสาขาที่ถูกตัด")
+            codes_for_veh = overflow_by_max_vehicle[max_veh]
+            if not codes_for_veh:
+                continue
+                
+            new_trip = max_trip + 1
+            max_trip = new_trip
+            
+            for code in codes_for_veh:
+                df.loc[df['Code'] == code, 'Trip'] = new_trip
+            
+            # เพิ่ม summary ใหม่
+            overflow_data = df[df['Trip'] == new_trip]
+            if not overflow_data.empty:
+                new_w = overflow_data['Weight'].sum()
+                new_c = overflow_data['Cube'].sum()
+                overflow_codes = overflow_data['Code'].tolist()
+                
+                # เลือก limits ตาม BU
+                is_overflow_punthai = all(str(df[df['Code'] == c]['BU'].values[0] if len(df[df['Code'] == c]) > 0 else '').upper() in ['211', 'PUNTHAI'] for c in overflow_codes)
+                overflow_limits = PUNTHAI_LIMITS if is_overflow_punthai else LIMITS
+                overflow_buffer = punthai_buffer if is_overflow_punthai else maxmart_buffer
+                buffer_label = f"🅿️ {int(overflow_buffer*100)}%" if is_overflow_punthai else f"🅼 {int(overflow_buffer*100)}%"
+                
+                summary_data.append({
+                    'Trip': new_trip,
+                    'Branches': len(overflow_data),
+                    'Weight': new_w,
+                    'Cube': new_c,
+                    'Truck': f'{max_veh} 🔪 ตัดออก',
+                    'BU_Type': 'punthai' if is_overflow_punthai else 'mixed',
+                    'Buffer': buffer_label,
+                    'Weight_Use%': (new_w / overflow_limits[max_veh]['max_w']) * 100,
+                    'Cube_Use%': (new_c / overflow_limits[max_veh]['max_c']) * 100,
+                    'Total_Distance': 0
+                })
+            print(f"   ✅ สร้าง Trip {new_trip} ใหม่สำหรับสาขา {max_veh} ({len(codes_for_veh)} สาขา)")
     
     summary_df = pd.DataFrame(summary_data)
     
@@ -4990,7 +5029,8 @@ def main():
                                                     
                                                     # ปักหมุดแต่ละจุด
                                                     for i, (point, name, dist) in enumerate(zip(points, point_names, point_distances)):
-                                                        trip_label = f'<div style="background-color:{trip_color};color:#fff;border-radius:50%;width:28px;height:28px;text-align:center;line-height:28px;font-weight:bold;font-size:11px;border:2px solid #000;box-shadow:2px 2px 6px rgba(0,0,0,0.5);">{trip_id}</div>'
+                                                        # 🎯 แสดง T{trip}({ลำดับ}) บนหมุด เช่น T1(1), T1(2)
+                                                        trip_label = f'<div style="background-color:{trip_color};color:#fff;border-radius:12px;min-width:50px;height:24px;text-align:center;line-height:24px;font-weight:bold;font-size:10px;border:2px solid #000;box-shadow:2px 2px 6px rgba(0,0,0,0.5);padding:0 4px;">T{trip_id}({i+1})</div>'
                                                         
                                                         popup_html = f"""
                                                         <div style="font-family:Arial;min-width:200px;">
