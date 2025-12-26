@@ -1263,7 +1263,40 @@ def get_max_vehicle_for_branch(branch_code, test_df=None, debug=False):
     
     # 🎯 อ่านจาก MASTER_DATA (Google Sheets) เท่านั้น - ไม่มี fallback
     if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
-        branch_row = MASTER_DATA[MASTER_DATA['Plan Code'].str.strip().str.upper() == branch_code_str]
+        # ลอง match หลายแบบ
+        master_codes = MASTER_DATA['Plan Code'].str.strip().str.upper()
+        
+        # 1. Match แบบ exact
+        branch_row = MASTER_DATA[master_codes == branch_code_str]
+        
+        # 2. ถ้าไม่พบ ลอง match แบบ partial (Code อาจมี prefix/suffix ต่างกัน)
+        if branch_row.empty:
+            # ลองหา code ที่มี branch_code_str เป็นส่วนหนึ่ง หรือในทางกลับกัน
+            for idx, mc in enumerate(master_codes):
+                if branch_code_str in mc or mc in branch_code_str:
+                    branch_row = MASTER_DATA.iloc[[idx]]
+                    break
+        
+        # 3. ถ้ายังไม่พบ ลองตัด leading zeros หรือ prefix
+        if branch_row.empty:
+            # ตัด prefix เช่น PUN-, MAX-, etc.
+            code_no_prefix = branch_code_str
+            for prefix in ['PUN-', 'MAX-', 'MM-', 'PT-', 'N', 'S', 'E', 'W', 'C']:
+                if branch_code_str.startswith(prefix):
+                    code_no_prefix = branch_code_str[len(prefix):]
+                    break
+            
+            # ลอง match อีกครั้ง
+            for idx, mc in enumerate(master_codes):
+                mc_no_prefix = mc
+                for prefix in ['PUN-', 'MAX-', 'MM-', 'PT-', 'N', 'S', 'E', 'W', 'C']:
+                    if mc.startswith(prefix):
+                        mc_no_prefix = mc[len(prefix):]
+                        break
+                if code_no_prefix == mc_no_prefix or code_no_prefix in mc_no_prefix or mc_no_prefix in code_no_prefix:
+                    branch_row = MASTER_DATA.iloc[[idx]]
+                    break
+        
         if not branch_row.empty:
             # ลองหาคอลัมน์ข้อจำกัดรถหลายชื่อ (เพิ่มแบบยืดหยุ่นมากขึ้น)
             possible_cols = [
@@ -3656,10 +3689,27 @@ def main():
                     
                     # นับจำนวนสาขาแต่ละประเภทรถ
                     vehicle_restrictions = {}
+                    unmatched_codes = []  # สาขาที่ไม่พบใน Master Data
+                    
                     for _, row in df.iterrows():
                         code = row['Code']
+                        code_clean = str(code).strip().upper()
                         max_vehicle = get_max_vehicle_for_branch(code)
                         vehicle_restrictions[code] = max_vehicle
+                        
+                        # เช็คว่าพบใน Master Data หรือไม่
+                        if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                            # ลอง match หลายแบบ
+                            master_codes = MASTER_DATA['Plan Code'].str.strip().str.upper().tolist()
+                            if code_clean not in master_codes:
+                                # ลอง match แบบ partial (ตัด prefix/suffix)
+                                found = False
+                                for mc in master_codes:
+                                    if code_clean in mc or mc in code_clean:
+                                        found = True
+                                        break
+                                if not found:
+                                    unmatched_codes.append(code_clean)
                     
                     restriction_counts = pd.Series(vehicle_restrictions).value_counts()
                     
@@ -3679,6 +3729,25 @@ def main():
                         six_w_count = restriction_counts.get('6W', 0)
                         st.metric("🚛 ใช้ 6W ได้", f"{six_w_count}",
                                  delta=f"{(six_w_count/total_branches*100):.1f}%" if total_branches > 0 else "0%")
+                    
+                    # ⚠️ แสดงสาขาที่ไม่พบใน Master Data
+                    if unmatched_codes:
+                        st.warning(f"⚠️ มี {len(unmatched_codes)} สาขาที่ไม่พบใน Master Data (ใช้ 6W เป็น default)")
+                        with st.expander(f"🔍 ดูรายละเอียดสาขาที่ไม่พบ ({len(unmatched_codes)} สาขา)"):
+                            # แสดง 10 ตัวอย่างแรก
+                            sample_codes = unmatched_codes[:20]
+                            unmatched_df = df[df['Code'].isin(sample_codes)][['Code', 'Name']].copy()
+                            unmatched_df.columns = ['รหัสสาขา (ไฟล์ Upload)', 'ชื่อสาขา']
+                            st.dataframe(unmatched_df, use_container_width=True)
+                            
+                            if len(unmatched_codes) > 20:
+                                st.caption(f"... และอีก {len(unmatched_codes) - 20} สาขา")
+                            
+                            # แสดงตัวอย่าง Master Code เพื่อเปรียบเทียบ
+                            st.markdown("**📋 ตัวอย่าง Plan Code ใน Master Data:**")
+                            if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+                                sample_master = MASTER_DATA['Plan Code'].head(10).tolist()
+                                st.code(", ".join(sample_master))
                     
                     # แสดงรายละเอียดสาขาที่มีข้อจำกัด
                     if four_w_count > 0 or jb_count > 0:
