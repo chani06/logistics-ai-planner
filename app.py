@@ -3154,11 +3154,42 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     trip_subdistricts = set()
                     trip_districts = set()
             
-            # 5️⃣ หมดโซนแล้ว → ปิดทริป! (ห้ามขยายไปโซนอื่น)
-            # ตามหลัก "หมดในจังหวัดจริงๆถึงไปจังหวัดอื่น, หมดเส้นทางจริงๆถึงไปเส้นอื่น"
+            # 5️⃣ Highway เดียวกัน (ถ้าหมดโซนแล้ว แต่ยังมีโซนอื่นใน highway เดียวกัน)
             if same_zone_df is None:
-                print(f"      🛑 หมดสาขาในโซน {trip_logistics_zone} แล้ว → ปิดทริป {trip_counter}")
-                break  # ปิดทริปเลย ไม่ขยายไปโซนอื่น
+                trip_highway = get_zone_highway(trip_logistics_zone)
+                if trip_highway:
+                    # หาโซนอื่นใน highway เดียวกัน
+                    highway_df = remaining_df[remaining_df['_zone_highway'] == trip_highway].copy()
+                    if not highway_df.empty:
+                        # เลือกโซนที่ใกล้สาขาล่าสุดที่สุด
+                        last_code = trip_codes[-1]
+                        last_row = df[df['Code'] == last_code].iloc[0]
+                        last_lat, last_lon = last_row['_lat'], last_row['_lon']
+                        
+                        if last_lat > 0 and last_lon > 0:
+                            highway_df['_dist_to_last'] = highway_df.apply(
+                                lambda r: haversine_distance(r['_lat'], r['_lon'], last_lat, last_lon) 
+                                if r['_lat'] > 0 and r['_lon'] > 0 else 999, axis=1
+                            )
+                            nearest_row = highway_df.loc[highway_df['_dist_to_last'].idxmin()]
+                            nearest_zone = nearest_row['_logistics_zone']
+                            nearest_prov = nearest_row['_province']
+                            
+                            # อัพเดตโซน/จังหวัดของทริป
+                            trip_logistics_zone = nearest_zone
+                            trip_province = nearest_prov
+                            trip_subdistricts = set()
+                            trip_districts = set()
+                            
+                            same_zone_df = highway_df
+                            filter_level = f"Highway {trip_highway}"
+                            print(f"      🛣️ ขยายไปโซน {nearest_zone} ใน Highway {trip_highway}")
+            
+            # 6️⃣ หมด Highway แล้ว → ปิดทริป! (ห้ามข้ามไป Highway อื่น)
+            # ตามหลัก "หมดเส้นทางจริงๆถึงไปเส้นอื่น"
+            if same_zone_df is None:
+                print(f"      🛑 หมดสาขาใน Highway {get_zone_highway(trip_logistics_zone)} แล้ว → ปิดทริป {trip_counter}")
+                break  # ปิดทริปเลย ไม่ขยายไป Highway อื่น
             
             # 🎯 Priority: ตำบลเดียวกัน > อำเภอเดียวกัน > จังหวัด > โซน
             same_zone_df['_priority'] = 4  # default = โซนเดียวกัน
