@@ -3074,32 +3074,52 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         trip_allowed = get_allowed_from_codes(trip_codes, ['4W', 'JB', '6W'])
         trip_is_punthai = branch_bu_cache.get(start_code, False)
         
-        # 2️⃣ Greedy: หาสาขาใกล้สุดในโซน → จังหวัด → อำเภอ → ตำบล มาเติมจนเต็ม buffer
+        # 2️⃣ Greedy: หาสาขาใกล้สุดมาเติมจนเต็ม buffer
         while unassigned:
             remaining_df = df[df['Code'].isin(unassigned)].copy()
             if remaining_df.empty:
                 break
             
-            # 🎯 กรองลำดับ: ตำบล → อำเภอ → จังหวัด → โซน (ห้ามข้ามจนกว่าจะหมด!)
-            same_zone_df = None
-            filter_level = ""
+            # 🎯 0️⃣ เช็คสาขาใกล้มากๆ ก่อน (< 6km) - ต้องรวมไม่ว่าจะต่างตำบล/อำเภอ/จังหวัด!
+            very_close_df = None
+            last_code = trip_codes[-1]
+            last_code_upper = str(last_code).strip().upper()
             
-            # 1️⃣ ตำบลเดียวกันก่อน (priority สูงสุด)
-            if trip_subdistricts and trip_districts:
-                subdistrict_df = remaining_df[
-                    (remaining_df['_subdistrict'].isin(trip_subdistricts)) & 
-                    (remaining_df['_district'].isin(trip_districts))
-                ].copy()
-                if not subdistrict_df.empty:
-                    same_zone_df = subdistrict_df
-                    filter_level = "ตำบล"
+            if last_code_upper in NEARBY_BRANCHES:
+                # หาสาขาที่ใกล้มาก (< 6km) จาก pre-computed data
+                very_close_codes = []
+                for nearby_code, dist in NEARBY_BRANCHES[last_code_upper]:
+                    if dist < 6.0 and nearby_code in [str(c).strip().upper() for c in unassigned]:
+                        very_close_codes.append(nearby_code)
+                
+                if very_close_codes:
+                    very_close_df = remaining_df[remaining_df['Code'].apply(lambda x: str(x).strip().upper() in very_close_codes)].copy()
             
-            # 2️⃣ อำเภอเดียวกัน (ถ้าหมดตำบลแล้ว)
-            if same_zone_df is None and trip_districts:
-                district_df = remaining_df[remaining_df['_district'].isin(trip_districts)].copy()
-                if not district_df.empty:
-                    same_zone_df = district_df
-                    filter_level = "อำเภอ"
+            # ถ้ามีสาขาใกล้มาก → ใช้เลย (ไม่สนตำบล/อำเภอ/จังหวัด)
+            if very_close_df is not None and not very_close_df.empty:
+                same_zone_df = very_close_df
+                filter_level = "ใกล้มาก(<6km)"
+            else:
+                # 🎯 กรองลำดับ: ตำบล → อำเภอ → จังหวัด → โซน (ห้ามข้ามจนกว่าจะหมด!)
+                same_zone_df = None
+                filter_level = ""
+                
+                # 1️⃣ ตำบลเดียวกันก่อน (priority สูงสุด)
+                if trip_subdistricts and trip_districts:
+                    subdistrict_df = remaining_df[
+                        (remaining_df['_subdistrict'].isin(trip_subdistricts)) & 
+                        (remaining_df['_district'].isin(trip_districts))
+                    ].copy()
+                    if not subdistrict_df.empty:
+                        same_zone_df = subdistrict_df
+                        filter_level = "ตำบล"
+                
+                # 2️⃣ อำเภอเดียวกัน (ถ้าหมดตำบลแล้ว)
+                if same_zone_df is None and trip_districts:
+                    district_df = remaining_df[remaining_df['_district'].isin(trip_districts)].copy()
+                    if not district_df.empty:
+                        same_zone_df = district_df
+                        filter_level = "อำเภอ"
             
             # 3️⃣ จังหวัดเดียวกัน (ถ้าหมดอำเภอแล้ว)
             if same_zone_df is None:
@@ -3225,11 +3245,29 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 if candidate_dist > 80:
                     break  # ไม่มีสาขาใกล้ในโซนแล้ว ปิดทริป
                 
-                # เช็ค allowed vehicles
+                # 🚫 เช็ค vehicle constraint ของสาขาใหม่ก่อน!
+                candidate_max_vehicle = get_max_vehicle_for_branch(candidate_code)
+                vehicle_rank = {'4W': 1, 'JB': 2, '6W': 3}
+                candidate_max_rank = vehicle_rank.get(candidate_max_vehicle, 3)
+                
+                # เช็ค allowed vehicles (รวมสาขาใหม่)
                 test_codes = trip_codes + [candidate_code]
                 test_allowed = get_allowed_from_codes(test_codes, ['4W', 'JB', '6W'])
                 if not test_allowed:
                     continue  # ข้อจำกัดรถไม่เข้ากัน
+                
+                # 🎯 หารถที่เล็กที่สุดที่ใช้ได้ (ไม่เกินข้อจำกัดสาขา)
+                # เรียงจากเล็กไปใหญ่: 4W → JB → 6W
+                selected_vehicle = None
+                for veh in ['4W', 'JB', '6W']:
+                    if veh in test_allowed:
+                        veh_rank = vehicle_rank.get(veh, 3)
+                        if veh_rank <= candidate_max_rank:  # ไม่เกินข้อจำกัดสาขาใหม่
+                            selected_vehicle = veh
+                            break
+                
+                if not selected_vehicle:
+                    continue  # ไม่มีรถที่ใช้ได้โดยไม่เกินข้อจำกัด
                 
                 # เช็คน้ำหนัก/ปริมาตร
                 test_weight = trip_weight + candidate_w
@@ -3240,8 +3278,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 test_is_punthai = all(branch_bu_cache.get(c, False) for c in test_codes)
                 buffer = punthai_buffer if test_is_punthai else maxmart_buffer
                 
-                # หารถที่รับ constraint ได้
-                max_vehicle = '6W' if '6W' in test_allowed else ('JB' if 'JB' in test_allowed else '4W')
+                # ใช้รถที่เลือก (ไม่เกินข้อจำกัดสาขา)
+                max_vehicle = selected_vehicle
                 limits = PUNTHAI_LIMITS if test_is_punthai else LIMITS
                 max_w = limits[max_vehicle]['max_w'] * buffer
                 max_c = limits[max_vehicle]['max_c'] * buffer
