@@ -20,6 +20,7 @@ import time as time_module
 # Map visualization
 try:
     import folium
+    from folium import plugins
     from streamlit_folium import folium_static  # ใช้ folium_static แทน st_folium เพื่อไม่ให้โหลดซ้ำ
     import requests
     FOLIUM_AVAILABLE = True
@@ -4165,115 +4166,202 @@ def main():
                             with st.expander("🗺️ แผนที่เส้นทางแต่ละทริป (คลิกเพื่อแสดง)", expanded=False):
                                 # ตัวกรอง
                                 col_filter1, col_filter2, col_filter3 = st.columns([1, 1, 1])
-                            
-                            with col_filter1:
-                                # กรองตามเลขทริป
-                                trip_options = ['ทั้งหมด'] + sorted([f"Trip {t}" for t in assigned_df['Trip'].unique()])
-                                selected_trip = st.selectbox("🚚 เลือกทริป", trip_options, key="map_trip_filter")
-                            
-                            with col_filter2:
-                                # กรองตามประเภทรถ
-                                truck_types = ['ทั้งหมด']
-                                if 'Truck' in assigned_df.columns:
-                                    unique_trucks = assigned_df['Truck'].dropna().unique()
-                                    truck_types.extend(sorted([t.split()[0] for t in unique_trucks if t]))
-                                selected_truck = st.selectbox("🚛 เลือกประเภทรถ", truck_types, key="map_truck_filter")
-                            
-                            with col_filter3:
-                                # เลือกแสดงเส้นทางจริงหรือเส้นตรง
-                                use_real_route = st.checkbox("🛣️ แสดงเส้นทางจริง (ช้ากว่า)", value=False, key="map_real_route")
-                            
-                            # กรองข้อมูล
-                            map_df = assigned_df.copy()
-                            if selected_trip != 'ทั้งหมด':
-                                trip_num = int(selected_trip.split()[1])
-                                map_df = map_df[map_df['Trip'] == trip_num]
-                            if selected_truck != 'ทั้งหมด':
-                                map_df = map_df[map_df['Truck'].str.startswith(selected_truck, na=False)]
-                            
-                            if len(map_df) == 0:
-                                st.warning("⚠️ ไม่มีข้อมูลตามเงื่อนไขที่เลือก")
-                            else:
-                                # ตรวจสอบว่ามีพิกัด
-                                if '_lat' in map_df.columns and '_lon' in map_df.columns:
-                                    valid_coords = map_df[(map_df['_lat'] > 0) & (map_df['_lon'] > 0)]
-                                    
-                                    if len(valid_coords) == 0:
-                                        st.warning("⚠️ ไม่มีข้อมูลพิกัดสำหรับแสดงแผนที่")
-                                    else:
-                                        # สร้างแผนที่
-                                        with st.spinner("🗺️ กำลังสร้างแผนที่..."):
-                                            # 🚀 Route Cache - เก็บเส้นทางไว้ใน session_state
-                                            if 'route_cache' not in st.session_state:
-                                                st.session_state['route_cache'] = {}
-                                            route_cache = st.session_state['route_cache']
-                                            
-                                            # หาจุดกึ่งกลาง
-                                            center_lat = valid_coords['_lat'].mean()
-                                            center_lon = valid_coords['_lon'].mean()
-                                            
+                                
+                                with col_filter1:
+                                    # กรองตามเลขทริป - เรียงจากไกลมาใกล้
+                                    trip_distances = {}
+                                    for t in assigned_df['Trip'].unique():
+                                        if t > 0 and '_distance_from_dc' in assigned_df.columns:
+                                            max_dist = assigned_df[assigned_df['Trip'] == t]['_distance_from_dc'].max()
+                                            trip_distances[t] = max_dist if pd.notna(max_dist) else 0
+                                    sorted_trips = sorted(trip_distances.keys(), key=lambda x: trip_distances.get(x, 0), reverse=True)
+                                    trip_options = ['ทั้งหมด'] + [f"Trip {t} ({trip_distances.get(t, 0):.0f}km)" for t in sorted_trips]
+                                    selected_trip = st.selectbox("🚚 เลือกทริป (ไกล→ใกล้)", trip_options, key="map_trip_filter")
+                                
+                                with col_filter2:
+                                    # กรองตามประเภทรถ
+                                    truck_types = ['ทั้งหมด']
+                                    if 'Truck' in assigned_df.columns:
+                                        unique_trucks = assigned_df['Truck'].dropna().unique()
+                                        truck_types.extend(sorted(set([t.split()[0] for t in unique_trucks if t])))
+                                    selected_truck = st.selectbox("🚛 ประเภทรถ", truck_types, key="map_truck_filter")
+                                
+                                with col_filter3:
+                                    # เลือกแสดงเส้นทาง
+                                    show_route = st.checkbox("🛣️ แสดงเส้นทาง", value=True, key="map_show_route")
+                                
+                                # กรองข้อมูล
+                                map_df = assigned_df.copy()
+                                if selected_trip != 'ทั้งหมด':
+                                    trip_num = int(selected_trip.split()[1])
+                                    map_df = map_df[map_df['Trip'] == trip_num]
+                                if selected_truck != 'ทั้งหมด':
+                                    map_df = map_df[map_df['Truck'].str.startswith(selected_truck, na=False)]
+                                
+                                if len(map_df) == 0:
+                                    st.warning("⚠️ ไม่มีข้อมูลตามเงื่อนไขที่เลือก")
+                                else:
+                                    # ตรวจสอบว่ามีพิกัด
+                                    if '_lat' in map_df.columns and '_lon' in map_df.columns:
+                                        valid_coords = map_df[(map_df['_lat'] > 0) & (map_df['_lon'] > 0)]
+                                        
+                                        if len(valid_coords) == 0:
+                                            st.warning("⚠️ ไม่มีข้อมูลพิกัดสำหรับแสดงแผนที่")
+                                        else:
                                             # สร้างแผนที่
-                                            m = folium.Map(
-                                                location=[center_lat, center_lon],
-                                                zoom_start=8,
-                                                tiles='OpenStreetMap'
-                                            )
-                                            
-                                            # สี palette สำหรับแต่ละทริป - ใช้สีเข้มเห็นชัด
-                                            colors = ['#e41a1c', '#377eb8', '#4daf4a', '#984ea3', '#ff7f00', 
-                                                     '#a65628', '#f781bf', '#1b9e77', '#d95f02', '#7570b3',
-                                                     '#e7298a', '#66a61e', '#e6ab02', '#a6761d', '#666666',
-                                                     '#1f78b4', '#33a02c', '#fb9a99']
-                                            
-                                            # วนลูปแต่ละทริป
-                                            for idx, trip_id in enumerate(sorted(valid_coords['Trip'].unique())):
-                                                trip_data = valid_coords[valid_coords['Trip'] == trip_id].copy()
-                                                # เรียงตามระยะทาง (ไกล → ใกล้)
-                                                trip_data = trip_data.sort_values('_distance_from_dc', ascending=False).reset_index(drop=True)
+                                            with st.spinner("🗺️ กำลังสร้างแผนที่..."):
+                                                # DC Wang Noi coordinates
+                                                DC_LAT, DC_LON = 14.1459, 100.6873
                                                 
-                                                trip_color = colors[idx % len(colors)]
+                                                # หาจุดกึ่งกลาง
+                                                center_lat = valid_coords['_lat'].mean()
+                                                center_lon = valid_coords['_lon'].mean()
                                                 
-                                                # ดึงชื่อรถจาก summary
-                                                truck_info = summary[summary['Trip'] == trip_id]['Truck'].iloc[0] if trip_id in summary['Trip'].values else 'N/A'
+                                                # สร้างแผนที่
+                                                m = folium.Map(
+                                                    location=[center_lat, center_lon],
+                                                    zoom_start=8,
+                                                    tiles='OpenStreetMap'
+                                                )
                                                 
-                                                # เก็บพิกัดสาขา (ไม่รวม DC)
-                                                points = []
-                                                point_names = []
+                                                # เพิ่มปุ่ม Fullscreen
+                                                plugins.Fullscreen(
+                                                    position='topleft',
+                                                    title='เต็มจอ',
+                                                    title_cancel='ออกจากโหมดเต็มจอ',
+                                                    force_separate_button=True
+                                                ).add_to(m)
                                                 
-                                                for _, row in trip_data.iterrows():
-                                                    if row['_lat'] > 0 and row['_lon'] > 0:
-                                                        points.append([row['_lat'], row['_lon']])
-                                                        point_names.append(f"{row.get('Name', row.get('Code', 'Unknown'))}")
+                                                # เพิ่ม DC Marker
+                                                folium.Marker(
+                                                    location=[DC_LAT, DC_LON],
+                                                    popup="<b>🏭 DC Wang Noi</b>",
+                                                    tooltip="DC Wang Noi",
+                                                    icon=folium.Icon(color='black', icon='home', prefix='fa')
+                                                ).add_to(m)
                                                 
-                                                if len(points) < 2:
-                                                    # มีแค่จุดเดียว → ปักหมุดอย่างเดียว
-                                                    for i, (point, name) in enumerate(zip(points, point_names)):
+                                                # สี palette สำหรับแต่ละทริป
+                                                colors = ['#e41a1c', '#377eb8', '#4daf4a', '#984ea3', '#ff7f00', 
+                                                         '#a65628', '#f781bf', '#1b9e77', '#d95f02', '#7570b3',
+                                                         '#e7298a', '#66a61e', '#e6ab02', '#a6761d', '#666666',
+                                                         '#1f78b4', '#33a02c', '#fb9a99']
+                                                
+                                                # เรียงทริปตามระยะทางไกลสุด (ไกล→ใกล้)
+                                                trip_max_dist = {}
+                                                for trip_id in valid_coords['Trip'].unique():
+                                                    if '_distance_from_dc' in valid_coords.columns:
+                                                        max_d = valid_coords[valid_coords['Trip'] == trip_id]['_distance_from_dc'].max()
+                                                        trip_max_dist[trip_id] = max_d if pd.notna(max_d) else 0
+                                                    else:
+                                                        trip_max_dist[trip_id] = 0
+                                                sorted_trip_ids = sorted(trip_max_dist.keys(), key=lambda x: trip_max_dist[x], reverse=True)
+                                                
+                                                # สร้าง Feature Groups สำหรับ Layer Control
+                                                trip_groups = {}
+                                                
+                                                # วนลูปแต่ละทริป
+                                                for idx, trip_id in enumerate(sorted_trip_ids):
+                                                    trip_data = valid_coords[valid_coords['Trip'] == trip_id].copy()
+                                                    # เรียงตามระยะทาง (ไกล → ใกล้)
+                                                    trip_data = trip_data.sort_values('_distance_from_dc', ascending=False).reset_index(drop=True)
+                                                    
+                                                    trip_color = colors[idx % len(colors)]
+                                                    max_dist = trip_max_dist.get(trip_id, 0)
+                                                    
+                                                    # ดึงชื่อรถจาก summary
+                                                    truck_info = summary[summary['Trip'] == trip_id]['Truck'].iloc[0] if trip_id in summary['Trip'].values else 'N/A'
+                                                    
+                                                    # สร้าง Feature Group สำหรับทริปนี้
+                                                    fg = folium.FeatureGroup(name=f"Trip {trip_id} ({max_dist:.0f}km) - {truck_info}")
+                                                    trip_groups[trip_id] = fg
+                                                    
+                                                    # เก็บพิกัดสาขา
+                                                    points = []
+                                                    point_names = []
+                                                    point_distances = []
+                                                    
+                                                    for _, row in trip_data.iterrows():
+                                                        if row['_lat'] > 0 and row['_lon'] > 0:
+                                                            points.append([row['_lat'], row['_lon']])
+                                                            point_names.append(f"{row.get('Name', row.get('Code', 'Unknown'))}")
+                                                            point_distances.append(row.get('_distance_from_dc', 0))
+                                                    
+                                                    if len(points) == 0:
+                                                        continue
+                                                    
+                                                    # คำนวณระยะทางรวมของทริป (DC → สาขา1 → สาขา2 → ... → DC)
+                                                    total_trip_distance = 0
+                                                    route_points = [[DC_LAT, DC_LON]] + points + [[DC_LAT, DC_LON]]
+                                                    for i in range(len(route_points) - 1):
+                                                        lat1, lon1 = route_points[i]
+                                                        lat2, lon2 = route_points[i + 1]
+                                                        # Haversine
+                                                        dlat = radians(lat2 - lat1)
+                                                        dlon = radians(lon2 - lon1)
+                                                        a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
+                                                        c = 2 * atan2(sqrt(a), sqrt(1-a))
+                                                        total_trip_distance += 6371 * c
+                                                    
+                                                    # ปักหมุดแต่ละจุด
+                                                    for i, (point, name, dist) in enumerate(zip(points, point_names, point_distances)):
+                                                        trip_label = f'<div style="background-color:{trip_color};color:#fff;border-radius:50%;width:28px;height:28px;text-align:center;line-height:28px;font-weight:bold;font-size:11px;border:2px solid #000;box-shadow:2px 2px 6px rgba(0,0,0,0.5);">{trip_id}</div>'
+                                                        
+                                                        popup_html = f"""
+                                                        <div style="font-family:Arial;min-width:200px;">
+                                                            <h4 style="margin:0;color:{trip_color};">🚚 Trip {trip_id}</h4>
+                                                            <hr style="margin:5px 0;">
+                                                            <b>ลำดับ:</b> {i+1}/{len(points)}<br>
+                                                            <b>สาขา:</b> {name}<br>
+                                                            <b>ห่างจาก DC:</b> {dist:.1f} km<br>
+                                                            <b>รถ:</b> {truck_info}<br>
+                                                            <hr style="margin:5px 0;">
+                                                            <b>📏 ระยะทางรวมทริป:</b> {total_trip_distance:.1f} km<br>
+                                                            <b>📍 จำนวนจุด:</b> {len(points)} สาขา
+                                                        </div>
+                                                        """
+                                                        
                                                         folium.Marker(
                                                             location=point,
-                                                            popup=folium.Popup(f"<b>Trip {trip_id}</b><br>{name}<br>รถ: {truck_info}", max_width=200),
-                                                            tooltip=name,
-                                                            icon=folium.Icon(color=trip_color, icon='store', prefix='fa')
-                                                        ).add_to(m)
-                                                    continue
-                                                
-                                                # ปักหมุดแต่ละจุด (ไม่ลากเส้น) - ใส่เลขทริปที่ icon
-                                                for i, (point, name) in enumerate(zip(points, point_names)):
-                                                    # ใช้ DivIcon เพื่อแสดงเลขทริปชัดเจน - พื้นสีเข้ม border ดำหนา
-                                                    trip_label = f'<div style="background-color:{trip_color};color:#fff;border-radius:50%;width:30px;height:30px;text-align:center;line-height:30px;font-weight:bold;font-size:12px;border:3px solid #000;box-shadow:3px 3px 8px rgba(0,0,0,0.6);text-shadow:1px 1px 2px #000;">{trip_id}</div>'
+                                                            popup=folium.Popup(popup_html, max_width=300),
+                                                            tooltip=f"Trip {trip_id} - {i+1}. {name} ({dist:.1f}km)",
+                                                            icon=folium.DivIcon(html=trip_label)
+                                                        ).add_to(fg)
                                                     
-                                                    folium.Marker(
-                                                        location=point,
-                                                        popup=folium.Popup(f"<b>🚚 Trip {trip_id}</b><br><b>{i+1}. {name}</b><br>รถ: {truck_info}", max_width=250),
-                                                        tooltip=f"Trip {trip_id} - {i+1}. {name}",
-                                                        icon=folium.DivIcon(html=trip_label)
-                                                    ).add_to(m)
-                                            
-                                            # แสดงแผนที่ - ใช้ folium_static ไม่โหลดซ้ำเมื่อซูม
-                                            folium_static(m, width=1200, height=600)
-                                            
-                                            st.caption(f"📍 แสดง {len(valid_coords)} สาขาใน {valid_coords['Trip'].nunique()} ทริป")
-                                else:
-                                    st.warning("⚠️ ไม่มีข้อมูลพิกัดในผลลัพธ์ (ต้องมีคอลัมน์ _lat และ _lon)")
+                                                    # วาดเส้นทาง DC → สาขา → DC (ถ้าเปิด)
+                                                    if show_route and len(points) >= 1:
+                                                        route_coords = [[DC_LAT, DC_LON]] + points + [[DC_LAT, DC_LON]]
+                                                        folium.PolyLine(
+                                                            locations=route_coords,
+                                                            weight=3,
+                                                            color=trip_color,
+                                                            opacity=0.7,
+                                                            popup=f"Trip {trip_id}: {total_trip_distance:.1f} km",
+                                                            tooltip=f"Trip {trip_id} - ระยะทาง {total_trip_distance:.1f} km"
+                                                        ).add_to(fg)
+                                                    
+                                                    fg.add_to(m)
+                                                
+                                                # เพิ่ม Layer Control สำหรับเปิด/ปิดแต่ละทริป
+                                                folium.LayerControl(collapsed=False).add_to(m)
+                                                
+                                                # แสดงแผนที่
+                                                folium_static(m, width=1200, height=700)
+                                                
+                                                # สรุประยะทางแต่ละทริป
+                                                st.markdown("#### 📏 ระยะทางแต่ละทริป (เรียงจากไกล→ใกล้)")
+                                                dist_cols = st.columns(min(5, len(sorted_trip_ids)))
+                                                for i, trip_id in enumerate(sorted_trip_ids[:10]):  # แสดง 10 ทริปแรก
+                                                    trip_data = valid_coords[valid_coords['Trip'] == trip_id]
+                                                    if len(trip_data) > 0:
+                                                        max_d = trip_max_dist.get(trip_id, 0)
+                                                        n_branches = len(trip_data)
+                                                        truck_info = summary[summary['Trip'] == trip_id]['Truck'].iloc[0] if trip_id in summary['Trip'].values else 'N/A'
+                                                        with dist_cols[i % 5]:
+                                                            st.metric(f"Trip {trip_id}", f"{max_d:.0f} km", f"{n_branches} สาขา")
+                                                
+                                                st.caption(f"📍 แสดง {len(valid_coords)} สาขาใน {len(sorted_trip_ids)} ทริป | 💡 คลิกปุ่มมุมซ้ายบนเพื่อเต็มจอ | ใช้ Layer Control ด้านขวาเพื่อเปิด/ปิดทริป")
+                                    else:
+                                        st.warning("⚠️ ไม่มีข้อมูลพิกัดในผลลัพธ์ (ต้องมีคอลัมน์ _lat และ _lon)")
                         else:
                             st.info("💡 ติดตั้ง `folium` และ `streamlit-folium` เพื่อดูแผนที่เส้นทาง\n```\npip install folium streamlit-folium\n```")
                         
