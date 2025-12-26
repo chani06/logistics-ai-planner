@@ -2788,6 +2788,135 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
     finalize_current_trip(force=True)  # force=True เพราะหมดสาขาแล้ว
 
     # ==========================================
+    # Step 6.4: 🎯 ZONE-GREEDY REBALANCE - จัดทริปใหม่แบบ Nearest Neighbor
+    # หลักการ: เริ่มจากสาขาไกลสุด หาสาขาใกล้สุดมาเติมจนเต็ม buffer แล้วค่อยเริ่มทริปใหม่
+    # ==========================================
+    print("🎯 กำลังจัดทริปใหม่แบบ Zone-Greedy (ไกล→ใกล้, เติมให้เต็ม)...")
+    
+    # รีเซ็ตทริปทั้งหมด
+    df['Trip'] = 0
+    trip_counter = 1
+    
+    # สร้าง set ของสาขาที่ยังไม่ได้จัด
+    unassigned = set(df['Code'].tolist())
+    
+    while unassigned:
+        # 1️⃣ หาสาขาที่ไกล DC มากที่สุดในกลุ่มที่ยังไม่ได้จัด
+        unassigned_df = df[df['Code'].isin(unassigned)]
+        if unassigned_df.empty:
+            break
+        
+        # เรียงตามระยะทาง ไกลสุดก่อน
+        farthest_row = unassigned_df.loc[unassigned_df['_distance_from_dc'].idxmax()]
+        start_code = farthest_row['Code']
+        start_lat = farthest_row['_lat']
+        start_lon = farthest_row['_lon']
+        
+        # เริ่มทริปใหม่ด้วยสาขาไกลสุด
+        trip_codes = [start_code]
+        trip_weight = farthest_row['Weight']
+        trip_cube = farthest_row['Cube']
+        unassigned.remove(start_code)
+        
+        print(f"   🚀 เริ่ม Trip {trip_counter} จาก {start_code} ({farthest_row.get('_province', 'N/A')}) - ห่าง {farthest_row['_distance_from_dc']:.1f} km")
+        
+        # หา allowed vehicles จาก constraints
+        trip_allowed = get_allowed_from_codes(trip_codes, ['4W', 'JB', '6W'])
+        trip_is_punthai = branch_bu_cache.get(start_code, False)
+        
+        # 2️⃣ Greedy: หาสาขาใกล้สุดมาเติมจนเต็ม buffer
+        current_lat = start_lat
+        current_lon = start_lon
+        
+        while unassigned:
+            # คำนวณระยะห่างจากตำแหน่งปัจจุบัน (centroid ของทริป) ไปยังทุกสาขาที่ยังไม่ได้จัด
+            remaining_df = df[df['Code'].isin(unassigned)].copy()
+            if remaining_df.empty:
+                break
+            
+            # คำนวณ centroid ของทริปปัจจุบัน
+            trip_df = df[df['Code'].isin(trip_codes)]
+            centroid_lat = trip_df['_lat'].mean()
+            centroid_lon = trip_df['_lon'].mean()
+            
+            # หาสาขาที่ใกล้ centroid มากที่สุด
+            remaining_df['_dist_to_trip'] = remaining_df.apply(
+                lambda row: haversine_distance(centroid_lat, centroid_lon, row['_lat'], row['_lon'])
+                if row['_lat'] > 0 and row['_lon'] > 0 else 999,
+                axis=1
+            )
+            remaining_df = remaining_df.sort_values('_dist_to_trip')
+            
+            found_candidate = False
+            
+            for _, candidate_row in remaining_df.iterrows():
+                candidate_code = candidate_row['Code']
+                candidate_w = candidate_row['Weight']
+                candidate_c = candidate_row['Cube']
+                candidate_dist = candidate_row['_dist_to_trip']
+                
+                # 🚫 ถ้าไกลจาก centroid เกิน 100km → ไม่เพิ่ม (คนละโซน)
+                if candidate_dist > 100:
+                    break  # ไม่มีสาขาใกล้แล้ว ปิดทริป
+                
+                # เช็ค allowed vehicles
+                test_codes = trip_codes + [candidate_code]
+                test_allowed = get_allowed_from_codes(test_codes, ['4W', 'JB', '6W'])
+                if not test_allowed:
+                    continue  # ข้อจำกัดรถไม่เข้ากัน
+                
+                # เช็คน้ำหนัก/ปริมาตร
+                test_weight = trip_weight + candidate_w
+                test_cube = trip_cube + candidate_c
+                test_drops = len(test_codes)
+                
+                # หา buffer ที่ใช้
+                test_is_punthai = all(branch_bu_cache.get(c, False) for c in test_codes)
+                buffer = punthai_buffer if test_is_punthai else maxmart_buffer
+                
+                # หารถที่รับ constraint ได้
+                max_vehicle = '6W' if '6W' in test_allowed else ('JB' if 'JB' in test_allowed else '4W')
+                limits = PUNTHAI_LIMITS if test_is_punthai else LIMITS
+                max_w = limits[max_vehicle]['max_w'] * buffer
+                max_c = limits[max_vehicle]['max_c'] * buffer
+                max_d = limits[max_vehicle]['max_drops']
+                
+                # เช็คว่าเกิน buffer หรือไม่
+                if test_weight > max_w or test_cube > max_c or test_drops > max_d:
+                    continue  # เกิน buffer → ลองสาขาถัดไป
+                
+                # ✅ เพิ่มสาขานี้เข้าทริป
+                trip_codes.append(candidate_code)
+                trip_weight = test_weight
+                trip_cube = test_cube
+                trip_allowed = test_allowed
+                trip_is_punthai = test_is_punthai
+                unassigned.remove(candidate_code)
+                found_candidate = True
+                
+                # เช็คว่าเต็มหรือยัง (>= 90%)
+                w_util = trip_weight / max_w
+                c_util = trip_cube / max_c
+                if max(w_util, c_util) >= 0.90:
+                    print(f"      ✅ Trip {trip_counter} เต็ม {max(w_util, c_util)*100:.1f}% ({len(trip_codes)} สาขา)")
+                    break  # เต็มแล้ว
+                
+                break  # หาสาขาเพิ่มได้ 1 สาขา → วนลูปใหม่หา centroid ใหม่
+            
+            if not found_candidate:
+                # ไม่มีสาขาที่เข้ากันได้ในระยะ 100km → ปิดทริป
+                break
+        
+        # 3️⃣ Assign ทริป
+        for code in trip_codes:
+            df.loc[df['Code'] == code, 'Trip'] = trip_counter
+        
+        print(f"   📦 Trip {trip_counter}: {len(trip_codes)} สาขา, {trip_weight:.0f} kg")
+        trip_counter += 1
+    
+    print(f"🎯 จัดทริปเสร็จ: {trip_counter - 1} ทริป")
+
+    # ==========================================
     # Step 6.5: เรียงลำดับทริปใหม่ตามระยะทาง (ไกล → ใกล้)
     # ==========================================
     # คำนวณระยะทางเฉลี่ยของแต่ละทริป
