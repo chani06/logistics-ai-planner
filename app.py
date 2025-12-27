@@ -2,7 +2,7 @@ import pandas as pd
 
 """
 Logistics Planner
-Version: 2025-12-26-v3.3
+Version: 2025-12-26-v3.4
 """
 
 import streamlit as st
@@ -3276,8 +3276,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 test_codes = trip_codes + [candidate_code]
                 test_allowed = get_allowed_from_codes(test_codes, ['4W', 'JB', '6W'])
                 if not test_allowed:
-                    # ข้อจำกัดรถไม่เข้ากัน → ข้ามไปลองสาขาถัดไป
-                    continue
+                    # ข้อจำกัดรถไม่เข้ากัน → ปิดทริป (ไม่ข้ามไปสาขาอื่น เพื่อไม่ให้มั่วสาขา)
+                    print(f"      🛑 สาขา {candidate_code} (ใกล้สุด) ข้อจำกัดรถไม่เข้ากัน → ปิดทริป {trip_counter}")
+                    break
                 
                 # 🎯 หารถที่เล็กที่สุดที่ใช้ได้ (ไม่เกินข้อจำกัดสาขา)
                 # เรียงจากเล็กไปใหญ่: 4W → JB → 6W
@@ -3290,8 +3291,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                             break
                 
                 if not selected_vehicle:
-                    # ไม่มีรถที่ใช้ได้โดยไม่เกินข้อจำกัด → ข้ามไปลองสาขาถัดไป
-                    continue
+                    # ไม่มีรถที่ใช้ได้โดยไม่เกินข้อจำกัด → ปิดทริป
+                    print(f"      🛑 สาขา {candidate_code} (ใกล้สุด) ไม่มีรถที่ใช้ได้ → ปิดทริป {trip_counter}")
+                    break
                 
                 # เช็คน้ำหนัก/ปริมาตร
                 test_weight = trip_weight + candidate_w
@@ -3311,8 +3313,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 
                 # เช็คว่าเกิน buffer หรือไม่
                 if test_weight > max_w or test_cube > max_c or test_drops > max_d:
-                    # เกิน buffer → ข้ามไปลองสาขาถัดไป
-                    continue
+                    # เกิน buffer → ปิดทริป (ตัดทันที ไม่เจือสาขาอื่น)
+                    print(f"      🛑 สาขา {candidate_code} (ใกล้สุด) เกิน buffer → ปิดทริป {trip_counter}")
+                    break
                 
                 # ✅ เพิ่มสาขานี้เข้าทริป
                 trip_codes.append(candidate_code)
@@ -3815,8 +3818,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     summary_data[i]['Cube_Use%'] = 0
                 continue
             
-            # เรียงตามระยะทางใกล้สุดก่อน (ตัดสาขาใกล้ออก)
-            trip_data = trip_data.sort_values('_distance_from_dc', ascending=True)
+            # เรียงตามระยะทางใกล้สุดก่อน (ตัดสาขาไกลออก)
+            trip_data = trip_data.sort_values('_distance_from_dc', ascending=False)
             
             # ดึง limits
             bu_type = trip_summary['BU_Type']
@@ -3841,15 +3844,12 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 if current_w <= max_w and current_c <= max_c:
                     break  # พอดีแล้ว
                 
-                if len(trip_data) - len(codes_to_remove) <= 1:
-                    break  # เหลือแค่ 1 สาขา หยุด
-                
                 code = row['Code']
                 codes_to_remove.append(code)
                 current_w -= row['Weight']
                 current_c -= row['Cube']
                 overflow_branches.append(code)
-                print(f"      🔪 ตัด {code} ออก (ใกล้สุด {row['_distance_from_dc']:.1f} km)")
+                print(f"      🔪 ตัด {code} ออก (ไกลสุด {row['_distance_from_dc']:.1f} km)")
             
             # ลบสาขาออกจากทริป (Trip = 0)
             for code in codes_to_remove:
