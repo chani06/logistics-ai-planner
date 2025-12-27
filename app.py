@@ -4388,7 +4388,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 overflow_by_max_vehicle[max_veh] = []
             overflow_by_max_vehicle[max_veh].append(code)
         
-        # จัดทริปแยกตามข้อจำกัด
+        # จัดทริปแยกตามข้อจำกัด + แบ่งตาม buffer
         for max_veh in ['4W', 'JB', '6W']:
             if max_veh not in overflow_by_max_vehicle:
                 continue
@@ -4396,39 +4396,87 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             codes_for_veh = overflow_by_max_vehicle[max_veh]
             if not codes_for_veh:
                 continue
-                
-            new_trip = max_trip + 1
-            max_trip = new_trip
             
-            for code in codes_for_veh:
-                df.loc[df['Code'] == code, 'Trip'] = new_trip
+            # 🎯 แบ่งสาขา overflow เป็นทริปย่อยตาม buffer limit
+            remaining_codes = list(codes_for_veh)
             
-            # เพิ่ม summary ใหม่
-            overflow_data = df[df['Trip'] == new_trip]
-            if not overflow_data.empty:
-                new_w = overflow_data['Weight'].sum()
-                new_c = overflow_data['Cube'].sum()
-                overflow_codes = overflow_data['Code'].tolist()
+            while remaining_codes:
+                new_trip = max_trip + 1
+                max_trip = new_trip
                 
-                # เลือก limits ตาม BU
-                is_overflow_punthai = all(str(df[df['Code'] == c]['BU'].values[0] if len(df[df['Code'] == c]) > 0 else '').upper() in ['211', 'PUNTHAI'] for c in overflow_codes)
-                overflow_limits = PUNTHAI_LIMITS if is_overflow_punthai else LIMITS
-                overflow_buffer = punthai_buffer if is_overflow_punthai else maxmart_buffer
-                buffer_label = f"🅿️ {int(overflow_buffer*100)}%" if is_overflow_punthai else f"🅼 {int(overflow_buffer*100)}%"
+                # คำนวณ limits - ต้องเช็ค BU ของสาขาก่อน!
+                # ตรวจสอบว่าสาขาที่เหลือเป็น Punthai ล้วนหรือไม่
+                first_code = remaining_codes[0]
+                first_row = df[df['Code'] == first_code]
+                first_bu = str(first_row['BU'].values[0] if len(first_row) > 0 else '').upper()
+                is_punthai_overflow = first_bu in ['211', 'PUNTHAI']
                 
-                summary_data.append({
-                    'Trip': new_trip,
-                    'Branches': len(overflow_data),
-                    'Weight': new_w,
-                    'Cube': new_c,
-                    'Truck': f'{max_veh} 🔪 ตัดออก',
-                    'BU_Type': 'punthai' if is_overflow_punthai else 'mixed',
-                    'Buffer': buffer_label,
-                    'Weight_Use%': (new_w / overflow_limits[max_veh]['max_w']) * 100,
-                    'Cube_Use%': (new_c / overflow_limits[max_veh]['max_c']) * 100,
-                    'Total_Distance': 0
-                })
-            print(f"   ✅ สร้าง Trip {new_trip} ใหม่สำหรับสาขา {max_veh} ({len(codes_for_veh)} สาขา)")
+                overflow_buffer = punthai_buffer if is_punthai_overflow else maxmart_buffer
+                overflow_limits = PUNTHAI_LIMITS if is_punthai_overflow else LIMITS
+                max_w = overflow_limits[max_veh]['max_w'] * overflow_buffer
+                max_c = overflow_limits[max_veh]['max_c'] * overflow_buffer
+                max_drops = overflow_limits[max_veh]['max_drops']
+                
+                # เพิ่มสาขาจนกว่าจะเต็ม buffer
+                trip_codes = []
+                trip_weight = 0
+                trip_cube = 0
+                
+                for code in list(remaining_codes):
+                    code_row = df[df['Code'] == code]
+                    if code_row.empty:
+                        remaining_codes.remove(code)
+                        continue
+                    
+                    code_w = code_row.iloc[0]['Weight']
+                    code_c = code_row.iloc[0]['Cube']
+                    
+                    # เช็คว่าเพิ่มได้หรือไม่
+                    if (trip_weight + code_w <= max_w and 
+                        trip_cube + code_c <= max_c and 
+                        len(trip_codes) < max_drops):
+                        trip_codes.append(code)
+                        trip_weight += code_w
+                        trip_cube += code_c
+                        remaining_codes.remove(code)
+                    elif len(trip_codes) == 0:
+                        # ถ้าสาขาเดียวเกิน buffer ก็ต้องเพิ่มอยู่ดี
+                        trip_codes.append(code)
+                        trip_weight += code_w
+                        trip_cube += code_c
+                        remaining_codes.remove(code)
+                        break
+                    else:
+                        # เต็มแล้ว ปิดทริปนี้
+                        break
+                
+                # Assign trip
+                for code in trip_codes:
+                    df.loc[df['Code'] == code, 'Trip'] = new_trip
+                
+                # เพิ่ม summary
+                if trip_codes:
+                    is_overflow_punthai = all(
+                        str(df[df['Code'] == c]['BU'].values[0] if len(df[df['Code'] == c]) > 0 else '').upper() in ['211', 'PUNTHAI'] 
+                        for c in trip_codes
+                    )
+                    overflow_limits_final = PUNTHAI_LIMITS if is_overflow_punthai else LIMITS
+                    overflow_buffer_final = punthai_buffer if is_overflow_punthai else maxmart_buffer
+                    buffer_label = f"🅿️ {int(overflow_buffer_final*100)}%" if is_overflow_punthai else f"🅼 {int(overflow_buffer_final*100)}%"
+                    
+                    summary_data.append({
+                        'Trip': new_trip,
+                        'Branches': len(trip_codes),
+                        'Weight': trip_weight,
+                        'Cube': trip_cube,
+                        'Truck': f'{max_veh} 🔪 ตัดออก',
+                        'BU_Type': 'punthai' if is_overflow_punthai else 'mixed',
+                        'Buffer': buffer_label,
+                        'Weight_Use%': (trip_weight / overflow_limits_final[max_veh]['max_w']) * 100,
+                        'Cube_Use%': (trip_cube / overflow_limits_final[max_veh]['max_c']) * 100,
+                        'Total_Distance': 0
+                    })
+                    print(f"   ✅ สร้าง Trip {new_trip} ใหม่สำหรับสาขา {max_veh} ({len(trip_codes)} สาขา, {trip_weight:.0f}kg)")
     
     summary_df = pd.DataFrame(summary_data)
     
