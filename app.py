@@ -1420,31 +1420,29 @@ def get_max_vehicle_for_branch(branch_code, test_df=None, debug=False):
         
         # 2. ถ้าไม่พบ ลอง match แบบ partial (Code อาจมี prefix/suffix ต่างกัน)
         if branch_row.empty:
-            # ลองหา code ที่มี branch_code_str เป็นส่วนหนึ่ง หรือในทางกลับกัน
-            for idx, mc in enumerate(master_codes):
-                if branch_code_str in mc or mc in branch_code_str:
-                    branch_row = MASTER_DATA.iloc[[idx]]
-                    break
-        
-        # 3. ถ้ายังไม่พบ ลองตัด leading zeros หรือ prefix
-        if branch_row.empty:
-            # ตัด prefix เช่น PUN-, MAX-, etc.
-            code_no_prefix = branch_code_str
-            for prefix in ['PUN-', 'MAX-', 'MM-', 'PT-', 'N', 'S', 'E', 'W', 'C']:
-                if branch_code_str.startswith(prefix):
-                    code_no_prefix = branch_code_str[len(prefix):]
+            # ลองตัด prefix ที่พบบ่อย
+            prefixes = ['PUN-', 'MAX-', 'MM-', 'PT-', 'N', 'S', 'E', 'W', 'C', 'PUN', 'MAX', 'MM', 'PT']
+            
+            # กรณี branch_code มี prefix
+            code_clean = branch_code_str
+            for p in prefixes:
+                if code_clean.startswith(p):
+                    code_clean = code_clean[len(p):]
                     break
             
-            # ลอง match อีกครั้ง
+            # ลอง match กับ master codes ที่ตัด prefix เหมือนกัน
             for idx, mc in enumerate(master_codes):
-                mc_no_prefix = mc
-                for prefix in ['PUN-', 'MAX-', 'MM-', 'PT-', 'N', 'S', 'E', 'W', 'C']:
-                    if mc.startswith(prefix):
-                        mc_no_prefix = mc[len(prefix):]
+                mc_clean = mc
+                for p in prefixes:
+                    if mc_clean.startswith(p):
+                        mc_clean = mc_clean[len(p):]
                         break
-                if code_no_prefix == mc_no_prefix or code_no_prefix in mc_no_prefix or mc_no_prefix in code_no_prefix:
+                
+                if code_clean == mc_clean:
                     branch_row = MASTER_DATA.iloc[[idx]]
                     break
+                    
+        # 3. (ยกเลิกการ match แบบ loose partial 'in' เพราะทำให้ได้รถผิดประเภท)
         
         if not branch_row.empty:
             # ลองหาคอลัมน์ข้อจำกัดรถหลายชื่อ (เพิ่มแบบยืดหยุ่นมากขึ้น)
