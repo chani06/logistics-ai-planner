@@ -750,6 +750,364 @@ LOGISTICS_ZONES = {
         'distance_from_dc_km': 20,
         'description': 'อยุธยา-วังน้อย (DC อยู่ที่นี่!)'
     },
+    # ============ โซนเพิ่มเติม - จังหวัดใกล้เคียง DC ============
+    'ZONE_F4_กำแพงเพชร': {
+        'provinces': ['กำแพงเพชร'],
+        'highway': '1',
+        'priority': 10.5,
+        'distance_from_dc_km': 340,
+        'description': 'กำแพงเพชร สาย 1 ภาคเหนือตอนล่าง'
+    },
+    'ZONE_F4_สุโขทัย': {
+        'provinces': ['สุโขทัย'],
+        'highway': '1',
+        'priority': 11,
+        'distance_from_dc_km': 400,
+        'description': 'สุโขทัย สาย 1 ภาคเหนือตอนล่าง'
+    },
+    'ZONE_NEARBY_สิงห์บุรี': {
+        'provinces': ['สิงห์บุรี'],
+        'highway': '1/32',
+        'priority': 99,
+        'distance_from_dc_km': 100,
+        'description': 'สิงห์บุรี สาย 1/32 ภาคกลางตอนบน'
+    },
+    'ZONE_NEARBY_อ่างทอง': {
+        'provinces': ['อ่างทอง'],
+        'highway': '1/32',
+        'priority': 99,
+        'distance_from_dc_km': 80,
+        'description': 'อ่างทอง สาย 1/32 ภาคกลางตอนบน'
+    },
+    'ZONE_NEARBY_ชัยนาท': {
+        'provinces': ['ชัยนาท'],
+        'highway': '1/32',
+        'priority': 99,
+        'distance_from_dc_km': 150,
+        'description': 'ชัยนาท สาย 1/32 ภาคกลางตอนบน'
+    },
+    'ZONE_NEARBY_ลพบุรี': {
+        'provinces': ['ลพบุรี'],
+        'highway': '1/21',
+        'priority': 99,
+        'distance_from_dc_km': 140,
+        'description': 'ลพบุรี สาย 1/21 ภาคกลางตอนบน'
+    },
+    'ZONE_NEARBY_สระบุรี': {
+        'provinces': ['สระบุรี'],
+        'highway': '1/2',
+        'priority': 99,
+        'distance_from_dc_km': 80,
+        'description': 'สระบุรี สาย 1/2 ประตูอีสาน-เหนือ'
+    },
+    # ============ โซนเพิ่มเติม - กรุงเทพฯ แยกละเอียด ============
+    'ZONE_BKK_เหนือ': {
+        'provinces': ['กรุงเทพมหานคร'],
+        'districts': ['จตุจักร', 'หลักสี่', 'ดอนเมือง', 'สายไหม', 'บางเขน', 'ลาดพร้าว', 'บึงกุ่ม', 'บางกะปิ', 'วังทองหลาง', 'คันนายาว'],
+        'highway': 'กทม-เหนือ',
+        'priority': 99,
+        'distance_from_dc_km': 30,
+        'description': 'กรุงเทพเหนือ (ใกล้ DC วังน้อย)'
+    },
+    'ZONE_BKK_ตะวันออก': {
+        'provinces': ['กรุงเทพมหานคร'],
+        'districts': ['มีนบุรี', 'คลองสามวา', 'หนองจอก', 'ลาดกระบัง', 'สะพานสูง', 'ประเวศ', 'สวนหลวง', 'พระโขนง', 'บางนา', 'คลองเตย', 'วัฒนา'],
+        'highway': 'กทม-ตะวันออก',
+        'priority': 99,
+        'distance_from_dc_km': 55,
+        'description': 'กรุงเทพตะวันออก'
+    },
+    'ZONE_BKK_ใต้': {
+        'provinces': ['กรุงเทพมหานคร'],
+        'districts': ['บางขุนเทียน', 'บางบอน', 'จอมทอง', 'ราษฎร์บูรณะ', 'ทุ่งครุ', 'บางคอแหลม', 'ยานนาวา', 'สาทร', 'บางรัก', 'ปทุมวัน'],
+        'highway': 'กทม-ใต้',
+        'priority': 99,
+        'distance_from_dc_km': 70,
+        'description': 'กรุงเทพใต้'
+    },
+    'ZONE_BKK_ตะวันตก': {
+        'provinces': ['กรุงเทพมหานคร'],
+        'districts': ['บางพลัด', 'ตลิ่งชัน', 'ทวีวัฒนา', 'หนองแขม', 'บางแค', 'ภาษีเจริญ', 'บางกอกใหญ่', 'บางกอกน้อย', 'ธนบุรี', 'คลองสาน', 'ราชเทวี', 'พญาไท', 'ดินแดง', 'ห้วยขวาง'],
+        'highway': 'กทม-ตะวันตก',
+        'priority': 99,
+        'distance_from_dc_km': 60,
+        'description': 'กรุงเทพตะวันตก/ธนบุรี'
+    },
+    'ZONE_BKK_กลาง': {
+        'provinces': ['กรุงเทพมหานคร'],
+        'districts': ['พระนคร', 'ป้อมปราบศัตรูพ่าย', 'สัมพันธวงศ์', 'ดุสิต', 'บางซื่อ'],
+        'highway': 'กทม-กลาง',
+        'priority': 99,
+        'distance_from_dc_km': 50,
+        'description': 'กรุงเทพกลาง/เกาะรัตนโกสินทร์'
+    },
+    # Fallback สำหรับกรุงเทพเมื่อไม่ระบุเขต
+    'ZONE_BKK_ทั่วไป': {
+        'provinces': ['กรุงเทพมหานคร'],
+        'highway': 'กทม',
+        'priority': 99,
+        'distance_from_dc_km': 50,
+        'description': 'กรุงเทพทั่วไป (fallback)'
+    },
+    # ============ โซนปริมณฑล ============
+    'ZONE_CENTRAL_นนทบุรี': {
+        'provinces': ['นนทบุรี'],
+        'highway': 'กทม',
+        'priority': 99,
+        'distance_from_dc_km': 40,
+        'description': 'นนทบุรี ปริมณฑล'
+    },
+    'ZONE_CENTRAL_ปทุมธานี': {
+        'provinces': ['ปทุมธานี'],
+        'highway': 'กทม',
+        'priority': 99,
+        'distance_from_dc_km': 30,
+        'description': 'ปทุมธานี ใกล้ DC'
+    },
+    'ZONE_CENTRAL_สมุทรปราการ': {
+        'provinces': ['สมุทรปราการ'],
+        'highway': 'กทม',
+        'priority': 99,
+        'distance_from_dc_km': 60,
+        'description': 'สมุทรปราการ ปริมณฑล'
+    },
+    'ZONE_CENTRAL_นครปฐม': {
+        'provinces': ['นครปฐม'],
+        'highway': '35/4',
+        'priority': 99,
+        'distance_from_dc_km': 55,
+        'description': 'นครปฐม สาย 35/4'
+    },
+    'ZONE_CENTRAL_สมุทรสาคร': {
+        'provinces': ['สมุทรสาคร'],
+        'highway': '35',
+        'priority': 99,
+        'distance_from_dc_km': 70,
+        'description': 'สมุทรสาคร สาย 35'
+    },
+    'ZONE_CENTRAL_สมุทรสงคราม': {
+        'provinces': ['สมุทรสงคราม'],
+        'highway': '35',
+        'priority': 99,
+        'distance_from_dc_km': 90,
+        'description': 'สมุทรสงคราม สาย 35'
+    },
+    # ============ โซนเพิ่มเติม - ภาคกลางตอนบน ============
+    'ZONE_F4_นครสวรรค์': {
+        'provinces': ['นครสวรรค์'],
+        'highway': '1',
+        'priority': 10,
+        'distance_from_dc_km': 240,
+        'description': 'นครสวรรค์ สาย 1 ภาคกลางตอนบน'
+    },
+    'ZONE_CENTRAL_อยุธยา': {
+        'provinces': ['พระนครศรีอยุธยา'],
+        'highway': '1/32',
+        'priority': 99,
+        'distance_from_dc_km': 25,
+        'description': 'อยุธยา ใกล้ DC'
+    },
+    # ============ โซนเพิ่มเติม - ภาคตะวันออก ============
+    'ZONE_EAST_นครนายก': {
+        'provinces': ['นครนายก'],
+        'highway': '305',
+        'priority': 90,
+        'distance_from_dc_km': 100,
+        'description': 'นครนายก สาย 305'
+    },
+    'ZONE_EAST_ฉะเชิงเทรา': {
+        'provinces': ['ฉะเชิงเทรา'],
+        'highway': '304',
+        'priority': 90,
+        'distance_from_dc_km': 80,
+        'description': 'ฉะเชิงเทรา สาย 304'
+    },
+    'ZONE_EAST_ปราจีนบุรี': {
+        'provinces': ['ปราจีนบุรี'],
+        'highway': '304',
+        'priority': 85,
+        'distance_from_dc_km': 130,
+        'description': 'ปราจีนบุรี สาย 304'
+    },
+    'ZONE_EAST_สระแก้ว': {
+        'provinces': ['สระแก้ว'],
+        'highway': '33',
+        'priority': 80,
+        'distance_from_dc_km': 220,
+        'description': 'สระแก้ว สาย 33'
+    },
+    # ============ โซนเพิ่มเติม - ภาคตะวันตก ============
+    'ZONE_WEST_ราชบุรี': {
+        'provinces': ['ราชบุรี'],
+        'highway': '4',
+        'priority': 85,
+        'distance_from_dc_km': 100,
+        'description': 'ราชบุรี สาย 4'
+    },
+    'ZONE_WEST_กาญจนบุรี': {
+        'provinces': ['กาญจนบุรี'],
+        'highway': '323',
+        'priority': 80,
+        'distance_from_dc_km': 150,
+        'description': 'กาญจนบุรี สาย 323'
+    },
+    'ZONE_WEST_สุพรรณบุรี': {
+        'provinces': ['สุพรรณบุรี'],
+        'highway': '340',
+        'priority': 85,
+        'distance_from_dc_km': 110,
+        'description': 'สุพรรณบุรี สาย 340'
+    },
+    # ============ โซนเพิ่มเติม - ภาคเหนือ ============
+    'ZONE_NORTH_พะเยา': {
+        'provinces': ['พะเยา'],
+        'highway': '1',
+        'priority': 1,
+        'distance_from_dc_km': 680,
+        'description': 'พะเยา สาย 1'
+    },
+    'ZONE_NORTH_น่าน': {
+        'provinces': ['น่าน'],
+        'highway': '101',
+        'priority': 2,
+        'distance_from_dc_km': 620,
+        'description': 'น่าน สาย 101'
+    },
+    'ZONE_NORTH_แพร่': {
+        'provinces': ['แพร่'],
+        'highway': '11',
+        'priority': 3,
+        'distance_from_dc_km': 540,
+        'description': 'แพร่ สาย 11'
+    },
+    'ZONE_NORTH_อุตรดิตถ์': {
+        'provinces': ['อุตรดิตถ์'],
+        'highway': '11',
+        'priority': 4,
+        'distance_from_dc_km': 450,
+        'description': 'อุตรดิตถ์ สาย 11'
+    },
+    'ZONE_F4_พิษณุโลก': {
+        'provinces': ['พิษณุโลก'],
+        'highway': '12',
+        'priority': 12,
+        'distance_from_dc_km': 380,
+        'description': 'พิษณุโลก สาย 12'
+    },
+    'ZONE_F4_พิจิตร': {
+        'provinces': ['พิจิตร'],
+        'highway': '1',
+        'priority': 11,
+        'distance_from_dc_km': 330,
+        'description': 'พิจิตร สาย 1'
+    },
+    'ZONE_F4_เพชรบูรณ์': {
+        'provinces': ['เพชรบูรณ์'],
+        'highway': '21',
+        'priority': 15,
+        'distance_from_dc_km': 350,
+        'description': 'เพชรบูรณ์ สาย 21'
+    },
+    'ZONE_F4_ตาก': {
+        'provinces': ['ตาก'],
+        'highway': '1',
+        'priority': 13,
+        'distance_from_dc_km': 430,
+        'description': 'ตาก สาย 1'
+    },
+    'ZONE_F4_อุทัยธานี': {
+        'provinces': ['อุทัยธานี'],
+        'highway': '333',
+        'priority': 14,
+        'distance_from_dc_km': 230,
+        'description': 'อุทัยธานี สาย 333'
+    },
+    'ZONE_NORTH_เชียงใหม่': {
+        'provinces': ['เชียงใหม่'],
+        'highway': '11',
+        'priority': 5,
+        'distance_from_dc_km': 700,
+        'description': 'เชียงใหม่ สาย 11'
+    },
+    'ZONE_NORTH_เชียงราย': {
+        'provinces': ['เชียงราย'],
+        'highway': '1',
+        'priority': 3,
+        'distance_from_dc_km': 780,
+        'description': 'เชียงราย สาย 1'
+    },
+    'ZONE_NORTH_ลำพูน': {
+        'provinces': ['ลำพูน'],
+        'highway': '11',
+        'priority': 6,
+        'distance_from_dc_km': 680,
+        'description': 'ลำพูน สาย 11'
+    },
+    'ZONE_NORTH_ลำปาง': {
+        'provinces': ['ลำปาง'],
+        'highway': '11',
+        'priority': 7,
+        'distance_from_dc_km': 600,
+        'description': 'ลำปาง สาย 11'
+    },
+    'ZONE_NORTH_แม่ฮ่องสอน': {
+        'provinces': ['แม่ฮ่องสอน'],
+        'highway': '108',
+        'priority': 2,
+        'distance_from_dc_km': 850,
+        'description': 'แม่ฮ่องสอน สาย 108 (ไกลสุด)'
+    },
+    # ============ โซนเพิ่มเติม - ภาคอีสาน ============
+    'ZONE_ISAN_นครราชสีมา': {
+        'provinces': ['นครราชสีมา'],
+        'highway': '2',
+        'priority': 50,
+        'distance_from_dc_km': 260,
+        'description': 'นครราชสีมา สาย 2 (มิตรภาพ)'
+    },
+    'ZONE_ISAN_ขอนแก่น': {
+        'provinces': ['ขอนแก่น'],
+        'highway': '2',
+        'priority': 45,
+        'distance_from_dc_km': 450,
+        'description': 'ขอนแก่น สาย 2 (มิตรภาพ)'
+    },
+    'ZONE_ISAN_ชัยภูมิ': {
+        'provinces': ['ชัยภูมิ'],
+        'highway': '201',
+        'priority': 48,
+        'distance_from_dc_km': 340,
+        'description': 'ชัยภูมิ สาย 201'
+    },
+    'ZONE_ISAN_กาฬสินธุ์': {
+        'provinces': ['กาฬสินธุ์'],
+        'highway': '12',
+        'priority': 40,
+        'distance_from_dc_km': 500,
+        'description': 'กาฬสินธุ์ สาย 12'
+    },
+    'ZONE_ISAN_มหาสารคาม': {
+        'provinces': ['มหาสารคาม'],
+        'highway': '2',
+        'priority': 42,
+        'distance_from_dc_km': 470,
+        'description': 'มหาสารคาม สาย 2'
+    },
+    'ZONE_ISAN_ร้อยเอ็ด': {
+        'provinces': ['ร้อยเอ็ด'],
+        'highway': '23',
+        'priority': 38,
+        'distance_from_dc_km': 520,
+        'description': 'ร้อยเอ็ด สาย 23'
+    },
+    # ============ โซนเพิ่มเติม - ภาคใต้ตอนบน ============
+    'ZONE_SOUTH_ชุมพร': {
+        'provinces': ['ชุมพร'],
+        'highway': '4',
+        'priority': 60,
+        'distance_from_dc_km': 470,
+        'description': 'ชุมพร สาย 4 (ประตูใต้)'
+    },
 }
 
 # ==========================================
@@ -1197,6 +1555,53 @@ def load_master_data():
 
 # โหลด Master Data จาก Google Sheets
 MASTER_DATA = load_master_data()
+
+# ==========================================
+# 🔄 BRANCH GROUPING (จุดส่งเดียวกัน ≤200 เมตร)
+# โหลดจาก branch_groups.json (สร้างโดย test_groups.py ด้วย haversine 200m)
+# ==========================================
+def load_branch_groups():
+    """
+    โหลด branch_groups.json ที่สร้างด้วย haversine 200m
+    Return: (groups_dict, branch_to_group_dict)
+    """
+    try:
+        with open('branch_groups.json', 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        groups = data.get('groups', {})  # {group_id: [codes]}
+        branch_to_group = data.get('branch_to_group', {})  # {code: group_id}
+        
+        print(f"✅ โหลด branch_groups.json: {len(groups)} กลุ่ม, {len(branch_to_group)} สาขา")
+        return groups, branch_to_group
+    except FileNotFoundError:
+        print("⚠️ ไม่พบ branch_groups.json - รัน python test_groups.py ก่อน")
+        return {}, {}
+    except Exception as e:
+        print(f"⚠️ โหลด branch_groups.json ไม่สำเร็จ: {e}")
+        return {}, {}
+
+# โหลด branch groups
+BRANCH_GROUPS, BRANCH_TO_GROUP = load_branch_groups()
+
+def get_group_branches(code: str) -> list:
+    """
+    ดึงสาขาทั้งหมดในกลุ่มเดียวกัน (จุดส่งเดียวกัน ≤200 เมตร)
+    ถ้าไม่มีกลุ่ม return [code] (สาขาเดียว)
+    """
+    code_upper = str(code).strip().upper()
+    group_id = BRANCH_TO_GROUP.get(code_upper)
+    if group_id:
+        return BRANCH_GROUPS.get(group_id, [code_upper])
+    return [code_upper]
+
+def is_same_group(code1: str, code2: str) -> bool:
+    """เช็คว่า 2 สาขาอยู่กลุ่มเดียวกันหรือไม่"""
+    c1 = str(code1).strip().upper()
+    c2 = str(code2).strip().upper()
+    g1 = BRANCH_TO_GROUP.get(c1)
+    g2 = BRANCH_TO_GROUP.get(c2)
+    return g1 and g2 and g1 == g2
 
 # ==========================================
 # 🚀 PRE-COMPUTE: Distance Matrix & Nearby Branches
@@ -3090,16 +3495,41 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         trip_districts = {trip_district} if trip_district else set()
         
         # เริ่มทริปใหม่ด้วยสาขาไกลสุด
-        trip_codes = [start_code]
-        trip_weight = farthest_row['Weight']
-        trip_cube = farthest_row['Cube']
-        unassigned.remove(start_code)
+        # 🎯 ดึงสาขาทั้งกลุ่ม (จุดส่งเดียวกัน ≤200m) ของสาขาแรก
+        start_group_codes = get_group_branches(start_code)
+        start_group_unassigned = [c for c in start_group_codes if c in unassigned or c.upper() in [str(x).upper() for x in unassigned]]
+        if not start_group_unassigned:
+            start_group_unassigned = [start_code]
         
-        print(f"   🚀 Trip {trip_counter}: {start_code} ({trip_province}) - {trip_logistics_zone} - {trip_max_vehicle} - {farthest_row['_distance_from_dc']:.0f}km")
+        # คำนวณ weight/cube รวมทั้งกลุ่ม
+        trip_codes = []
+        trip_weight = 0
+        trip_cube = 0
+        for gc in start_group_unassigned:
+            gc_row = df[df['Code'].apply(lambda x: str(x).upper() == str(gc).upper())]
+            if not gc_row.empty:
+                actual_code = gc_row.iloc[0]['Code']
+                trip_codes.append(actual_code)
+                trip_weight += gc_row.iloc[0]['Weight']
+                trip_cube += gc_row.iloc[0]['Cube']
+                # ลบออกจาก unassigned
+                if actual_code in unassigned:
+                    unassigned.remove(actual_code)
+                else:
+                    for u in list(unassigned):
+                        if str(u).upper() == str(actual_code).upper():
+                            unassigned.remove(u)
+                            break
+        
+        if len(trip_codes) > 1:
+            print(f"   🚀 Trip {trip_counter}: กลุ่ม {len(trip_codes)} สาขา ({trip_province}) - {trip_logistics_zone} - {trip_max_vehicle} - {farthest_row['_distance_from_dc']:.0f}km")
+            print(f"      🔗 สาขาในกลุ่ม: {trip_codes}")
+        else:
+            print(f"   🚀 Trip {trip_counter}: {start_code} ({trip_province}) - {trip_logistics_zone} - {trip_max_vehicle} - {farthest_row['_distance_from_dc']:.0f}km")
         
         # หา allowed vehicles จาก constraints (จำกัดตาม trip_max_vehicle)
         trip_allowed = get_allowed_from_codes(trip_codes, ['4W', 'JB', '6W'])
-        trip_is_punthai = branch_bu_cache.get(start_code, False)
+        trip_is_punthai = all(branch_bu_cache.get(c, False) for c in trip_codes)
         
         # 2️⃣ Greedy: หาสาขาใกล้สุดมาเติมจนเต็ม buffer
         while unassigned:
@@ -3257,45 +3687,71 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             
             for _, candidate_row in same_zone_df.iterrows():
                 candidate_code = candidate_row['Code']
-                candidate_w = candidate_row['Weight']
-                candidate_c = candidate_row['Cube']
                 candidate_dist = candidate_row['_dist_to_trip']
                 
                 # 🚫 ถ้าไกลจาก centroid เกิน 80km → ไม่เพิ่ม (หลุดโซน)
                 if candidate_dist > 80:
                     break  # ไม่มีสาขาใกล้ในโซนแล้ว ปิดทริป
                 
-                # 🚫 เช็ค vehicle constraint ของสาขาใหม่ก่อน!
-                candidate_max_vehicle = get_max_vehicle_for_branch(candidate_code)
-                vehicle_rank = {'4W': 1, 'JB': 2, '6W': 3}
-                candidate_max_rank = vehicle_rank.get(candidate_max_vehicle, 3)
+                # 🎯 ดึงสาขาทั้งกลุ่ม (จุดส่งเดียวกัน ≤200m)
+                group_codes = get_group_branches(candidate_code)
+                # กรองเฉพาะสาขาที่ยังไม่ได้จัดและมีใน df
+                group_codes_unassigned = [c for c in group_codes if c in unassigned or c.upper() in [str(x).upper() for x in unassigned]]
+                if not group_codes_unassigned:
+                    group_codes_unassigned = [candidate_code]
                 
-                # เช็ค allowed vehicles (รวมสาขาใหม่)
-                test_codes = trip_codes + [candidate_code]
+                # คำนวณ weight/cube รวมทั้งกลุ่ม
+                group_weight = 0
+                group_cube = 0
+                group_codes_valid = []
+                for gc in group_codes_unassigned:
+                    gc_row = df[df['Code'].apply(lambda x: str(x).upper() == str(gc).upper())]
+                    if not gc_row.empty:
+                        group_weight += gc_row.iloc[0]['Weight']
+                        group_cube += gc_row.iloc[0]['Cube']
+                        group_codes_valid.append(gc_row.iloc[0]['Code'])
+                
+                if not group_codes_valid:
+                    continue
+                
+                # 🚫 เช็ค vehicle constraint ของสาขาทั้งกลุ่ม
+                vehicle_rank = {'4W': 1, 'JB': 2, '6W': 3}
+                group_min_max_rank = 3
+                for gc in group_codes_valid:
+                    gc_max_vehicle = get_max_vehicle_for_branch(gc)
+                    gc_max_rank = vehicle_rank.get(gc_max_vehicle, 3)
+                    group_min_max_rank = min(group_min_max_rank, gc_max_rank)
+                
+                # เช็ค allowed vehicles (รวมสาขาทั้งกลุ่ม)
+                test_codes = trip_codes + group_codes_valid
                 test_allowed = get_allowed_from_codes(test_codes, ['4W', 'JB', '6W'])
                 if not test_allowed:
                     # ข้อจำกัดรถไม่เข้ากัน → ปิดทริป (ไม่ข้ามไปสาขาอื่น เพื่อไม่ให้มั่วสาขา)
-                    print(f"      🛑 สาขา {candidate_code} (ใกล้สุด) ข้อจำกัดรถไม่เข้ากัน → ปิดทริป {trip_counter}")
+                    if len(group_codes_valid) > 1:
+                        print(f"      🛑 กลุ่ม {group_codes_valid} (ใกล้สุด) ข้อจำกัดรถไม่เข้ากัน → ปิดทริป {trip_counter}")
+                    else:
+                        print(f"      🛑 สาขา {candidate_code} (ใกล้สุด) ข้อจำกัดรถไม่เข้ากัน → ปิดทริป {trip_counter}")
                     break
                 
-                # 🎯 หารถที่เล็กที่สุดที่ใช้ได้ (ไม่เกินข้อจำกัดสาขา)
-                # เรียงจากเล็กไปใหญ่: 4W → JB → 6W
+                # 🎯 หารถที่เล็กที่สุดที่ใช้ได้ (ไม่เกินข้อจำกัดสาขาทั้งกลุ่ม)
                 selected_vehicle = None
                 for veh in ['4W', 'JB', '6W']:
                     if veh in test_allowed:
                         veh_rank = vehicle_rank.get(veh, 3)
-                        if veh_rank <= candidate_max_rank:  # ไม่เกินข้อจำกัดสาขาใหม่
+                        if veh_rank <= group_min_max_rank:
                             selected_vehicle = veh
                             break
                 
                 if not selected_vehicle:
-                    # ไม่มีรถที่ใช้ได้โดยไม่เกินข้อจำกัด → ปิดทริป
-                    print(f"      🛑 สาขา {candidate_code} (ใกล้สุด) ไม่มีรถที่ใช้ได้ → ปิดทริป {trip_counter}")
+                    if len(group_codes_valid) > 1:
+                        print(f"      🛑 กลุ่ม {group_codes_valid} (ใกล้สุด) ไม่มีรถที่ใช้ได้ → ปิดทริป {trip_counter}")
+                    else:
+                        print(f"      🛑 สาขา {candidate_code} (ใกล้สุด) ไม่มีรถที่ใช้ได้ → ปิดทริป {trip_counter}")
                     break
                 
-                # เช็คน้ำหนัก/ปริมาตร
-                test_weight = trip_weight + candidate_w
-                test_cube = trip_cube + candidate_c
+                # เช็คน้ำหนัก/ปริมาตร/drops รวมทั้งกลุ่ม
+                test_weight = trip_weight + group_weight
+                test_cube = trip_cube + group_cube
                 test_drops = len(test_codes)
                 
                 # หา buffer ที่ใช้
@@ -3312,17 +3768,34 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 # เช็คว่าเกิน buffer หรือไม่
                 if test_weight > max_w or test_cube > max_c or test_drops > max_d:
                     # เกิน buffer → ปิดทริป (ตัดทันที ไม่เจือสาขาอื่น)
-                    print(f"      🛑 สาขา {candidate_code} (ใกล้สุด) เกิน buffer → ปิดทริป {trip_counter}")
+                    if len(group_codes_valid) > 1:
+                        print(f"      🛑 กลุ่ม {len(group_codes_valid)} สาขา (ใกล้สุด) เกิน buffer → ปิดทริป {trip_counter}")
+                    else:
+                        print(f"      🛑 สาขา {candidate_code} (ใกล้สุด) เกิน buffer → ปิดทริป {trip_counter}")
                     break
                 
-                # ✅ เพิ่มสาขานี้เข้าทริป
-                trip_codes.append(candidate_code)
+                # ✅ เพิ่มสาขาทั้งกลุ่มเข้าทริป (จุดส่งเดียวกัน ≤200m)
+                for gc in group_codes_valid:
+                    if gc not in trip_codes:
+                        trip_codes.append(gc)
+                    # ลบออกจาก unassigned
+                    if gc in unassigned:
+                        unassigned.remove(gc)
+                    else:
+                        # กรณี code เป็น uppercase/lowercase ต่างกัน
+                        for u in list(unassigned):
+                            if str(u).upper() == str(gc).upper():
+                                unassigned.remove(u)
+                                break
+                
                 trip_weight = test_weight
                 trip_cube = test_cube
                 trip_allowed = test_allowed
                 trip_is_punthai = test_is_punthai
-                unassigned.remove(candidate_code)
                 found_candidate = True
+                
+                if len(group_codes_valid) > 1:
+                    print(f"      🔗 เพิ่มกลุ่ม {len(group_codes_valid)} สาขา (จุดส่งเดียวกัน): {group_codes_valid}")
                 
                 # 🎯 อัพเดตตำบล/อำเภอของทริป (เพิ่มสาขาใหม่)
                 cand_subdistrict = candidate_row.get('_subdistrict', '')
@@ -3339,7 +3812,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                     print(f"      ✅ Trip {trip_counter} เต็ม {max(w_util, c_util)*100:.1f}% ({len(trip_codes)} สาขา)")
                     break  # เต็มแล้ว
                 
-                break  # หาสาขาเพิ่มได้ 1 สาขา → วนลูปใหม่หา centroid ใหม่
+                break  # หาสาขาเพิ่มได้กลุ่ม/สาขา → วนลูปใหม่หา centroid ใหม่
             
             if not found_candidate:
                 # ไม่มีสาขาที่เข้ากันได้ในระยะ 100km → ปิดทริป
@@ -3784,22 +4257,58 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         })
     
     # ==========================================
-    # 🚨 Step 7.5: ตัดสาขาออกถ้าเกิน buffer (Strict Enforcement)
+    # 🚨 Step 7.5: ตัดสาขาออกถ้าเกิน buffer หรือรถผิดประเภท (Strict Enforcement)
     # ==========================================
-    print("\n📋 Step 7.5: ตรวจสอบและตัดสาขาที่เกิน Buffer...")
+    print("\n📋 Step 7.5: ตรวจสอบและตัดสาขาที่เกิน Buffer + ข้อจำกัดรถ...")
     overflow_branches = []
     
     for i, trip_summary in enumerate(summary_data):
         trip_num = trip_summary['Trip']
-        max_util = max(trip_summary['Weight_Use%'], trip_summary['Cube_Use%'])
         buffer_pct = float(trip_summary['Buffer'].replace('🅿️ ', '').replace('🅼 ', '').replace('%', ''))
         
-        # ถ้าเกิน buffer threshold
-        if max_util > buffer_pct:
-            print(f"   ⚠️ Trip {trip_num} เกิน buffer: {max_util:.1f}% > {buffer_pct}%")
+        # ดึงข้อมูลทริป
+        trip_data = df[df['Trip'] == trip_num].copy()
+        if trip_data.empty:
+            continue
             
-            # ดึงข้อมูลทริป
-            trip_data = df[df['Trip'] == trip_num].copy()
+        trip_codes = trip_data['Code'].tolist()
+        
+        # 🚗 หารถที่ถูกต้องตามข้อจำกัดสาขา (ใช้รถเล็กที่สุดที่รับได้)
+        max_vehicles = [get_max_vehicle_for_branch(c) for c in trip_codes]
+        vehicle_priority_map = {'4W': 1, 'JB': 2, '6W': 3}
+        min_max_size = min(vehicle_priority_map.get(v, 3) for v in max_vehicles)
+        correct_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(min_max_size, '6W')
+        
+        # ดึง limits ตาม BU และรถที่ถูกต้อง
+        bu_type = trip_summary['BU_Type']
+        is_punthai = (bu_type == 'punthai')
+        buffer = punthai_buffer if is_punthai else maxmart_buffer
+        limits = PUNTHAI_LIMITS if is_punthai else LIMITS
+        
+        # คำนวณ utilization ด้วยรถที่ถูกต้อง
+        total_w = trip_data['Weight'].sum()
+        total_c = trip_data['Cube'].sum()
+        max_w = limits[correct_vehicle]['max_w'] * buffer
+        max_c = limits[correct_vehicle]['max_c'] * buffer
+        max_drops = limits[correct_vehicle]['max_drops']
+        
+        w_util = (total_w / limits[correct_vehicle]['max_w']) * 100
+        c_util = (total_c / limits[correct_vehicle]['max_c']) * 100
+        max_util = max(w_util, c_util)
+        
+        # อัพเดต summary ด้วยรถที่ถูกต้อง
+        truck_source = "📋 จำกัดสาขา" if min_max_size < 3 else "🤖 อัตโนมัติ"
+        summary_data[i]['Truck'] = f"{correct_vehicle} {truck_source}"
+        summary_data[i]['Weight_Use%'] = w_util
+        summary_data[i]['Cube_Use%'] = c_util
+        
+        # ตรวจสอบว่าเกิน buffer หรือ drops หรือไม่
+        is_over_buffer = total_w > max_w or total_c > max_c
+        is_over_drops = len(trip_codes) > max_drops
+        
+        if is_over_buffer or is_over_drops:
+            reason = "เกิน buffer" if is_over_buffer else f"เกิน drops ({len(trip_codes)}>{max_drops})"
+            print(f"   ⚠️ Trip {trip_num} {reason}: {max_util:.1f}% (รถ {correct_vehicle})")
             
             # 🚨 ถ้ามีแค่ 1 สาขา แต่เกิน buffer → ตัดสาขานั้นไป overflow ทั้งหมด
             if len(trip_data) <= 1:
@@ -3819,12 +4328,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             # เรียงตามระยะทางใกล้สุดก่อน (ตัดสาขาไกลออก)
             trip_data = trip_data.sort_values('_distance_from_dc', ascending=False)
             
-            # ดึง limits
-            bu_type = trip_summary['BU_Type']
-            is_punthai = (bu_type == 'punthai')
-            buffer = punthai_buffer if is_punthai else maxmart_buffer
-            truck_str = trip_summary['Truck'].split()[0]
-            limits = PUNTHAI_LIMITS if is_punthai else LIMITS
+            # ใช้รถที่ถูกต้องตามข้อจำกัดสาขา (correct_vehicle ที่คำนวณด้านบน)
+            truck_str = correct_vehicle
             
             if truck_str not in limits:
                 continue
@@ -3835,17 +4340,20 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             # คำนวณน้ำหนัก/คิวปัจจุบัน
             current_w = trip_data['Weight'].sum()
             current_c = trip_data['Cube'].sum()
+            current_drops = len(trip_data)
             
-            # ตัดสาขาออกจนกว่าจะไม่เกิน
+            # ตัดสาขาออกจนกว่าจะไม่เกิน (weight, cube, และ drops)
             codes_to_remove = []
             for _, row in trip_data.iterrows():
-                if current_w <= max_w and current_c <= max_c:
+                # เช็คทั้ง buffer และ drops
+                if current_w <= max_w and current_c <= max_c and current_drops <= max_drops:
                     break  # พอดีแล้ว
                 
                 code = row['Code']
                 codes_to_remove.append(code)
                 current_w -= row['Weight']
                 current_c -= row['Cube']
+                current_drops -= 1
                 overflow_branches.append(code)
                 print(f"      🔪 ตัด {code} ออก (ไกลสุด {row['_distance_from_dc']:.1f} km)")
             
