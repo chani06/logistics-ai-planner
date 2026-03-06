@@ -209,7 +209,7 @@ def build_interactive_map_html(
                 display:flex;justify-content:space-between}}
   .over-limit{{background:#fff3e0;border-color:#ff9800}}
   .over-error{{background:#ffebee;border-color:#f44336}}
-  #map{{flex:1;height:780px;min-height:0;min-width:0}}
+  #map{{width:calc(100% - 340px);height:780px;overflow:hidden}}
   #info-panel{{position:absolute;bottom:0;left:340px;right:0;background:rgba(255,255,255,.95);
                border-top:2px solid #1976d2;padding:10px 14px;z-index:1000;
                display:none;max-height:220px;overflow-y:auto}}
@@ -331,15 +331,23 @@ let _summaryCache   = {{}};
 function _invalidateCache(){{ _cachedTripKeys=null; _summaryCache={{}}; }}
 
 // ═══════════════════════════════════════════════════
-// MAP INIT
+// MAP INIT  — ต้อง force ขนาด html element ก่อนที่ Leaflet จะ init
+// (ใน srcdoc iframe flex layout ยังไม่เสร็จตอน script รัน)
 // ═══════════════════════════════════════════════════
+(function() {{
+  var m = document.getElementById('map');
+  var app = document.getElementById('app');
+  var sb  = document.getElementById('sidebar');
+  var avail = (app ? app.offsetWidth : window.innerWidth) - (sb ? sb.offsetWidth : 340);
+  m.style.width  = (avail > 50 ? avail : window.innerWidth - 340) + 'px';
+  m.style.height = '780px';
+}})();
 const _renderer = L.canvas({{padding:0.5}});
-const map = L.map('map', {{zoomControl:true,preferCanvas:true,renderer:_renderer}})
-  .setView(DC, 6);
+const map = L.map('map', {{zoomControl:true,preferCanvas:true,renderer:_renderer,
+  center:DC, zoom:6}});
 
 L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-  maxZoom:18, attribution:'© OpenStreetMap',
-  crossOrigin:true
+  maxZoom:18, attribution:'© OpenStreetMap'
 }}).addTo(map);
 
 // DC marker
@@ -755,12 +763,18 @@ renderMarkers();
 renderSidebar();
 fitAll();
 
-// 🔧 Streamlit srcdoc iframe: ใช้ fixed px height ตาม components.v1.html(height=780)
+// 🔧 Streamlit srcdoc iframe: force explicit size แล้ว invalidate
 function _fixMapSize() {{
   var mapEl = document.getElementById('map');
+  var app = document.getElementById('app');
+  var sb  = document.getElementById('sidebar');
+  var avail = (app ? app.offsetWidth : window.innerWidth) - (sb ? sb.offsetWidth : 340);
+  if (avail > 50) mapEl.style.width = avail + 'px';
   mapEl.style.height = '780px';
-  map.invalidateSize({{reset:true, animate:false}});
-  fitAll();
+  requestAnimationFrame(function() {{
+    map.invalidateSize({{animate:false}});
+    if(branches.length > 0) fitAll();
+  }});
 }}
 
 document.addEventListener('DOMContentLoaded', function() {{

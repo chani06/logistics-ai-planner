@@ -3037,36 +3037,39 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             same_zone_df = None
             filter_level = ""
 
-            # 🎯 0️⃣ เช็คสาขาใกล้มากๆ ก่อน (< 6km) - ต้องรวมไม่ว่าจะต่างตำบล/อำเภอ/จังหวัด!
+            # 🎯 0️⃣ เช็คสาขาใกล้มากๆ ก่อน (< 6km) — [FIX2] เช็คทุกสาขาในทริป ไม่ใช่แค่สาขาสุดท้าย
             very_close_df = None
-            last_code = trip_codes[-1]
-            last_code_upper = str(last_code).strip().upper()
-            
-            if last_code_upper in NEARBY_BRANCHES:
-                # หาสาขาที่ใกล้มาก (< 6km) จาก pre-computed data
-                very_close_codes = []
-                for nearby_code, dist in NEARBY_BRANCHES[last_code_upper]:
-                    if dist < 6.0 and nearby_code in [str(c).strip().upper() for c in unassigned]:
-                        very_close_codes.append(nearby_code)
-                
-                if very_close_codes:
-                    very_close_df = remaining_df[remaining_df['Code'].apply(lambda x: str(x).strip().upper() in very_close_codes)].copy()
-            
-            # ถ้ามีสาขาใกล้มาก → ใช้เฉพาะสาขาที่ highway เดียวกัน หรือจังหวัดเดียวกัน
-            # (ป้องกันการข้ามโซน highway ต่างกันโดยไม่ตรวจสอบ)
+            unassigned_upper_set_vc = {str(c).strip().upper() for c in unassigned}
+            very_close_codes = set()
+            ultra_close_codes = set()  # < 3km — [FIX3] bypass highway filter (แต่ยังตรวจ region)
+            for _tc in trip_codes:
+                _tc_upper = str(_tc).strip().upper()
+                if _tc_upper in NEARBY_BRANCHES:
+                    for nearby_code, dist in NEARBY_BRANCHES[_tc_upper]:
+                        if dist < 6.0 and nearby_code in unassigned_upper_set_vc:
+                            very_close_codes.add(nearby_code)
+                        if dist < 3.0 and nearby_code in unassigned_upper_set_vc:
+                            ultra_close_codes.add(nearby_code)
+
+            if very_close_codes:
+                very_close_df = remaining_df[remaining_df['Code'].apply(lambda x: str(x).strip().upper() in very_close_codes)].copy()
+
+            # ถ้ามีสาขาใกล้มาก → กรอง highway แต่ bypass ถ้า < 3km จากสาขาใดๆ ในทริป
+            # [FIX3] ultra_close (< 3km) ข้าม highway filter ได้ — region filter ทำงานต่อตามปกติ
             if very_close_df is not None and not very_close_df.empty:
                 trip_hw = get_zone_highway(trip_logistics_zone) if trip_logistics_zone else ''
-                # กรองเฉพาะสาขาที่: จังหวัดเดียวกัน หรือ highway เดียวกัน (หรือ highway มีส่วนร่วมกัน)
+                # กรองเฉพาะสาขาที่: < 3km (ultra-close bypass) หรือ จังหวัดเดียวกัน หรือ highway เดียวกัน
                 def _hw_compatible(row_hw):
                     if not trip_hw:
                         return True  # ทริปไม่มี zone → อนุญาตแก่ neighbor (region filter จะจัดการต่อ)
                     if not row_hw:
-                        return False  # candidate ไม่มี zone/highway → ปฏิเสธ (ไม่เกี่ยวข้องกัน)
+                        return False  # candidate ไม่มี zone/highway → ปฏิเสธ
                     # เช็ค primary highway (ตัวแรกก่อน '/')
                     trip_primaries = set(trip_hw.split('/'))
                     row_primaries = set(row_hw.split('/'))
                     return bool(trip_primaries & row_primaries)
                 compatible_df = very_close_df[
+                    (very_close_df['Code'].apply(lambda c: str(c).strip().upper() in ultra_close_codes)) |  # < 3km bypass
                     (very_close_df['_province'] == trip_province) |
                     very_close_df['_zone_highway'].apply(_hw_compatible)
                 ].copy()
@@ -3155,28 +3158,35 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                                 lambda r: haversine_distance(r['_lat'], r['_lon'], last_lat, last_lon) 
                                 if r['_lat'] > 0 and r['_lon'] > 0 else 999, axis=1
                             )
-                            nearest_row = highway_df.loc[highway_df['_dist_to_last'].idxmin()]
-                            nearest_zone = nearest_row['_logistics_zone']
-                            nearest_prov = nearest_row['_province']
-                            
-                            # อัพเดตโซน (BKK trips ไม่อัพเดตจังหวัดออกจาก BKK)
-                            # BKK = เริ่มจากกรุงเทพฯ หรือโซน BKK_* ต้นทาง
-                            _orig_zone_name = str(farthest_row.get('_logistics_zone', ''))
-                            _is_bkk_start = (trip_original_province == 'กรุงเทพมหานคร' or
-                                             'BKK' in _orig_zone_name)
-                            _nearest_is_bkk = 'BKK' in str(nearest_zone)
-                            trip_logistics_zone = nearest_zone
-                            if _is_bkk_start and not _nearest_is_bkk:
-                                # BKK trip ขยาย highway ไปโซนต่างจังหวัด → อย่าอัพเดตจังหวัด
-                                safe_print(f"      🏙️ BKK trip: ไม่อัพเดต trip_province ({trip_province} → {nearest_prov} ข้าม)")
+                            # 🔒 กรองเฉพาะสาขาที่ไม่ไกลเกิน 120km จากสาขาล่าสุด (ป้องกันกระโดดไกล)
+                            highway_df = highway_df[highway_df['_dist_to_last'] <= 120].copy()
+                            if highway_df.empty:
+                                same_zone_df = None
                             else:
-                                trip_province = nearest_prov
-                            trip_subdistricts = set()
-                            trip_districts = set()
-                            
-                            same_zone_df = highway_df
-                            filter_level = f"Highway {trip_highway}"
-                            safe_print(f"      🛣️ ขยายไปโซน {nearest_zone} ใน Highway {trip_highway}")
+                                nearest_row = highway_df.loc[highway_df['_dist_to_last'].idxmin()]
+                                nearest_zone = nearest_row['_logistics_zone']
+                                nearest_prov = nearest_row['_province']
+
+                                # อัพเดตโซน (BKK trips ไม่อัพเดตจังหวัดออกจาก BKK)
+                                _orig_zone_name = str(farthest_row.get('_logistics_zone', ''))
+                                _is_bkk_start = (trip_original_province == 'กรุงเทพมหานคร' or
+                                                 'BKK' in _orig_zone_name)
+                                _nearest_is_bkk = 'BKK' in str(nearest_zone)
+                                trip_logistics_zone = nearest_zone
+                                if _is_bkk_start and not _nearest_is_bkk:
+                                    safe_print(f"      🏙️ BKK trip: ไม่อัพเดต trip_province ({trip_province} → {nearest_prov} ข้าม)")
+                                else:
+                                    trip_province = nearest_prov
+                                trip_subdistricts = set()
+                                trip_districts = set()
+
+                                # 🔒 จำกัด same_zone_df เฉพาะ nearest_zone (ป้องกันกระโดดข้ามโซนใน highway)
+                                same_zone_df = highway_df[highway_df['_logistics_zone'] == nearest_zone].copy()
+                                if same_zone_df.empty:
+                                    # fallback: รัศมี 30km จาก nearest branch
+                                    same_zone_df = highway_df[highway_df['_dist_to_last'] <= 30].copy()
+                                filter_level = f"Highway→Zone {nearest_zone}"
+                                safe_print(f"      🛣️ ขยายไปโซน {nearest_zone} ใน Highway {trip_highway} ({len(same_zone_df)} สาขา)")
             
             # 6️⃣ หมด Highway แล้ว → ปิดทริป! (ห้ามข้ามไป Highway อื่น)
             # ตามหลัก "หมดเส้นทางจริงๆถึงไปเส้นอื่น"
@@ -3295,16 +3305,16 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 if not _region_compat:
                     safe_print(f"      🚫 step6 skip {candidate_code} ภาคต่างกัน ({_c_region_calc}/{_c_prov} ≠ {_orig_region_calc}/{trip_original_province})")
                     continue
-                # ✅ ตรวจ province/zone/highway
+                # ✅ ตรวจ province/zone — ห้ามข้ามโซน/จังหวัดโดยไม่มีเหตุผล
+                # [STRICT] ตัด highway-wide bypass ออก — กระโดดข้ามโซนใน highway เดียวกันได้
                 _zone_compat = (
                     not _c_prov or not trip_original_province or   # ไม่มีข้อมูล → อนุญาต
                     _c_prov == trip_original_province or           # จังหวัดเดียวกับต้นทาง
                     _c_prov == trip_province or                    # จังหวัดเดียวกับปัจจุบัน
-                    _c_zone == trip_logistics_zone or              # โซนเดียวกัน
-                    bool(trip_original_hws & _c_hws)              # highway ตรงกับต้นทาง
+                    _c_zone == trip_logistics_zone                 # โซนเดียวกับปัจจุบัน
                 )
                 if not _zone_compat:
-                    safe_print(f"      🚫 step6 skip {candidate_code} ({_c_prov}/{_c_zone}/{_c_hw}) ≠ trip ({trip_original_province}/{trip_logistics_zone}/{trip_original_hws})")
+                    safe_print(f"      🚫 step6 skip {candidate_code} ({_c_prov}/{_c_zone}) ≠ trip ({trip_original_province}/{trip_province}/{trip_logistics_zone})")
                     continue   # ลองสาขาถัดไปใน same_zone_df
 
                 # 🎯 ดึงสาขาทั้งกลุ่ม (จุดส่งเดียวกัน ≤200m)
@@ -3365,48 +3375,45 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                         safe_print(f"      🛑 สาขา {candidate_code} (ใกล้สุด) ข้อจำกัดรถไม่เข้ากัน → ปิดทริป {trip_counter}")
                     break
                 
-                # 🎯 หารถที่เล็กที่สุดที่ใช้ได้ (ไม่เกินข้อจำกัดสาขาทั้งกลุ่ม)
-                selected_vehicle = None
-                for veh in ['4W', 'JB', '6W']:
-                    if veh in test_allowed:
-                        veh_rank = vehicle_rank.get(veh, 3)
-                        if veh_rank <= group_min_max_rank:
-                            selected_vehicle = veh
-                            break
-                
-                if not selected_vehicle:
-                    if len(group_codes_valid) > 1:
-                        safe_print(f"      🛑 กลุ่ม {group_codes_valid} (ใกล้สุด) ไม่มีรถที่ใช้ได้ → ปิดทริป {trip_counter}")
-                    else:
-                        safe_print(f"      🛑 สาขา {candidate_code} (ใกล้สุด) ไม่มีรถที่ใช้ได้ → ปิดทริป {trip_counter}")
-                    break
-                
                 # เช็คน้ำหนัก/ปริมาตร/drops รวมทั้งกลุ่ม
                 test_weight = trip_weight + group_weight
                 test_cube = trip_cube + group_cube
                 test_drops = len(test_codes)
-                
+
                 # หา buffer ที่ใช้
                 test_is_punthai = all(branch_bu_cache.get(c, False) for c in test_codes)
                 buffer = punthai_buffer if test_is_punthai else maxmart_buffer
-                
-                # ใช้รถที่เลือก (ไม่เกินข้อจำกัดสาขา)
-                max_vehicle = selected_vehicle
                 limits = PUNTHAI_LIMITS if test_is_punthai else LIMITS
-                max_w = limits[max_vehicle]['max_w'] * buffer
-                max_c = limits[max_vehicle]['max_c'] * buffer
-                max_d = limits[max_vehicle]['max_drops']
-                
-                # เช็คว่าเกิน buffer หรือไม่
-                if test_weight > max_w or test_cube > max_c or test_drops > max_d:
-                    # เกิน buffer → ปิดทริป (ตัดทันที ไม่เจือสาขาอื่น)
+
+                # 🎯 ลอจิกมนุษย์: เลือกรถเล็กสุดที่รับโหลดได้ ไม่เกินข้อจำกัดสาขา
+                # ลำดับ: 4W → JB → 6W  เล็กก่อน ถ้าเกิน → ขึ้นไปรถใหญ่ขึ้น
+                # ถ้าข้อจำกัดสาขาห้าม upgrade (group_min_max_rank=1) หรือโหลดเกินทุกรถ → ปิดทริป
+                selected_vehicle = None
+                for veh in ['4W', 'JB', '6W']:
+                    veh_rank = vehicle_rank.get(veh, 3)
+                    if veh_rank > group_min_max_rank:
+                        break  # เกินข้อจำกัดสาขา — ไม่ลอง upgrade ต่อ
+                    if veh not in test_allowed:
+                        continue
+                    lim = limits[veh]
+                    if (test_weight <= lim['max_w'] * buffer and
+                            test_cube <= lim['max_c'] * buffer and
+                            test_drops <= lim['max_drops']):
+                        selected_vehicle = veh
+                        break  # เล็กสุดที่รับโหลดได้
+
+                if not selected_vehicle:
+                    # ไม่มีรถที่รับโหลดได้ในข้อจำกัดสาขา → ปิดทริป
                     if len(group_codes_valid) > 1:
-                        safe_print(f"      🛑 กลุ่ม {len(group_codes_valid)} สาขา (ใกล้สุด) เกิน buffer → ปิดทริป {trip_counter}")
+                        safe_print(f"      🛑 กลุ่ม {len(group_codes_valid)} สาขา (ใกล้สุด) โหลดเกินทุกรถที่อนุญาต → ปิดทริป {trip_counter}")
                     else:
-                        safe_print(f"      🛑 สาขา {candidate_code} (ใกล้สุด) เกิน buffer → ปิดทริป {trip_counter}")
+                        safe_print(f"      🛑 สาขา {candidate_code} (ใกล้สุด) โหลดเกินทุกรถที่อนุญาต → ปิดทริป {trip_counter}")
                     break
                 
                 # ✅ เพิ่มสาขาทั้งกลุ่มเข้าทริป (จุดส่งเดียวกัน ≤200m)
+                # กำหนด max_w/max_c จาก selected_vehicle (ใช้เช็ค utilization ด้านล่าง)
+                max_w = limits[selected_vehicle]['max_w'] * buffer
+                max_c = limits[selected_vehicle]['max_c'] * buffer
                 for gc in group_codes_valid:
                     if gc not in trip_codes:
                         trip_codes.append(gc)
@@ -3561,20 +3568,27 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         branch_c = branch_row['Cube']
         branch_vehicle = branch_max_vehicle_cache.get(branch_code, '6W')
         branch_priority = vehicle_priority.get(branch_vehicle, 3)
-    
-        
-        # เช็คน้ำหนัก/ปริมาตร
+
+        # 🚫 เช็ค vehicle constraint: effective vehicle = min(trip, branch)
+        # ถ้าเพิ่มสาขานี้แล้วต้อง downgrade รถ → ตรวจว่าโหลดรวมยังพอดีรถเล็กลงไหม
+        effective_priority = min(trip_capacity['min_priority'], branch_priority)
+        effective_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(effective_priority, '6W')
+        is_punthai = trip_capacity.get('is_punthai', False)
+        eff_limits = (PUNTHAI_LIMITS if is_punthai else LIMITS)[effective_vehicle]
+        eff_buffer = punthai_buffer if is_punthai else maxmart_buffer
+
+        # เช็คน้ำหนัก/ปริมาตร/drops กับรถที่ effective จริงๆ
         new_w = trip_capacity['weight'] + branch_w
         new_c = trip_capacity['cube'] + branch_c
         new_drops = trip_capacity['drops'] + 1
-        
-        if new_w > trip_capacity['max_w']:
-            return False, "น้ำหนักเกิน"
-        if new_c > trip_capacity['max_c']:
-            return False, "ปริมาตรเกิน"
-        if new_drops > trip_capacity['max_drops']:
-            return False, "Drop เกิน"
-        
+
+        if new_w > eff_limits['max_w'] * eff_buffer:
+            return False, f"น้ำหนักเกิน ({effective_vehicle})"
+        if new_c > eff_limits['max_c'] * eff_buffer:
+            return False, f"ปริมาตรเกิน ({effective_vehicle})"
+        if new_drops > eff_limits['max_drops']:
+            return False, f"Drop เกิน ({effective_vehicle})"
+
         return True, "OK"
     
     def get_nearby_branches(branch_row, all_branches_df, max_dist_km=6.0):
@@ -3685,6 +3699,19 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                 if not _region_ok:
                     safe_print(f"      🚫 merge skip {branch_code} ภาคต่างกัน ({_b_region}/{_b_prov} ≠ {_trip_regions})")
                     continue
+                # 🛑 Distance fallback: สาขาไม่รู้จังหวัด + ทริปมีภาคที่รู้ → เช็คระยะ (>15km block)
+                if (not _b_region or _b_region == 'ไม่ระบุ') and _trip_regions:
+                    _bx_lat = float(branch_row.get('_lat', 0) or 0)
+                    _bx_lon = float(branch_row.get('_lon', 0) or 0)
+                    _tx_lat = float(trip_cap.get('centroid_lat', 0) or 0)
+                    _tx_lon = float(trip_cap.get('centroid_lon', 0) or 0)
+                    if _bx_lat and _tx_lat:
+                        _dp6 = radians(_bx_lat - _tx_lat); _dl6 = radians(_bx_lon - _tx_lon)
+                        _a6 = sin(_dp6/2)**2 + cos(radians(_tx_lat))*cos(radians(_bx_lat))*sin(_dl6/2)**2
+                        _dist_mg = 2*6371*atan2(sqrt(_a6), sqrt(1-_a6))
+                        if _dist_mg > 15.0:
+                            safe_print(f"      🛑 MERGE DIST GUARD: ตัด {branch_code} ห่าง {_dist_mg:.1f}km (ไม่รู้จังหวัด ภาคทริป={_trip_regions})")
+                            continue
                 _zone_ok = (
                     _b_prov in trip_cap.get('provinces', set()) or
                     _b_zone in trip_cap.get('logistics_zones', set()) or
@@ -3743,6 +3770,18 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
                         )
                         if not _nb_region_ok:
                             continue
+                        # 🛑 Nearby distance fallback: สาขาไม่รู้จังหวัด + ทริปมีภาค → >15km block
+                        if (not _nb_region or _nb_region == 'ไม่ระบุ') and _trip_regions_nb:
+                            _nbx_lat = float(nearby_row.get('_lat', 0) or 0)
+                            _nbx_lon = float(nearby_row.get('_lon', 0) or 0)
+                            _txn_lat = float(trip_cap.get('centroid_lat', 0) or 0)
+                            _txn_lon = float(trip_cap.get('centroid_lon', 0) or 0)
+                            if _nbx_lat and _txn_lat:
+                                _dp7 = radians(_nbx_lat - _txn_lat); _dl7 = radians(_nbx_lon - _txn_lon)
+                                _a7 = sin(_dp7/2)**2 + cos(radians(_txn_lat))*cos(radians(_nbx_lat))*sin(_dl7/2)**2
+                                _dist_mg7 = 2*6371*atan2(sqrt(_a7), sqrt(1-_a7))
+                                if _dist_mg7 > 15.0:
+                                    continue
                         _nb_zone_ok = (
                             _nb_prov in trip_cap.get('provinces', set()) or
                             _nb_zone in trip_cap.get('logistics_zones', set()) or
@@ -3855,62 +3894,33 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         buffer_label = f"🅿️ {buffer_pct}%" if is_punthai_only_trip else f"🅼 {buffer_pct}%"
         trip_type = 'punthai' if is_punthai_only_trip else 'maxmart'
         
-        # เลือกรถที่พอดีที่สุด
-        suggested = max_allowed_vehicle
+        # 🎯 เลือกรถตามภาค + ข้อจำกัดสาขา
+        # เหนือ/ใต้ → ใช้รถใหญ่สุดที่อนุญาตเสมอ (ไม่ downgrade — เส้นทางไกล)
+        # ภาคอื่น  → เล็กสุดที่รับโหลดได้ (ประหยัดรถ)
+        limits_to_check = PUNTHAI_LIMITS if is_punthai_only_trip else LIMITS
+        is_long_haul = str(trip_region) in ('เหนือ', 'ใต้')
+        suggested = max_allowed_vehicle  # fallback = รถใหญ่สุดที่อนุญาต
         source = "📋 จำกัดสาขา" if min_max_size < 3 else "🤖 อัตโนมัติ"
-        
-        # ✅ ตรวจสอบ Minimum Utilization (ไม่ให้ต่ำกว่ามาตรฐาน)
-        if suggested in LIMITS:
-            limits_to_check = PUNTHAI_LIMITS if is_punthai_only_trip else LIMITS
-            max_w = limits_to_check[suggested]['max_w']
-            max_c = limits_to_check[suggested]['max_c']
-            w_util = (total_w / max_w) * 100
-            c_util = (total_c / max_c) * 100
-            current_util = max(w_util, c_util)
-            
-            # ถ้า utilization ต่ำกว่า MIN_VEHICLE_UTILIZATION และสามารถใช้รถเล็กกว่าได้
-            min_util_threshold = MIN_VEHICLE_UTILIZATION * 100
-            if current_util < min_util_threshold:
-                # 🔽 ลองดาวน์เกรด: 6W → JB → 4W (เมื่อหมดสาขาแล้วจริงๆ)
-                if suggested == '6W':
-                    # ลอง JB
-                    if 'JB' in max_vehicles:
-                        jb_lim = limits_to_check['JB']
-                        if total_w <= jb_lim['max_w'] * buffer and total_c <= jb_lim['max_c'] * buffer:
-                            suggested = 'JB'
-                            source = "🔽 Downgrade (หมดสาขา)"
-                        else:
-                            # ลอง 4W
-                            if '4W' in max_vehicles:
-                                fw_lim = limits_to_check['4W']
-                                if total_w <= fw_lim['max_w'] * buffer and total_c <= fw_lim['max_c'] * buffer:
-                                    suggested = '4W'
-                                    source = "🔽 Downgrade (หมดสาขา)"
-                    elif '4W' in max_vehicles:
-                        # ไม่มี JB ลองข้ามไป 4W เลย
-                        fw_lim = limits_to_check['4W']
-                        if total_w <= fw_lim['max_w'] * buffer and total_c <= fw_lim['max_c'] * buffer:
-                            suggested = '4W'
-                            source = "🔽 Downgrade (หมดสาขา)"
-                elif suggested == 'JB':
-                    # ลอง 4W
-                    if '4W' in max_vehicles:
-                        fw_lim = limits_to_check['4W']
-                        if total_w <= fw_lim['max_w'] * buffer and total_c <= fw_lim['max_c'] * buffer:
-                            suggested = '4W'
-                            source = "🔽 Downgrade (หมดสาขา)"
-                if suggested == '6W' and 'JB' in max_vehicles:
-                    jb_w_util = (total_w / limits_to_check['JB']['max_w']) * 100
-                    jb_c_util = (total_c / limits_to_check['JB']['max_c']) * 100
-                    if max(jb_w_util, jb_c_util) >= min_util_threshold:
-                        suggested = 'JB'
-                        source += " → JB (Optimize)"
-                elif suggested == 'JB' and '4W' in max_vehicles:
-                    fw_w_util = (total_w / limits_to_check['4W']['max_w']) * 100
-                    fw_c_util = (total_c / limits_to_check['4W']['max_c']) * 100
-                    if max(fw_w_util, fw_c_util) >= min_util_threshold and trip_drops <= limits_to_check['4W']['max_drops']:
-                        suggested = '4W'
-                        source += " → 4W (Optimize)"
+        if is_long_haul:
+            # เหนือ/ใต้: ใช้ max_allowed_vehicle ตรงๆ ไม่ลอง downgrade
+            if min_max_size >= 3:
+                source = "🚛 ไกล (เหนือ/ใต้)"
+            else:
+                source = "📋 จำกัดสาขา (เหนือ/ใต้)"
+        else:
+            # ภาคอื่น: ลอง 4W → JB → 6W เลือกเล็กสุดที่รับโหลดได้
+            for _veh in ['4W', 'JB', '6W']:
+                _vr = vehicle_priority.get(_veh, 3)
+                if _vr > min_max_size:
+                    break  # ห้ามเกินข้อจำกัดสาขา
+                _lim = limits_to_check[_veh]
+                if (total_w <= _lim['max_w'] * buffer and
+                        total_c <= _lim['max_c'] * buffer and
+                        trip_drops <= _lim['max_drops']):
+                    suggested = _veh
+                    if _vr < min_max_size:
+                        source = "🔽 Downgrade (ขนาดพอดี)"
+                    break  # เล็กสุดที่รับโหลดได้
         
         # 🔒 Punthai Drop Limit Check
         if is_punthai_only_trip:
@@ -4029,21 +4039,40 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
             
         trip_codes = trip_data['Code'].tolist()
         
-        # 🚗 หารถที่ถูกต้องตามข้อจำกัดสาขา (ใช้รถเล็กที่สุดที่รับได้)
+        # 🚗 หารถที่ถูกต้องตามข้อจำกัดสาขา (รถเล็กสุดที่รับโหลดได้)
         max_vehicles = [get_max_vehicle_for_branch(c) for c in trip_codes]
         vehicle_priority_map = {'4W': 1, 'JB': 2, '6W': 3}
         min_max_size = min(vehicle_priority_map.get(v, 3) for v in max_vehicles)
-        correct_vehicle = {1: '4W', 2: 'JB', 3: '6W'}.get(min_max_size, '6W')
+        max_allowed_v = {1: '4W', 2: 'JB', 3: '6W'}.get(min_max_size, '6W')
         
-        # ดึง limits ตาม BU และรถที่ถูกต้อง
+        # ดึง limits ตาม BU
         bu_type = trip_summary['BU_Type']
         is_punthai = (bu_type == 'punthai')
         buffer = punthai_buffer if is_punthai else maxmart_buffer
         limits = PUNTHAI_LIMITS if is_punthai else LIMITS
         
-        # คำนวณ utilization ด้วยรถที่ถูกต้อง
+        # คำนวณน้ำหนัก/คิวก่อน (ใช้เลือกรถ)
         total_w = trip_data['Weight'].sum()
         total_c = trip_data['Cube'].sum()
+        
+        # 🎯 เลือกรถตามภาค + ข้อจำกัดสาขา (เหนือ/ใต้ → รถใหญ่สุดที่อนุญาต)
+        trip_region_75 = trip_data['_region_name'].iloc[0] if '_region_name' in trip_data.columns else 'ไม่ระบุ'
+        is_long_haul_75 = str(trip_region_75) in ('เหนือ', 'ใต้')
+        correct_vehicle = max_allowed_v  # fallback = รถใหญ่สุดที่อนุญาต
+        if not is_long_haul_75:
+            # ภาคอื่น: เล็กสุดที่รับโหลดได้
+            for _veh in ['4W', 'JB', '6W']:
+                _vr = vehicle_priority_map.get(_veh, 3)
+                if _vr > min_max_size:
+                    break  # ห้ามเกินข้อจำกัดสาขา
+                _lim = limits[_veh]
+                if (total_w <= _lim['max_w'] * buffer and
+                        total_c <= _lim['max_c'] * buffer and
+                        len(trip_codes) <= _lim['max_drops']):
+                    correct_vehicle = _veh
+                    break  # เล็กสุดที่รับโหลดได้
+        # เหนือ/ใต้: correct_vehicle = max_allowed_v แล้ว (ไม่ downgrade)
+        
         max_w = limits[correct_vehicle]['max_w'] * buffer
         max_c = limits[correct_vehicle]['max_c'] * buffer
         max_drops = limits[correct_vehicle]['max_drops']
@@ -4053,7 +4082,14 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10):
         max_util = max(w_util, c_util)
         
         # อัพเดต summary ด้วยรถที่ถูกต้อง
-        truck_source = "📋 จำกัดสาขา" if min_max_size < 3 else "🤖 อัตโนมัติ"
+        if is_long_haul_75:
+            truck_source = "🚛 ไกล (เหนือ/ใต้)" if min_max_size >= 3 else "📋 จำกัดสาขา (เหนือ/ใต้)"
+        elif min_max_size < 3:
+            truck_source = "📋 จำกัดสาขา"
+        elif vehicle_priority_map.get(correct_vehicle, 3) < min_max_size:
+            truck_source = "🔽 Downgrade (ขนาดพอดี)"
+        else:
+            truck_source = "🤖 อัตโนมัติ"
         summary_data[i]['Truck'] = f"{correct_vehicle} {truck_source}"
         summary_data[i]['Weight_Use%'] = w_util
         summary_data[i]['Cube_Use%'] = c_util
@@ -5112,7 +5148,7 @@ def main():
                                 import streamlit.components.v1 as _cmp2
                                 import hashlib as _hl
 
-                                _imap_sig = f"v8|{len(assigned_df)}|{int(assigned_df['Trip'].max())}|{sorted(assigned_df['Trip'].unique().tolist())}"
+                                _imap_sig = f"v10|{len(assigned_df)}|{int(assigned_df['Trip'].max())}|{sorted(assigned_df['Trip'].unique().tolist())}"
                                 _imap_key = _hl.md5(_imap_sig.encode()).hexdigest()[:12]
 
                                 if st.session_state.get('_imap_key') != _imap_key:
