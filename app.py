@@ -1986,10 +1986,18 @@ def get_zone_priority(zone_name):
     Returns:
         int: 1-99 (1 = ไกลสุด, 99 = ใกล้สุด)
     """
-    if not zone_name or zone_name not in LOGISTICS_ZONES:
-        return 999  # ไม่รู้จักโซน → ให้ส่งทีหลังสุด
-    
-    return LOGISTICS_ZONES[zone_name]['priority']
+    if not zone_name:
+        return 999
+    # LOGISTICS_ZONES format (ZONE_A_พะเยา)
+    if zone_name in LOGISTICS_ZONES:
+        return LOGISTICS_ZONES[zone_name]['priority']
+    # zone_viewer format (เหนือ_จังหวัด_อำเภอ / BKK_เขต)
+    _ZV_PRIORITY = {
+        'เหนือ': 5, 'อีสาน': 12, 'ใต้': 20, 'ตะวันออก': 16,
+        'ตะวันตก': 18, 'ปริมณฑล': 80, 'BKK': 90,
+    }
+    prefix = zone_name.split('_')[0] if '_' in zone_name else zone_name
+    return _ZV_PRIORITY.get(prefix, 50)
 
 def get_zone_highway(zone_name):
     """
@@ -1998,10 +2006,17 @@ def get_zone_highway(zone_name):
     Returns:
         str: เช่น 'สาย 1 (พหลโยธิน)', 'สาย 2 (มิตรภาพ)'
     """
-    if not zone_name or zone_name not in LOGISTICS_ZONES:
+    if not zone_name:
         return ''
-    
-    return LOGISTICS_ZONES[zone_name].get('highway', '')
+    if zone_name in LOGISTICS_ZONES:
+        return LOGISTICS_ZONES[zone_name].get('highway', '')
+    # zone_viewer format — derive highway from zone prefix
+    _ZV_HW = {
+        'เหนือ': '1/11', 'อีสาน': '2/24', 'ใต้': '4',
+        'ตะวันออก': '3', 'ตะวันตก': '32/4', 'ปริมณฑล': '',
+    }
+    prefix = zone_name.split('_')[0] if '_' in zone_name else zone_name
+    return _ZV_HW.get(prefix, '')
 
 def can_combine_zones_by_highway(zone1, zone2):
     """
@@ -2296,6 +2311,27 @@ def _build_master_dict(md: 'pd.DataFrame') -> dict:
     return result
 
 MASTER_DATA_DICT: dict = _build_master_dict(MASTER_DATA)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 🗺️ BRANCH_ZONES_CACHE — โหลดจาก branch_zones.json ที่ zone_viewer.py สร้าง
+# Format: {branch_code_upper: zone_string}  เช่น "NY00" → "เหนือ_เชียงใหม่_เมือง"
+# ══════════════════════════════════════════════════════════════════════════════
+def _load_branch_zones() -> dict:
+    """โหลด branch_zones.json ที่ zone_viewer.py export ไว้"""
+    _path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'branch_zones.json')
+    if not os.path.exists(_path):
+        safe_print("⚠️ ไม่พบ branch_zones.json — ใช้ LOGISTICS_ZONES แทน (รัน zone_viewer.py ก่อน)")
+        return {}
+    try:
+        with open(_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        safe_print(f"🗺️ โหลด branch_zones.json: {len(data):,} สาขา")
+        return {str(k).upper(): v for k, v in data.items()}
+    except Exception as e:
+        safe_print(f"⚠️ โหลด branch_zones.json ล้มเหลว: {e}")
+        return {}
+
+BRANCH_ZONES_CACHE: dict = _load_branch_zones()
 
 # ==========================================
 # 🔄 BRANCH GROUPING (จุดส่งเดียวกัน ≤200 เมตร)
@@ -3309,10 +3345,18 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
     df['_bearing_zone'] = df['_bearing_from_dc'].apply(get_bearing_zone)
     
     # 🚨 เพิ่ม Logistics Zone สำหรับ routing ตามทางหลวง
-    df['_logistics_zone'] = df.apply(
-        lambda row: get_logistics_zone(row['_province'], row['_district'], row['_subdistrict']),
-        axis=1
-    )
+    # 🗺️ ลำดับความสำคัญ:
+    #   1. BRANCH_ZONES_CACHE (จาก zone_viewer.py) — ถ้ามี branch_zones.json
+    #   2. get_logistics_zone(province, district) — LOGISTICS_ZONES fallback
+    def _get_zone_for_row(row):
+        code = str(row.get('Code', '')).strip().upper()
+        if code and BRANCH_ZONES_CACHE:
+            z = BRANCH_ZONES_CACHE.get(code)
+            if z:
+                return z
+        return get_logistics_zone(row['_province'], row['_district'], row['_subdistrict'])
+
+    df['_logistics_zone'] = df.apply(_get_zone_for_row, axis=1)
     df['_zone_priority'] = df['_logistics_zone'].apply(get_zone_priority)
     df['_zone_highway'] = df['_logistics_zone'].apply(get_zone_highway)
     # 🎯 Province Zone (zone_viewer.py system) — ใช้ป้องกันกระโดดข้ามจังหวัด
