@@ -3347,14 +3347,29 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
     # 🚨 เพิ่ม Logistics Zone สำหรับ routing ตามทางหลวง
     # 🗺️ ลำดับความสำคัญ:
     #   1. BRANCH_ZONES_CACHE (จาก zone_viewer.py) — ถ้ามี branch_zones.json
-    #   2. get_logistics_zone(province, district) — LOGISTICS_ZONES fallback
+    #   2. PROVINCE_ZONE_MAP fallback — ใช้ logic เดียวกับ zone_viewer.py
+    def _zone_from_prov_dist(prov: str, dist: str) -> str:
+        """Fallback zone ใช้ logic เดียวกับ zone_viewer.py load_and_classify()"""
+        prov = str(prov or '').strip()
+        for _alias, _full in [("กรุงเทพฯ","กรุงเทพมหานคร"),("กทม","กรุงเทพมหานคร"),("กทม.","กรุงเทพมหานคร"),("โคราช","นครราชสีมา")]:
+            if prov == _alias: prov = _full; break
+        dist = str(dist or '').strip()
+        rz = PROVINCE_ZONE_MAP.get(prov)
+        if rz == '__BKK__':
+            return f'BKK_{dist}' if dist else 'BKK_ไม่ระบุ'
+        if rz:
+            parts = rz.split('_', 1)
+            prefix, prov_short = parts[0], parts[1] if len(parts) > 1 else rz
+            return f'{prefix}_{prov_short}_{dist}' if dist else rz
+        return f'ไม่ระบุ_{prov}' if prov else 'ไม่ระบุ'
+
     def _get_zone_for_row(row):
         code = str(row.get('Code', '')).strip().upper()
         if code and BRANCH_ZONES_CACHE:
             z = BRANCH_ZONES_CACHE.get(code)
             if z:
                 return z
-        return get_logistics_zone(row['_province'], row['_district'], row['_subdistrict'])
+        return _zone_from_prov_dist(row['_province'], row['_district'])
 
     df['_logistics_zone'] = df.apply(_get_zone_for_row, axis=1)
     df['_zone_priority'] = df['_logistics_zone'].apply(get_zone_priority)
