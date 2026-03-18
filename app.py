@@ -2334,6 +2334,26 @@ def _load_branch_zones() -> dict:
 BRANCH_ZONES_CACHE: dict = _load_branch_zones()
 
 # ==========================================
+# 🧠 BRANCH HISTORY CACHE — โหลดจาก branch_history.json (เรียนรู้จาก Fulfillment)
+# Format: {CODE_upper: {preferred_truck, truck_confidence, truck_votes, avg_cube, avg_wgt}}
+# ==========================================
+def _load_branch_history() -> dict:
+    _path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'branch_history.json')
+    if not os.path.exists(_path):
+        return {}
+    try:
+        with open(_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        branches = data.get('branches', {})
+        safe_print(f"🧠 Branch History: โหลด {len(branches):,} สาขา (preferred_truck + companions)")
+        return {str(k).upper(): v for k, v in branches.items()}
+    except Exception as e:
+        safe_print(f"⚠️ โหลด branch_history.json ล้มเหลว: {e}")
+        return {}
+
+BRANCH_HISTORY_CACHE: dict = _load_branch_history()
+
+# ==========================================
 # 🔄 BRANCH GROUPING (จุดส่งเดียวกัน ≤200 เมตร)
 # โหลดจาก branch_groups.json (สร้างโดย test_groups.py ด้วย haversine 200m)
 # ==========================================
@@ -5301,6 +5321,32 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                     if _vr < min_max_size:
                         source = "🔽 Downgrade (ขนาดพอดี)"
                     break  # เล็กสุดที่รับโหลดได้
+
+        # 🧠 BRANCH HISTORY: preferred_truck จาก Fulfillment ข้อมูลจริง
+        # ถ้า ≥70% ของสาขาในทริปมี preferred_truck ที่ใหญ่กว่า suggested → upgrade (ถ้าข้อจำกัดสาขาอนุญาต)
+        if BRANCH_HISTORY_CACHE and not is_long_haul:
+            _hist_votes = {'4W': 0, 'JB': 0, '6W': 0}
+            _hist_total = 0
+            for _hc in trip_codes:
+                _hinfo = BRANCH_HISTORY_CACHE.get(str(_hc).strip().upper(), {})
+                _hpref = _hinfo.get('preferred_truck', '')
+                _hconf = _hinfo.get('truck_confidence', 0)
+                _hcnt = _hinfo.get('trip_count', 0)
+                if _hpref in _hist_votes and _hconf >= 0.70 and _hcnt >= 5:
+                    _hist_votes[_hpref] += 1
+                    _hist_total += 1
+            if _hist_total > 0:
+                _vrank = {'4W': 1, 'JB': 2, '6W': 3}
+                _hist_top = max(_hist_votes, key=_hist_votes.get)
+                _hist_ratio = _hist_votes[_hist_top] / _hist_total
+                _hist_rank = _vrank.get(_hist_top, 1)
+                _sug_rank = _vrank.get(suggested, 1)
+                # upgrade ถ้า: historical truck ใหญ่กว่า + majority ≥70% + ข้อจำกัดสาขาอนุญาต
+                if _hist_ratio >= 0.70 and _hist_rank > _sug_rank and _hist_rank <= min_max_size:
+                    _old_sug = suggested
+                    suggested = _hist_top
+                    source += f" 📚 History({_hist_top},{_hist_ratio:.0%})"
+                    safe_print(f"      📚 History upgrade: {_old_sug}→{suggested} ({_hist_votes[_hist_top]}/{_hist_total} สาขา prefer {_hist_top})")
         
         # 🔒 Punthai Drop Limit Check
         if is_punthai_only_trip:
