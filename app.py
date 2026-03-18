@@ -6552,6 +6552,19 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
 
                     st.markdown("---")
                     st.markdown("#### 🚛 จำนวนรถที่มี (ใส่ 0 = ไม่จำกัด)")
+                    # โหลด fleet avg จาก branch_history (ข้อมูลจริงจาก Fulfillment)
+                    _bh_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'branch_history.json')
+                    _bh_meta = {}
+                    if os.path.exists(_bh_path):
+                        try:
+                            with open(_bh_path, encoding='utf-8') as _f:
+                                _bh_meta = json.load(_f).get('_meta', {})
+                        except Exception:
+                            pass
+                    _bh_avg = _bh_meta.get('fleet_avg_per_day', {})
+                    _bh_max = _bh_meta.get('fleet_max_per_day', {})
+                    if _bh_avg:
+                        st.caption(f"📊 ข้อมูลจริง ({_bh_meta.get('days',0)} วัน): เฉลี่ย 4W={_bh_avg.get('4W',0):.0f} / JB={_bh_avg.get('JB',0):.0f} / 6W={_bh_avg.get('6W',0):.0f} คัน/วัน  ·  สูงสุด 4W={_bh_max.get('4W',0)} / JB={_bh_max.get('JB',0)} / 6W={_bh_max.get('6W',0)}")
                     col_f1, col_f2, col_f3 = st.columns(3)
                     with col_f1:
                         fleet_4w = st.number_input("🚗 4W (คัน)", min_value=0, max_value=99, value=0, step=1, key="fleet_4w",
@@ -6729,6 +6742,8 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                         if _fu:
                             st.markdown("---")
                             st.markdown("#### 🚛 สรุปการใช้รถ")
+                            # คำนวณ avg utilization per truck type จาก summary
+                            _sum_df = st.session_state.get('trip_summary', summary)
                             _fc1, _fc2, _fc3 = st.columns(3)
                             for _col, _vtype, _icon in [(_fc1, '4W', '🚗'), (_fc2, 'JB', '🚚'), (_fc3, '6W', '🚛')]:
                                 _used = _fu.get(_vtype, 0)
@@ -6741,6 +6756,16 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                                               delta_color="inverse" if _over else "normal")
                                     if _over:
                                         st.warning(f"⚠️ เกินโควต้า {_vtype}: ใช้ {_used}/{_limit}")
+                                    # avg utilization
+                                    if len(_sum_df) > 0 and 'Truck' in _sum_df.columns:
+                                        _mask = _sum_df['Truck'].astype(str).str.split().str[0] == _vtype
+                                        _vdf = _sum_df[_mask]
+                                        if len(_vdf) > 0:
+                                            _avg_c = _vdf['Cube_Use%'].mean() if 'Cube_Use%' in _vdf.columns else 0
+                                            _avg_w = _vdf['Weight_Use%'].mean() if 'Weight_Use%' in _vdf.columns else 0
+                                            _c_color = "🟢" if _avg_c <= 80 else ("🟡" if _avg_c <= 95 else "🔴")
+                                            _w_color = "🟢" if _avg_w <= 80 else ("🟡" if _avg_w <= 95 else "🔴")
+                                            st.caption(f"📦 พื้นที่: {_c_color} {_avg_c:.0f}%  ·  ⚖️ น้ำหนัก: {_w_color} {_avg_w:.0f}%")
                         elif _any_limit:
                             st.info("ℹ️ ตั้งโควต้ารถไว้แล้ว — จัดทริปใหม่เพื่อดูผล")
                         
@@ -7046,6 +7071,16 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                             _c1.metric("Sessions ที่บันทึก", _ai_stats['sessions'])
                             _c2.metric("คู่สาขาที่เรียนรู้", f"{_ai_stats['unique_pairs']:,}")
                             _c3.metric("ทริปในระบบ", f"{sum(s.get('trips',0) for s in (json.load(open(TRIP_HISTORY_FILE,encoding='utf-8')).get('sessions',[]) if os.path.exists(TRIP_HISTORY_FILE) else []))}")
+
+                            # แจ้ง source ของ pair data
+                            _bh_p2 = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'branch_history.json')
+                            if os.path.exists(_bh_p2):
+                                try:
+                                    _bh2 = json.load(open(_bh_p2, encoding='utf-8'))
+                                    _m2 = _bh2.get('_meta', {})
+                                    st.caption(f"📂 รวมข้อมูล Fulfillment จริง: {len(_bh2.get('branches',{})):,} สาขา · {_m2.get('days',0)} วัน ({_m2.get('date_range','')})")
+                                except Exception:
+                                    pass
 
                             if st.button("💾 บันทึกการเรียนรู้จากทริปนี้", type="secondary", use_container_width=True):
                                 _n_saved = save_trip_history(assigned_df)
