@@ -4455,6 +4455,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
         total_w = trip_data['Weight'].sum()
         total_c = trip_data['Cube'].sum()
         codes = trip_data['Code'].tolist()
+        unique_codes = trip_data['Code'].unique().tolist()  # unique branch codes
         
         # เช็ค BU
         is_punthai = all(branch_bu_cache.get(c, False) for c in codes)
@@ -4492,7 +4493,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
             'weight': total_w,
             'cube': total_c,
             'codes': codes,
-            'drops': len(codes),
+            'drops': len(unique_codes),  # นับ unique branch codes เท่านั้น
             'max_w': max_w,
             'max_c': max_c,
             'max_drops': max_drops,
@@ -4510,8 +4511,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
     def can_add_branch_to_trip(branch_row, trip_capacity):
         """เช็คว่าสามารถเพิ่มสาขานี้เข้าทริปได้หรือไม่"""
         branch_code = branch_row['Code']
-        branch_w = branch_row['Weight']
-        branch_c = branch_row['Cube']
+        # ใช้ผลรวมทุก row ของ code นี้ (กรณี multi-BU เช่น LUBE+SUPPLY USE มีหลาย row)
+        _code_rows = df[df['Code'] == branch_code]
+        branch_w = float(_code_rows['Weight'].sum())
+        branch_c = float(_code_rows['Cube'].sum())
         branch_vehicle = branch_max_vehicle_cache.get(branch_code, '6W')
         branch_priority = vehicle_priority.get(branch_vehicle, 3)
 
@@ -5220,10 +5223,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                             if _fvr > _comb_min_rank:
                                 continue
                             _fl_c = _comb_lim[_fv]
-                            _rd = _fc_relaxed_drops.get(_fv, _fl_c['max_drops'])
+                            # drops: ใช้ strict limit เสมอ — ไม่ผ่อน เพื่อป้องกัน validation failure
                             if (_comb_w <= _fl_c['max_w'] * _comb_buf and
                                     _comb_c <= _fl_c['max_c'] * _comb_buf and
-                                    _comb_rows <= _rd):
+                                    _comb_rows <= _fl_c['max_drops']):
                                 _fc_fit_veh = _fv
                                 break
 
@@ -5493,6 +5496,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
             continue
             
         trip_codes = trip_data['Code'].tolist()
+        trip_unique_drops = trip_data['Code'].nunique()  # จำนวนจุดจริง (ไม่นับซ้ำ multi-BU)
         
         # 🚗 หารถที่ถูกต้องตามข้อจำกัดสาขา (รถเล็กสุดที่รับโหลดได้)
         max_vehicles = [get_max_vehicle_for_branch(c) for c in trip_codes]
@@ -5523,7 +5527,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 _lim = limits[_veh]
                 if (total_w <= _lim['max_w'] * buffer and
                         total_c <= _lim['max_c'] * buffer and
-                        len(trip_codes) <= _lim['max_drops']):
+                        trip_unique_drops <= _lim['max_drops']):
                     correct_vehicle = _veh
                     break  # เล็กสุดที่รับโหลดได้
         # เหนือ/ใต้: correct_vehicle = max_allowed_v แล้ว (ไม่ downgrade)
@@ -5551,14 +5555,14 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
         
         # ตรวจสอบว่าเกิน buffer หรือ drops หรือไม่
         is_over_buffer = total_w > max_w or total_c > max_c
-        is_over_drops = len(trip_codes) > max_drops
+        is_over_drops = trip_unique_drops > max_drops
         
         if is_over_buffer or is_over_drops:
-            reason = "เกิน buffer" if is_over_buffer else f"เกิน drops ({len(trip_codes)}>{max_drops})"
+            reason = "เกิน buffer" if is_over_buffer else f"เกิน drops ({trip_unique_drops}>{max_drops})"
             safe_print(f"   ⚠️ Trip {trip_num} {reason}: {max_util:.1f}% (รถ {correct_vehicle})")
             
             # 🚨 ถ้ามีแค่ 1 สาขา แต่เกิน buffer → ตัดสาขานั้นไป overflow ทั้งหมด
-            if len(trip_data) <= 1:
+            if trip_unique_drops <= 1:
                 code = trip_data.iloc[0]['Code'] if len(trip_data) == 1 else None
                 if code:
                     df.loc[df['Code'] == code, 'Trip'] = 0
@@ -5587,7 +5591,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
             # คำนวณน้ำหนัก/คิวปัจจุบัน
             current_w = trip_data['Weight'].sum()
             current_c = trip_data['Cube'].sum()
-            current_drops = len(trip_data)
+            current_drops = trip_unique_drops  # นับจุดจริง (unique codes)
             
             # ตัดสาขาออกจนกว่าจะไม่เกิน (weight, cube, และ drops)
             # ป้องกัน duplicate code: ตัด code ซ้ำเพียงครั้งเดียว (แต่ลบทุก row ในทริปนั้น)
@@ -5600,10 +5604,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 
                 code = row['Code']
                 if code in _cut_codes_seen:
-                    # แถวซ้ำ — อัพเดต current แต่ไม่เพิ่ม overflow ซ้ำ
+                    # แถวซ้ำของ code ที่ตัดไปแล้ว — อัพเดต weight/cube แต่ไม่นับ drop ซ้ำ
                     current_w -= row['Weight']
                     current_c -= row['Cube']
-                    current_drops -= 1
+                    # ไม่ decrement current_drops เพราะนับ unique code แล้ว
                     continue
                 _cut_codes_seen.add(code)
                 codes_to_remove.append(code)
@@ -6087,14 +6091,32 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 _fc2_rem = sorted(df[df['Trip'] > 0]['Trip'].unique())
                 _fc2_ren = {old: new for new, old in enumerate(_fc2_rem, start=1)}
                 df['Trip'] = df['Trip'].map(lambda x: _fc2_ren.get(x, x) if x > 0 else x)
-                # อัพเดต Truck label หลัง FC2
+                # อัพเดต Truck label หลัง FC2 — ทุก trip ต้องประเมินใหม่ (เพราะ renumber อาจทับ trip_truck_map เดิม)
+                trip_truck_map = {}  # reset ก่อนสร้างใหม่
                 for _fc2_t in df[df['Trip'] > 0]['Trip'].unique():
-                    if _fc2_t not in trip_truck_map:
-                        _fc2_td = df[df['Trip'] == _fc2_t]
-                        _fc2_mv_list = [branch_max_vehicle_cache.get(str(c).strip().upper(), '6W') for c in _fc2_td['Code'].unique()]
-                        _fc2_mr = min(vehicle_priority.get(v, 3) for v in _fc2_mv_list)
-                        _fc2_tk = {1: '4W', 2: 'JB', 3: '6W'}.get(_fc2_mr, '6W')
-                        df.loc[df['Trip'] == _fc2_t, 'Truck'] = f"{_fc2_tk} 🔀 FC2"
+                    _fc2_td = df[df['Trip'] == _fc2_t]
+                    _fc2_mv_list = [branch_max_vehicle_cache.get(str(c).strip().upper(), '6W') for c in _fc2_td['Code'].unique()]
+                    _fc2_mr = min(vehicle_priority.get(v, 3) for v in _fc2_mv_list)
+                    _fc2_tk = {1: '4W', 2: 'JB', 3: '6W'}.get(_fc2_mr, '6W')
+                    # เลือกรถที่เล็กที่สุดที่รับโหลดได้ (ไม่เกิน buffer และ max_drops)
+                    _fc2_tw = float(_fc2_td['Weight'].sum())
+                    _fc2_tc = float(_fc2_td['Cube'].sum())
+                    _fc2_nd = _fc2_td['Code'].nunique()
+                    _fc2_is_pun = all(branch_bu_cache.get(c, False) for c in _fc2_td['Code'].unique())
+                    _fc2_lim_sel = PUNTHAI_LIMITS if _fc2_is_pun else LIMITS
+                    _fc2_buf_sel = punthai_buffer if _fc2_is_pun else maxmart_buffer
+                    for _fv_sel in ['4W', 'JB', '6W']:
+                        if vehicle_priority.get(_fv_sel, 3) > _fc2_mr:
+                            break
+                        _fl_sel = _fc2_lim_sel[_fv_sel]
+                        if (_fc2_tw <= _fl_sel['max_w'] * _fc2_buf_sel and
+                                _fc2_tc <= _fl_sel['max_c'] * _fc2_buf_sel and
+                                _fc2_nd <= _fl_sel['max_drops']):
+                            _fc2_tk = _fv_sel
+                            break
+                    df.loc[df['Trip'] == _fc2_t, 'Truck'] = f"{_fc2_tk} 🔀 FC2"
+                    trip_truck_map[_fc2_t] = f"{_fc2_tk} 🔀 FC2"
+                df['Truck'] = df['Trip'].map(trip_truck_map)
             else:
                 safe_print(f"⚠️ FC2: ไม่มี merge เพิ่มเติม")
 

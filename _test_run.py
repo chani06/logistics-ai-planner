@@ -211,7 +211,7 @@ for t in sorted(result_df[result_df['Trip'] > 0]['Trip'].unique()):
     buf = 1.0 if is_pt else 1.10
     tw = tdata['Weight'].sum()
     tc = tdata['Cube'].sum()
-    dr = len(tdata)
+    dr = tdata['Code'].nunique()  # นับ unique codes (จุดส่ง) ไม่ใช่ rows
     is_over = (tw > lim['max_w'] * buf) or (tc > lim['max_c'] * buf) or (dr > lim['max_drops'])
     if is_over:
         # single-branch ที่ตัวเองเกิน capacity ของรถที่รับได้ = impossible case (ไม่ใช่ bug)
