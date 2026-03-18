@@ -84,12 +84,22 @@ except Exception as e:
 print("\n" + "=" * 70)
 print("🚛 predict_trips ...")
 print("=" * 70)
+
+# ── Fleet ที่มี — ตั้งเพื่อทดสอบ consolidation ──
+FLEET_LIMITS = {
+    'JB': 24,
+    '6W': 13,
+    '4W': 13,
+}
+print(f"   🎯 Fleet target: 4W={FLEET_LIMITS['4W']}, JB={FLEET_LIMITS['JB']}, 6W={FLEET_LIMITS['6W']} (รวม {sum(FLEET_LIMITS.values())} คัน)")
+
 try:
     result_df, summary_df, fleet_used = app.predict_trips(
         test_df=df,
         model_data=app.MASTER_DATA,
         punthai_buffer=1.0,
-        maxmart_buffer=1.10
+        maxmart_buffer=1.10,
+        fleet_limits=FLEET_LIMITS,
     )
     if result_df is None or result_df.empty:
         print("❌ predict_trips คืนข้อมูลว่าง")

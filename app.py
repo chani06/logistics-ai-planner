@@ -5090,6 +5090,149 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
         safe_print("🔗 Post-audit consolidation: nothing to merge")
 
     # ==========================================
+    # Step 6.9: 🚛 Fleet-Target Consolidation
+    # รันเฉพาะเมื่อ fleet_limits ถูกตั้ง — พยายามลดทริปให้พอดีกับกองยาน
+    # ยอมผ่อนปรน max_drops เมื่อจำเป็น แต่ยังคุม weight/cube/MaxTruckType
+    # ==========================================
+    if fleet_limits:
+        import math as _math_fc
+        _fl_target = sum(v for v in fleet_limits.values() if v and v < 999)
+        _fl_current_count = len(df[df['Trip'] > 0]['Trip'].unique())
+        if _fl_current_count > _fl_target:
+            safe_print(f"\n🚛 Step 6.9: Fleet Consolidation เป้าหมาย {_fl_target} ทริป (ปัจจุบัน {_fl_current_count})")
+
+            # คำนวณ drop limit ตามสัดส่วน branches/trucks ของแต่ละประเภทรถ
+            _fc_branch_type_count: dict = {'4W': 0, 'JB': 0, '6W': 0}
+            for _fc_c in df[df['Trip'] > 0]['Code'].unique():
+                _fc_mv = branch_max_vehicle_cache.get(str(_fc_c).strip().upper(), '6W')
+                if _fc_mv in _fc_branch_type_count:
+                    _fc_branch_type_count[_fc_mv] += 1
+
+            _fc_relaxed_drops: dict = {}
+            for _fc_vt, _fc_fl_cnt in fleet_limits.items():
+                if not _fc_fl_cnt or _fc_fl_cnt >= 999:
+                    continue
+                _fc_orig_drops = LIMITS[_fc_vt]['max_drops']
+                if _fc_orig_drops >= 999:  # 6W: unlimited
+                    _fc_relaxed_drops[_fc_vt] = 999
+                    continue
+                _fc_bc = _fc_branch_type_count.get(_fc_vt, 0)
+                # ผ่อนผัน: ใช้ max(original, ceil(branches/trucks)*1.5) เพื่อเปิดโอกาส merge
+                _fc_nd = max(_fc_orig_drops, int(_math_fc.ceil(_fc_bc / max(_fc_fl_cnt, 1) * 1.5)))
+                _fc_relaxed_drops[_fc_vt] = _fc_nd
+                safe_print(f"   📏 {_fc_vt}: {_fc_bc} branches ÷ {_fc_fl_cnt} trucks → max_drops ผ่อนถึง {_fc_nd} (ปกติ {_fc_orig_drops})")
+
+            _BKK_PROV_SET = {'กรุงเทพมหานคร', 'กรุงเทพฯ', 'กทม', 'กทม.', 'Bangkok'}
+
+            _fc_total_merged = 0
+            _fc_pass = True
+            while _fc_pass:
+                _fc_pass = False
+                _fc_trips_now = sorted(df[df['Trip'] > 0]['Trip'].unique())
+                if len(_fc_trips_now) <= _fl_target:
+                    break
+
+                # สร้าง trip info dict (เรียงจาก utilization ต่ำสุดก่อน = merge ออกก่อน)
+                _fc_info: dict = {}
+                for _ft in _fc_trips_now:
+                    _ftd = df[df['Trip'] == _ft]
+                    _ft_codes = _ftd['Code'].unique().tolist()
+                    _ft_ranks = [vehicle_priority.get(branch_max_vehicle_cache.get(str(c).strip().upper(), '6W'), 3) for c in _ft_codes]
+                    _ft_min_rank = min(_ft_ranks) if _ft_ranks else 3
+                    _ft_mv = {1: '4W', 2: 'JB', 3: '6W'}.get(_ft_min_rank, '6W')
+                    _ft_is_pun = all(branch_bu_cache.get(c, False) for c in _ft_codes)
+                    _ft_lim = PUNTHAI_LIMITS if _ft_is_pun else LIMITS
+                    _ft_buf = punthai_buffer if _ft_is_pun else maxmart_buffer
+                    _ft_prov = str(_ftd.iloc[0].get('_province', '') or '').strip()
+                    _ft_w = float(_ftd['Weight'].sum())
+                    _ft_c = float(_ftd['Cube'].sum())
+                    _ft_ndr = len(_ftd['Code'].unique())  # drops = unique code count
+                    _ft_util = max(_ft_w / (_ft_lim[_ft_mv]['max_w'] * _ft_buf),
+                                   _ft_c / (_ft_lim[_ft_mv]['max_c'] * _ft_buf)) if _ft_mv in _ft_lim else 0.0
+                    _fc_info[_ft] = {
+                        'codes': _ft_codes, 'w': _ft_w, 'c': _ft_c, 'rows': _ft_ndr,
+                        'min_rank': _ft_min_rank, 'mv': _ft_mv,
+                        'is_pun': _ft_is_pun, 'lim': _ft_lim, 'buf': _ft_buf,
+                        'prov': _ft_prov,
+                        'is_bkk': _ft_prov in _BKK_PROV_SET,
+                        'util': _ft_util,
+                        'lat': float(_ftd['_lat'].mean()) if '_lat' in _ftd.columns else 0.0,
+                        'lon': float(_ftd['_lon'].mean()) if '_lon' in _ftd.columns else 0.0,
+                    }
+
+                # เรียงจาก util ต่ำ → สูง (ลบทริปเล็ก/ว่างก่อน)
+                _fc_sorted = sorted(_fc_info.keys(), key=lambda t: _fc_info[t]['util'])
+
+                for _ts_id in _fc_sorted:
+                    if _ts_id not in _fc_info:
+                        continue
+                    _ts = _fc_info[_ts_id]
+
+                    for _tb_id in _fc_sorted:
+                        if _tb_id == _ts_id or _tb_id not in _fc_info:
+                            continue
+                        _tb = _fc_info[_tb_id]
+
+                        # ── Rule 1: BKK isolation ──────────────────────────────
+                        if _ts['is_bkk'] != _tb['is_bkk']:
+                            continue
+
+                        # ── Rule 2: Non-BKK: ต้องจังหวัดเดียวกัน ──────────────
+                        if not _ts['is_bkk'] and _ts['prov'] != _tb['prov']:
+                            continue
+
+                        # ── Rule 3: BKK: allow same-province merge freely ──────────
+                        # (BKK is one province, all areas ≤40km apart)
+
+                        # ── Capacity check ────────────────────────────────────
+                        _comb_w = _ts['w'] + _tb['w']
+                        _comb_c = _ts['c'] + _tb['c']
+                        # drops = unique code count (not row count)
+                        _comb_codes_set = set(_ts['codes']) | set(_tb['codes'])
+                        _comb_rows = len(_comb_codes_set)
+                        _comb_min_rank = min(_ts['min_rank'], _tb['min_rank'])
+                        _comb_is_pun = _ts['is_pun'] and _tb['is_pun']
+                        _comb_lim = PUNTHAI_LIMITS if _comb_is_pun else LIMITS
+                        _comb_buf = punthai_buffer if _comb_is_pun else maxmart_buffer
+
+                        _fc_fit_veh = None
+                        for _fv, _fvr in [('4W', 1), ('JB', 2), ('6W', 3)]:
+                            if _fvr > _comb_min_rank:
+                                continue
+                            _fl_c = _comb_lim[_fv]
+                            _rd = _fc_relaxed_drops.get(_fv, _fl_c['max_drops'])
+                            if (_comb_w <= _fl_c['max_w'] * _comb_buf and
+                                    _comb_c <= _fl_c['max_c'] * _comb_buf and
+                                    _comb_rows <= _rd):
+                                _fc_fit_veh = _fv
+                                break
+
+                        if _fc_fit_veh:
+                            df.loc[df['Trip'] == _ts_id, 'Trip'] = _tb_id
+                            _tb['codes'] += _ts['codes']
+                            _tb['w'] = _comb_w
+                            _tb['c'] = _comb_c
+                            _tb['rows'] = _comb_rows
+                            _tb['min_rank'] = _comb_min_rank
+                            _tb['is_pun'] = _comb_is_pun
+                            del _fc_info[_ts_id]
+                            _fc_total_merged += 1
+                            safe_print(f"   🚛 FC: Trip {_ts_id}→{_tb_id} [{_fc_fit_veh}] {_comb_rows}rows {_comb_w:.0f}kg {_comb_c:.1f}m³ [{_ts['prov']}]")
+                            _fc_pass = True
+                            break
+                    if _fc_pass:
+                        break
+
+            if _fc_total_merged > 0:
+                _fc_final = len(df[df['Trip'] > 0]['Trip'].unique())
+                safe_print(f"✅ Fleet Consolidation: รวม {_fc_total_merged} merges → {_fc_final} ทริป")
+                _fc_rem = sorted(df[df['Trip'] > 0]['Trip'].unique())
+                _fc_ren = {old: new for new, old in enumerate(_fc_rem, start=1)}
+                df['Trip'] = df['Trip'].map(lambda x: _fc_ren.get(x, x) if x > 0 else x)
+            else:
+                safe_print(f"⚠️ Fleet Consolidation: ไม่มี merge ที่ทำได้ คงที่ {_fl_current_count} ทริป")
+
+    # ==========================================
     # Step 7: สร้าง Summary + Central Rule + Punthai Drop Limits
     # ==========================================
     summary_data = []
@@ -5798,6 +5941,116 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
         df['Truck'] = df['Trip'].map(trip_truck_map)
     else:
         safe_print("   ✅ Final Audit: ไม่พบการปนภาค/BKK")
+
+    # ==========================================
+    # Step 8.9: 🚛 Post-Enforcement Fleet Consolidation (second pass)
+    # รันหลัง enforcement เพื่อ merge ทริปเล็กที่เกิดจาก overflow
+    # ==========================================
+    if fleet_limits:
+        import math as _math_fc2
+        _fl2_target = sum(v for v in fleet_limits.values() if v and v < 999)
+        _fl2_current = len(df[df['Trip'] > 0]['Trip'].unique())
+        if _fl2_current > _fl2_target:
+            safe_print(f"\n🚛 Step 8.9: Post-Enforcement Fleet Consolidation ({_fl2_current} → {_fl2_target} ทริป)")
+            _BKK_PROV_SET2 = {'กรุงเทพมหานคร', 'กรุงเทพฯ', 'กทม', 'กทม.', 'Bangkok'}
+            # คำนวณ drop limit ผ่อนผันใหม่
+            _fc2_all_codes = df[df['Trip'] > 0]['Code'].unique()
+            _fc2_bc: dict = {'4W': 0, 'JB': 0, '6W': 0}
+            for _c2 in _fc2_all_codes:
+                _mv2 = branch_max_vehicle_cache.get(str(_c2).strip().upper(), '6W')
+                if _mv2 in _fc2_bc:
+                    _fc2_bc[_mv2] += 1
+            _fc2_rdrop: dict = {}
+            for _vt2, _fl_cnt2 in fleet_limits.items():
+                if not _fl_cnt2 or _fl_cnt2 >= 999:
+                    continue
+                _od2 = LIMITS[_vt2]['max_drops']
+                if _od2 >= 999:
+                    _fc2_rdrop[_vt2] = 999; continue
+                _nd2 = max(_od2, int(_math_fc2.ceil(_fc2_bc.get(_vt2, 0) / max(_fl_cnt2, 1) * 1.5)))
+                _fc2_rdrop[_vt2] = _nd2
+
+            _fc2_merged_total = 0
+            _fc2_pass = True
+            while _fc2_pass:
+                _fc2_pass = False
+                _fc2_trips_now = sorted(df[df['Trip'] > 0]['Trip'].unique())
+                if len(_fc2_trips_now) <= _fl2_target:
+                    break
+                _fc2_info: dict = {}
+                for _ft2 in _fc2_trips_now:
+                    _ftd2 = df[df['Trip'] == _ft2]
+                    _fc2_codes = _ftd2['Code'].unique().tolist()
+                    _fc2_ranks = [vehicle_priority.get(branch_max_vehicle_cache.get(str(c).strip().upper(), '6W'), 3) for c in _fc2_codes]
+                    _fc2_mn = min(_fc2_ranks) if _fc2_ranks else 3
+                    _fc2_mv2 = {1: '4W', 2: 'JB', 3: '6W'}.get(_fc2_mn, '6W')
+                    _fc2_is_pun = all(branch_bu_cache.get(c, False) for c in _fc2_codes)
+                    _fc2_lim2 = PUNTHAI_LIMITS if _fc2_is_pun else LIMITS
+                    _fc2_buf2 = punthai_buffer if _fc2_is_pun else maxmart_buffer
+                    _fc2_w = float(_ftd2['Weight'].sum())
+                    _fc2_c = float(_ftd2['Cube'].sum())
+                    _fc2_nd2 = len(_fc2_codes)
+                    _fc2_u = max(_fc2_w / (_fc2_lim2[_fc2_mv2]['max_w'] * _fc2_buf2),
+                                 _fc2_c / (_fc2_lim2[_fc2_mv2]['max_c'] * _fc2_buf2)) if _fc2_mv2 in _fc2_lim2 else 0.0
+                    _fc2_prov = str(_ftd2.iloc[0].get('_province', '') or '').strip()
+                    _fc2_info[_ft2] = {
+                        'codes': _fc2_codes, 'w': _fc2_w, 'c': _fc2_c, 'drops': _fc2_nd2,
+                        'min_rank': _fc2_mn, 'mv': _fc2_mv2,
+                        'is_pun': _fc2_is_pun, 'lim': _fc2_lim2, 'buf': _fc2_buf2,
+                        'prov': _fc2_prov, 'is_bkk': _fc2_prov in _BKK_PROV_SET2,
+                        'util': _fc2_u,
+                    }
+                _fc2_sorted = sorted(_fc2_info.keys(), key=lambda t: _fc2_info[t]['util'])
+                for _ts2 in _fc2_sorted:
+                    if _ts2 not in _fc2_info: continue
+                    _tsi = _fc2_info[_ts2]
+                    for _tb2 in _fc2_sorted:
+                        if _tb2 == _ts2 or _tb2 not in _fc2_info: continue
+                        _tbi = _fc2_info[_tb2]
+                        if _tsi['is_bkk'] != _tbi['is_bkk']: continue
+                        if not _tsi['is_bkk'] and _tsi['prov'] != _tbi['prov']: continue
+                        _cw2 = _tsi['w'] + _tbi['w']
+                        _cc2 = _tsi['c'] + _tbi['c']
+                        _cd2 = len(set(_tsi['codes']) | set(_tbi['codes']))
+                        _cmn2 = min(_tsi['min_rank'], _tbi['min_rank'])
+                        _cpun2 = _tsi['is_pun'] and _tbi['is_pun']
+                        _clim2 = PUNTHAI_LIMITS if _cpun2 else LIMITS
+                        _cbuf2 = punthai_buffer if _cpun2 else maxmart_buffer
+                        _fv2 = None
+                        for _fvv, _fvr in [('4W', 1), ('JB', 2), ('6W', 3)]:
+                            if _fvr > _cmn2: continue
+                            _fl2 = _clim2[_fvv]
+                            # FC2: ใช้ strict max_drops (ไม่ผ่อน) เพื่อป้องกัน enforcement re-split
+                            if (_cw2 <= _fl2['max_w'] * _cbuf2 and
+                                    _cc2 <= _fl2['max_c'] * _cbuf2 and
+                                    _cd2 <= _fl2['max_drops']):
+                                _fv2 = _fvv; break
+                        if _fv2:
+                            df.loc[df['Trip'] == _ts2, 'Trip'] = _tb2
+                            _tbi['codes'] = list(set(_tsi['codes']) | set(_tbi['codes']))
+                            _tbi['w'] = _cw2; _tbi['c'] = _cc2; _tbi['drops'] = _cd2
+                            _tbi['min_rank'] = _cmn2; _tbi['is_pun'] = _cpun2
+                            del _fc2_info[_ts2]
+                            _fc2_merged_total += 1
+                            safe_print(f"   🚛 FC2: Trip {_ts2}→{_tb2} [{_fv2}] {_cd2}drops {_cw2:.0f}kg {_cc2:.1f}m³ [{_tsi['prov']}]")
+                            _fc2_pass = True; break
+                    if _fc2_pass: break
+            if _fc2_merged_total > 0:
+                _fc2_final = len(df[df['Trip'] > 0]['Trip'].unique())
+                safe_print(f"✅ FC2: รวม {_fc2_merged_total} merges → {_fc2_final} ทริป")
+                _fc2_rem = sorted(df[df['Trip'] > 0]['Trip'].unique())
+                _fc2_ren = {old: new for new, old in enumerate(_fc2_rem, start=1)}
+                df['Trip'] = df['Trip'].map(lambda x: _fc2_ren.get(x, x) if x > 0 else x)
+                # อัพเดต Truck label หลัง FC2
+                for _fc2_t in df[df['Trip'] > 0]['Trip'].unique():
+                    if _fc2_t not in trip_truck_map:
+                        _fc2_td = df[df['Trip'] == _fc2_t]
+                        _fc2_mv_list = [branch_max_vehicle_cache.get(str(c).strip().upper(), '6W') for c in _fc2_td['Code'].unique()]
+                        _fc2_mr = min(vehicle_priority.get(v, 3) for v in _fc2_mv_list)
+                        _fc2_tk = {1: '4W', 2: 'JB', 3: '6W'}.get(_fc2_mr, '6W')
+                        df.loc[df['Trip'] == _fc2_t, 'Truck'] = f"{_fc2_tk} 🔀 FC2"
+            else:
+                safe_print(f"⚠️ FC2: ไม่มี merge เพิ่มเติม")
 
     # ==========================================
     # Step 9: เรียงทริปใหม่ตามภาค → จังหวัด → ระยะทาง
