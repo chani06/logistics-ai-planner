@@ -2345,13 +2345,32 @@ def _load_branch_history() -> dict:
         with open(_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         branches = data.get('branches', {})
-        safe_print(f"🧠 Branch History: โหลด {len(branches):,} สาขา (preferred_truck + companions)")
+        meta = data.get('_meta', {})
+        companions_count = sum(1 for v in branches.values() if v.get('companions'))
+        safe_print(f"🧠 Branch History: โหลด {len(branches):,} สาขา (preferred_truck + companions: {companions_count:,})")
+        # โหลด zone trip weight targets
+        zone_targets = meta.get('zone_trip_targets', {})
+        if zone_targets:
+            safe_print(f"   📊 Zone weight targets: 4W={zone_targets.get('4W',{}).get('avg_cube',0):.2f}m³, JB={zone_targets.get('JB',{}).get('avg_cube',0):.2f}m³, 6W={zone_targets.get('6W',{}).get('avg_cube',0):.2f}m³")
         return {str(k).upper(): v for k, v in branches.items()}
     except Exception as e:
         safe_print(f"⚠️ โหลด branch_history.json ล้มเหลว: {e}")
         return {}
 
+def _load_zone_trip_targets() -> dict:
+    """โหลด zone/truck trip weight targets จาก branch_history.json _meta"""
+    _path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'branch_history.json')
+    if not os.path.exists(_path):
+        return {}
+    try:
+        with open(_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data.get('_meta', {}).get('zone_trip_targets', {})
+    except Exception:
+        return {}
+
 BRANCH_HISTORY_CACHE: dict = _load_branch_history()
+ZONE_TRIP_TARGETS: dict = _load_zone_trip_targets()  # {'4W': {avg_cube, avg_wgt, ...}, 'JB': ..., '6W': ...}
 
 # ==========================================
 # 🔄 BRANCH GROUPING (จุดส่งเดียวกัน ≤200 เมตร)
@@ -3844,7 +3863,81 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
         # หา allowed vehicles จาก constraints (จำกัดตาม trip_max_vehicle)
         trip_allowed = get_allowed_from_codes(trip_codes, ['4W', 'JB', '6W'])
         trip_is_punthai = all(branch_bu_cache.get(c, False) for c in trip_codes)
-        
+
+        # 🧠 COMPANION SEEDING: ดึงสาขาที่มักมาด้วยกันตามประวัติ Fulfillment จริง
+        # เหมือนคนคิด: "สาขานี้ปกติขึ้นรถคันเดียวกับใครบ้าง?"
+        if BRANCH_HISTORY_CACHE and trip_codes:
+            _comp_candidates: dict = {}  # code → total_freq
+            for _seed_c in list(trip_codes):  # ทุกสาขาใน trip ตอนนี้
+                _bh = BRANCH_HISTORY_CACHE.get(str(_seed_c).strip().upper(), {})
+                for _comp_code, _comp_cnt in _bh.get('companions', {}).items():
+                    _cc_up = str(_comp_code).strip().upper()
+                    if _cc_up not in {str(c).strip().upper() for c in trip_codes}:
+                        _comp_candidates[_cc_up] = _comp_candidates.get(_cc_up, 0) + _comp_cnt
+            # เรียง companion ที่บ่อยที่สุดก่อน (≥3 = อย่างน้อย 3 ครั้งใน 17 วัน)
+            _comp_sorted = sorted(_comp_candidates.items(), key=lambda x: -x[1])
+            _comp_added = 0
+            for _cc, _cnt in _comp_sorted:
+                if _cnt < 3:
+                    break  # หยุดถ้าความถี่ต่ำเกินไป
+                # ตรวจว่า companion นี้ยังไม่ได้ถูกจัด
+                _cc_match = None
+                for _uc in list(unassigned):
+                    if str(_uc).strip().upper() == _cc:
+                        _cc_match = _uc
+                        break
+                if _cc_match is None:
+                    continue
+                # ดึงข้อมูลสาขานี้
+                _cc_rows = df[df['Code'].apply(lambda x: str(x).strip().upper() == _cc)]
+                if _cc_rows.empty:
+                    continue
+                _cc_row = _cc_rows.iloc[0]
+                _cc_w = float(_cc_rows['Weight'].sum())  # รวมทุก BU row
+                _cc_c = float(_cc_rows['Cube'].sum())
+                _cc_mv = get_max_vehicle_for_branch(_cc)
+                _cc_mv_rank = {'4W': 1, 'JB': 2, '6W': 3}.get(_cc_mv, 3)
+                _trip_mv_rank = {'4W': 1, 'JB': 2, '6W': 3}.get(trip_max_vehicle, 3)
+                # ตรวจ vehicle constraint (companion ต้องไม่ลด vehicle ของทริปจนเกิน)
+                _eff_mv_rank = min(_trip_mv_rank, _cc_mv_rank)
+                _eff_mv = {1: '4W', 2: 'JB', 3: '6W'}.get(_eff_mv_rank, '6W')
+                _eff_lim = (PUNTHAI_LIMITS if trip_is_punthai else LIMITS)[_eff_mv]
+                _eff_buf = punthai_buffer if trip_is_punthai else maxmart_buffer
+                _new_w = trip_weight + _cc_w
+                _new_c = trip_cube + _cc_c
+                _new_d = len({str(c).upper() for c in trip_codes} | {_cc}) 
+                if (_new_w > _eff_lim['max_w'] * _eff_buf or
+                        _new_c > _eff_lim['max_c'] * _eff_buf or
+                        _new_d > _eff_lim['max_drops']):
+                    continue  # ไม่พอดี → ข้าม
+                # ตรวจ province (ห้ามข้ามภาคหลัก)
+                _cc_prov = str(_cc_row.get('_province', '') or '').strip()
+                _cc_region = get_region_name(_cc_prov) if _cc_prov else ''
+                if (trip_original_region and trip_original_region not in ('', 'ไม่ระบุ') and
+                        _cc_region and _cc_region not in ('', 'ไม่ระบุ') and
+                        _cc_region != trip_original_region):
+                    continue  # ข้ามภาค → ห้าม
+                # ✅ เพิ่ม companion เข้าทริป
+                actual_cc = _cc_row['Code']
+                trip_codes.append(actual_cc)
+                trip_weight += _cc_w
+                trip_cube += _cc_c
+                if actual_cc in unassigned:
+                    unassigned.remove(actual_cc)
+                else:
+                    for _uu in list(unassigned):
+                        if str(_uu).strip().upper() == _cc:
+                            unassigned.remove(_uu); break
+                _comp_added += 1
+                safe_print(f"      🤝 Companion seed: {actual_cc} (เคยมาพร้อมสาขาในทริปนี้ {_cnt}ครั้ง)")
+                # อัพเดต trip_max_vehicle ถ้า companion บังคับลด
+                if _eff_mv_rank < {'4W': 1, 'JB': 2, '6W': 3}.get(trip_max_vehicle, 3):
+                    trip_max_vehicle = _eff_mv
+            if _comp_added > 0:
+                # อัพเดต allowed vehicles หลัง seed
+                trip_allowed = get_allowed_from_codes(trip_codes, ['4W', 'JB', '6W'])
+                trip_is_punthai = all(branch_bu_cache.get(c, False) for c in trip_codes)
+
         # ─── ระยะ reach สูงสุดที่ยอมขยายออกจากทริป (km) ───
         # ปรับได้: ยิ่งมากยิ่ง "ดึงโซนใกล้เคียง" แต่อาจรวมสาขาไกลเกินไป
         _MAX_EXPAND_KM     = 80   # ขยายสูงสุด 80km จากสาขาใดๆ ในทริป → adjacent zones
@@ -4067,17 +4160,27 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
             )
 
             # 🧠 AI AFFINITY RANK: สาขาที่เคยอยู่ทริปเดียวกันจะได้ rank ดีกว่า
-            if _ai_active and trip_codes:
+            # ใช้ทั้ง trip_history pair_freq AND branch_history companions
+            if trip_codes:
                 def _affinity(cand_code):
+                    cu = str(cand_code).strip().upper()
                     total = 0
                     for tc in trip_codes:
-                        a, b = (tc, cand_code) if tc < cand_code else (cand_code, tc)
-                        total += _ai_pair_freq.get(f"{a}|{b}", 0)
+                        tu = str(tc).strip().upper()
+                        # 1. trip_history pair_freq (session pairs)
+                        if _ai_active:
+                            a, b = (tu, cu) if tu < cu else (cu, tu)
+                            total += _ai_pair_freq.get(f"{a}|{b}", 0)
+                        # 2. branch_history companions (fulfillment history — stronger signal)
+                        if BRANCH_HISTORY_CACHE:
+                            _bh = BRANCH_HISTORY_CACHE.get(tu, {})
+                            total += _bh.get('companions', {}).get(cu, 0) * 3  # 3× weight for historical
                     return total
                 same_zone_df['_affinity'] = same_zone_df['Code'].apply(_affinity)
-                # rank 0 = มีประวัติคู่กัน, rank 1 = ไม่มีประวัติ
+                # sort by actual score (ไม่ใช่แค่ binary) — ยิ่งคะแนนสูงยิ่งอยู่ก่อน
                 same_zone_df['_affinity_rank'] = same_zone_df['_affinity'].apply(lambda x: 0 if x > 0 else 1)
-                sort_cols = ['_same_prov_rank', '_affinity_rank', '_priority', '_dist_to_trip']
+                same_zone_df['_affinity_score_neg'] = -same_zone_df['_affinity']  # สูงสุดก่อน
+                sort_cols = ['_same_prov_rank', '_affinity_rank', '_affinity_score_neg', '_priority', '_dist_to_trip']
             else:
                 sort_cols = ['_same_prov_rank', '_priority', '_dist_to_trip']
 
@@ -6631,8 +6734,17 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                             pass
                     _bh_avg = _bh_meta.get('fleet_avg_per_day', {})
                     _bh_max = _bh_meta.get('fleet_max_per_day', {})
+                    _bh_zt  = _bh_meta.get('zone_trip_targets', {})
                     if _bh_avg:
                         st.caption(f"📊 ข้อมูลจริง ({_bh_meta.get('days',0)} วัน): เฉลี่ย 4W={_bh_avg.get('4W',0):.0f} / JB={_bh_avg.get('JB',0):.0f} / 6W={_bh_avg.get('6W',0):.0f} คัน/วัน  ·  สูงสุด 4W={_bh_max.get('4W',0)} / JB={_bh_max.get('JB',0)} / 6W={_bh_max.get('6W',0)}")
+                    if _bh_zt:
+                        _zt_parts = []
+                        for _t in ['4W', 'JB', '6W']:
+                            if _t in _bh_zt:
+                                _z = _bh_zt[_t]
+                                _zt_parts.append(f"{_t}: {_z.get('avg_cube',0):.2f}m³({_z.get('util_cube_pct',0):.0f}%) avg {_z.get('avg_drops',0):.1f}จุด")
+                        if _zt_parts:
+                            st.caption(f"📦 เฉลี่ย/ทริป: {' · '.join(_zt_parts)}")
                     col_f1, col_f2, col_f3 = st.columns(3)
                     with col_f1:
                         fleet_4w = st.number_input("🚗 4W (คัน)", min_value=0, max_value=99, value=0, step=1, key="fleet_4w",

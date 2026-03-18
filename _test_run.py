@@ -3,10 +3,6 @@
 Usage: python _test_run.py
 """
 import sys, os, traceback
-import io
-# บังคับ UTF-8 สำหรับ Windows console
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 import pandas as pd
 import importlib.util
 
