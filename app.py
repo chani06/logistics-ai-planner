@@ -4990,9 +4990,14 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 # BKK isolation — normalize aliases
                 _BKK_cs = 'กรุงเทพมหานคร'
                 _BKK_ALIASES_cs = {'กรุงเทพฯ', 'กทม', 'กทม.', 'Bangkok'}
-                _pa_has_bkk = bool(_pa_cs & ({_BKK_cs} | _BKK_ALIASES_cs))
-                _pb_has_bkk = bool(_pb_cs & ({_BKK_cs} | _BKK_ALIASES_cs))
+                _BKK_SET_CS = {_BKK_cs} | _BKK_ALIASES_cs
+                _pa_has_bkk = bool(_pa_cs & _BKK_SET_CS)
+                _pb_has_bkk = bool(_pb_cs & _BKK_SET_CS)
                 if _pa_has_bkk != _pb_has_bkk:
+                    continue
+                # ห้ามรวมถ้าผลลัพธ์รวมจะมีทั้ง BKK และ non-BKK (ป้องกัน Step 7.4 แตกทีหลัง)
+                _combined_cs = _pa_cs | _pb_cs
+                if bool(_combined_cs & _BKK_SET_CS) and bool(_combined_cs - _BKK_SET_CS):
                     continue
                 # 📐 Zone isolation by centroid distance: ห้ามรวมทริปที่ centroid ห่างกันเกิน
                 # (ต่างจังหวัด: max 120km, จังหวัดเดียวกันไม่จำกัด)
@@ -5618,10 +5623,33 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
         if _74_has_bkk and _74_has_non_bkk:
             _74_non_bkk_codes = [r['Code'] for _, r in _74_data.iterrows()
                                   if str(r.get('_province', '') or '') != _BKK_PROV_74]
+            _74_bkk_codes = [r['Code'] for _, r in _74_data.iterrows()
+                             if str(r.get('_province', '') or '') == _BKK_PROV_74]
             if _74_non_bkk_codes:
+                # 📐 ตรวจว่าถ้าไม่แยก จะเกิน overflow จริงหรือเปล่า
+                # (vehicle ถูก constrain โดย BKK branch → อาจ assign 4W แต่ load เกิน)
+                _74_all_codes_u = list(set([r['Code'] for _, r in _74_data.iterrows()]))
+                _74_bkk_mv = [get_max_vehicle_for_branch(c) for c in _74_bkk_codes]
+                _74_bkk_vp = {'4W': 1, 'JB': 2, '6W': 3}
+                _74_bkk_minrank = min(_74_bkk_vp.get(v, 3) for v in _74_bkk_mv) if _74_bkk_mv else 3
+                _74_bkk_constrained_veh = {1: '4W', 2: 'JB', 3: '6W'}.get(_74_bkk_minrank, '6W')
+                _74_is_pt_trip = all(branch_bu_cache.get(c, False) for c in _74_all_codes_u)
+                _74_trip_buf = punthai_buffer if _74_is_pt_trip else maxmart_buffer
+                _74_trip_lim = (PUNTHAI_LIMITS if _74_is_pt_trip else LIMITS)[_74_bkk_constrained_veh]
+                _74_trip_w = float(_74_data['Weight'].sum())
+                _74_trip_c = float(_74_data['Cube'].sum())
+                _74_trip_drops = len(set(_74_all_codes_u))
+                _74_would_overflow = (
+                    _74_trip_w > _74_trip_lim['max_w'] * _74_trip_buf or
+                    _74_trip_c > _74_trip_lim['max_c'] * _74_trip_buf or
+                    _74_trip_drops > _74_trip_lim.get('max_drops', 999)
+                )
+                if not _74_would_overflow:
+                    continue  # ไม่มี overflow risk → ไม่ต้องแยก (ปล่อยให้ Step 8.8 จัดการ)
                 _74_max_trip += 1
                 df.loc[df['Code'].isin(_74_non_bkk_codes), 'Trip'] = _74_max_trip
                 _74_fixed += 1
+                safe_print(f"   🔒 7.4 split Trip {_74_trip}: BKK={len(set(_74_bkk_codes))} non-BKK={len(set(_74_non_bkk_codes))} codes → new Trip {_74_max_trip}")
     if _74_fixed > 0:
         safe_print(f"   🔒 Step 7.4: แยก BKK isolation {_74_fixed} ทริป (ก่อนตรวจ overflow)")
         # Rebuild summary_data หลัง BKK split
@@ -5639,7 +5667,19 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
             _74_sug = {1: '4W', 2: 'JB', 3: '6W'}.get(_74_minrank, '6W')
             _74_is_pt = all(branch_bu_cache.get(c, False) for c in _74_codes)
             _74_buf = punthai_buffer if _74_is_pt else maxmart_buffer
-            _74_lim = (PUNTHAI_LIMITS if _74_is_pt else LIMITS)[_74_sug]
+            _74_lims_ref = PUNTHAI_LIMITS if _74_is_pt else LIMITS
+            # เลือกรถเล็กสุดที่รับโหลด+drops ได้จริง (ป้องกัน 4W/JB ถูก assign แต่ drops เกิน)
+            _74_unique_drops = len(set(_74_codes))
+            for _74_veh in ['4W', 'JB', '6W']:
+                if _74_vp.get(_74_veh, 3) < _74_minrank:
+                    continue  # ห้ามรถที่เล็กกว่า constraint สาขา
+                _74_vl = _74_lims_ref[_74_veh]
+                if (_74_w <= _74_vl['max_w'] * _74_buf and
+                        _74_c <= _74_vl['max_c'] * _74_buf and
+                        _74_unique_drops <= _74_vl.get('max_drops', 999)):
+                    _74_sug = _74_veh
+                    break
+            _74_lim = _74_lims_ref[_74_sug]
             _74_wu = _74_w / _74_lim['max_w'] * 100
             _74_cu = _74_c / _74_lim['max_c'] * 100
             _74_bu_type = 'punthai' if _74_is_pt else 'maxmart'
@@ -6216,12 +6256,16 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                     _fc2_nd2 = len(_fc2_codes)
                     _fc2_u = max(_fc2_w / (_fc2_lim2[_fc2_mv2]['max_w'] * _fc2_buf2),
                                  _fc2_c / (_fc2_lim2[_fc2_mv2]['max_c'] * _fc2_buf2)) if _fc2_mv2 in _fc2_lim2 else 0.0
+                    _fc2_prov_set = set(str(p) for p in _ftd2['_province'].dropna().unique() if p) if '_province' in _ftd2.columns else set()
                     _fc2_prov = str(_ftd2.iloc[0].get('_province', '') or '').strip()
+                    _fc2_has_bkk = bool(_fc2_prov_set & _BKK_PROV_SET2)
+                    _fc2_has_non_bkk = bool(_fc2_prov_set - _BKK_PROV_SET2)
                     _fc2_info[_ft2] = {
                         'codes': _fc2_codes, 'w': _fc2_w, 'c': _fc2_c, 'drops': _fc2_nd2,
                         'min_rank': _fc2_mn, 'mv': _fc2_mv2,
                         'is_pun': _fc2_is_pun, 'lim': _fc2_lim2, 'buf': _fc2_buf2,
-                        'prov': _fc2_prov, 'is_bkk': _fc2_prov in _BKK_PROV_SET2,
+                        'prov': _fc2_prov, 'prov_set': _fc2_prov_set,
+                        'is_bkk': _fc2_has_bkk, 'has_non_bkk': _fc2_has_non_bkk,
                         'util': _fc2_u,
                     }
                 _fc2_sorted = sorted(_fc2_info.keys(), key=lambda t: _fc2_info[t]['util'])
@@ -6231,7 +6275,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                     for _tb2 in _fc2_sorted:
                         if _tb2 == _ts2 or _tb2 not in _fc2_info: continue
                         _tbi = _fc2_info[_tb2]
-                        if _tsi['is_bkk'] != _tbi['is_bkk']: continue
+                        # ห้ามรวมถ้าผลลัพธ์จะมีทั้ง BKK และ non-BKK
+                        _fc2_combined_bkk = _tsi['is_bkk'] or _tbi['is_bkk']
+                        _fc2_combined_non = _tsi['has_non_bkk'] or _tbi['has_non_bkk']
+                        if _fc2_combined_bkk and _fc2_combined_non: continue
                         if not _tsi['is_bkk'] and _tsi['prov'] != _tbi['prov']: continue
                         _cw2 = _tsi['w'] + _tbi['w']
                         _cc2 = _tsi['c'] + _tbi['c']
@@ -6254,6 +6301,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                             _tbi['codes'] = list(set(_tsi['codes']) | set(_tbi['codes']))
                             _tbi['w'] = _cw2; _tbi['c'] = _cc2; _tbi['drops'] = _cd2
                             _tbi['min_rank'] = _cmn2; _tbi['is_pun'] = _cpun2
+                            # อัพเดต province set หลัง merge
+                            _tbi['prov_set'] = _tsi.get('prov_set', set()) | _tbi.get('prov_set', set())
+                            _tbi['is_bkk'] = bool(_tbi['prov_set'] & _BKK_PROV_SET2)
+                            _tbi['has_non_bkk'] = bool(_tbi['prov_set'] - _BKK_PROV_SET2)
                             del _fc2_info[_ts2]
                             _fc2_merged_total += 1
                             safe_print(f"   🚛 FC2: Trip {_ts2}→{_tb2} [{_fv2}] {_cd2}drops {_cw2:.0f}kg {_cc2:.1f}m³ [{_tsi['prov']}]")
