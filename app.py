@@ -4226,7 +4226,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 else:
                     # ต่างจังหวัด same zone: ขยาย 45km เมื่อรถ < 40%, 25km ปกติ
                     _dist_limit_s6 = 45 if _util_6w_s6 < 0.40 else 25
-                if candidate_dist > _dist_limit_s6:
+                # ถ้าระยะ = 999 (ไม่มีพิกัด) และจังหวัดตรงกัน → อนุญาต (ไม่ข้ามด้วยระยะ)
+                _dist_unknown = (candidate_dist >= 998)
+                _same_prov_s6 = (_cand_prov_s6 and _trip_prov_s6 and _cand_prov_s6 == _trip_prov_s6)
+                if candidate_dist > _dist_limit_s6 and not (_dist_unknown and _same_prov_s6):
                     continue
                 
                 # 🚫 Zone/province/region axis check (Step 6 greedy) — ห้ามรวมคนละทิศ/highway/ภาค
@@ -4455,8 +4458,24 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                         else:
                             _ff_same['_ff_dist'] = 999
                         _ff_same = _ff_same.sort_values('_ff_dist')
+                        # dedup: เก็บ 1 row ต่อ Code (กัน multi-BU rows ซ้ำ)
+                        _ff_same = _ff_same.drop_duplicates(subset=['Code'], keep='first')
                         for _, _ff_row in _ff_same.iterrows():
+                            # อัพเดต util และ allowed vehicle ทุกรอบ (รถอาจเต็มแล้ว)
+                            _ff_cur_veh = next((v for v in reversed(['4W', 'JB', '6W']) if v in (trip_allowed or ['6W'])), '6W')
+                            _ff_cur_lim = _ff_lims.get(_ff_cur_veh, _ff_lims['6W'])
+                            _ff_max_w = _ff_cur_lim['max_w'] * _ff_buf
+                            _ff_max_c = _ff_cur_lim['max_c'] * _ff_buf
+                            _ff_util = max(
+                                trip_weight / _ff_max_w if _ff_max_w > 0 else 1,
+                                trip_cube / _ff_max_c if _ff_max_c > 0 else 1
+                            )
+                            if _ff_util >= 0.90:
+                                break  # รถเต็มแล้ว ไม่ต้องเติมต่อ
                             _ff_code = _ff_row['Code']
+                            # skip สาขาที่อยู่ในทริปแล้ว
+                            if _ff_code in trip_codes:
+                                continue
                             _ff_prov = str(_ff_row.get('_province', '') or '')
                             # BKK isolation
                             _BKK = 'กรุงเทพมหานคร'
@@ -4508,9 +4527,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                             trip_cube = _ff_test_c
                             trip_allowed = _ff_test_allowed
                             trip_is_punthai = all(branch_bu_cache.get(c, False) for c in trip_codes)
-                            safe_print(f"      🔋 Force-fill #{trip_counter}: +{_ff_code} ({_ff_prov}) util={_ff_util*100:.0f}%")
+                            safe_print(f"      🔋 Force-fill #{trip_counter}: +{_ff_code} ({_ff_prov}) util={_ff_util*100:.0f}%→{_ff_test_c/_ff_max_c*100:.0f}%")
                             _force_filled = True
-                            break
+                            # ไม่ break! — วนลูปต่อเพื่อเติมสาขาต่อไปจนกว่ารถจะเต็ม
                 if not _force_filled:
                     # ไม่มีสาขาจังหวัดเดียวกันที่เหมาะสม → ปิดทริป
                     break
