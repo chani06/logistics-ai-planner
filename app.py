@@ -5603,7 +5603,59 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
         })
     
     # ==========================================
-    # 🚨 Step 7.5: ตัดสาขาออกถ้าเกิน buffer หรือรถผิดประเภท (Strict Enforcement)
+    # � Step 7.4: Pre-enforcement BKK isolation
+    # แยก BKK ออกจากทริปที่ปนจังหวัดอื่น ก่อน Step 7.5 ตรวจ overflow
+    # ==========================================
+    _BKK_PROV_74 = 'กรุงเทพมหานคร'
+    _74_fixed = 0
+    _74_max_trip = df[df['Trip'] > 0]['Trip'].max() if len(df[df['Trip'] > 0]) > 0 else 0
+    for _74_trip in sorted(df[df['Trip'] > 0]['Trip'].unique()):
+        _74_data = df[df['Trip'] == _74_trip]
+        _74_provs = [str(r.get('_province', '') or '') for _, r in _74_data.iterrows()]
+        _74_provs_clean = [p for p in _74_provs if p and p != 'nan']
+        _74_has_bkk = _BKK_PROV_74 in _74_provs_clean
+        _74_has_non_bkk = any(p != _BKK_PROV_74 for p in _74_provs_clean)
+        if _74_has_bkk and _74_has_non_bkk:
+            _74_non_bkk_codes = [r['Code'] for _, r in _74_data.iterrows()
+                                  if str(r.get('_province', '') or '') != _BKK_PROV_74]
+            if _74_non_bkk_codes:
+                _74_max_trip += 1
+                df.loc[df['Code'].isin(_74_non_bkk_codes), 'Trip'] = _74_max_trip
+                _74_fixed += 1
+    if _74_fixed > 0:
+        safe_print(f"   🔒 Step 7.4: แยก BKK isolation {_74_fixed} ทริป (ก่อนตรวจ overflow)")
+        # Rebuild summary_data หลัง BKK split
+        summary_data = []
+        for _74_t in sorted(df[df['Trip'] > 0]['Trip'].unique()):
+            _74_td = df[df['Trip'] == _74_t]
+            if _74_td.empty:
+                continue
+            _74_codes = _74_td['Code'].tolist()
+            _74_w = float(_74_td['Weight'].sum())
+            _74_c = float(_74_td['Cube'].sum())
+            _74_mv = [get_max_vehicle_for_branch(c) for c in _74_codes]
+            _74_vp = {'4W': 1, 'JB': 2, '6W': 3}
+            _74_minrank = min(_74_vp.get(v, 3) for v in _74_mv)
+            _74_sug = {1: '4W', 2: 'JB', 3: '6W'}.get(_74_minrank, '6W')
+            _74_is_pt = all(branch_bu_cache.get(c, False) for c in _74_codes)
+            _74_buf = punthai_buffer if _74_is_pt else maxmart_buffer
+            _74_lim = (PUNTHAI_LIMITS if _74_is_pt else LIMITS)[_74_sug]
+            _74_wu = _74_w / _74_lim['max_w'] * 100
+            _74_cu = _74_c / _74_lim['max_c'] * 100
+            _74_bu_type = 'punthai' if _74_is_pt else 'maxmart'
+            _74_buf_lbl = f"🅿️ {int(_74_buf*100)}%" if _74_is_pt else f"🅼 {int(_74_buf*100)}%"
+            _74_dist = float(_74_td['_distance_from_dc'].max()) if '_distance_from_dc' in _74_td.columns else 0
+            summary_data.append({
+                'Trip': _74_t, 'Branches': len(set(_74_codes)),
+                'Weight': _74_w, 'Cube': _74_c,
+                'Truck': f"{_74_sug} 🔒 bkk-split",
+                'BU_Type': _74_bu_type, 'Buffer': _74_buf_lbl,
+                'Weight_Use%': _74_wu, 'Cube_Use%': _74_cu,
+                'Total_Distance': round(_74_dist, 1),
+            })
+
+    # ==========================================
+    # �🚨 Step 7.5: ตัดสาขาออกถ้าเกิน buffer หรือรถผิดประเภท (Strict Enforcement)
     # ==========================================
     safe_print("\n📋 Step 7.5: ตรวจสอบและตัดสาขาที่เกิน Buffer + ข้อจำกัดรถ...")
     overflow_branches = []
