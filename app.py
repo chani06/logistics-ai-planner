@@ -440,7 +440,7 @@ LIMITS = {
 
 # 🔒 ขีดจำกัดสำหรับ Punthai ล้วน (ห้ามเกิน 100%)
 PUNTHAI_LIMITS = {
-    '4W': {'max_w': 2500, 'max_c': 5.0, 'max_drops': 5},   # Punthai ล้วน 4W: สูงสุด 5 สาขา
+    '4W': {'max_w': 2500, 'max_c': 5.0, 'max_drops': 5},   # Punthai ล้วน 4W: สูงสุด 5 สาขา (strict → บังคับใช้ JB เมื่อ drops > 5)
     'JB': {'max_w': 3500, 'max_c': 7.0, 'max_drops': 7},  # Punthai ล้วน JB: สูงสุด 7 สาขา
     '6W': {'max_w': 6000, 'max_c': 20.0, 'max_drops': 999}
 }
@@ -5429,7 +5429,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                     break  # เล็กสุดที่รับโหลดได้
 
         # 🧠 BRANCH HISTORY: preferred_truck จาก Fulfillment ข้อมูลจริง
-        # ถ้า ≥70% ของสาขาในทริปมี preferred_truck ที่ใหญ่กว่า suggested → upgrade (ถ้าข้อจำกัดสาขาอนุญาต)
+        # ถ้า ≥60% ของสาขาในทริปมี preferred_truck ที่ใหญ่กว่า suggested → upgrade (ถ้าข้อจำกัดสาขาอนุญาต)
         if BRANCH_HISTORY_CACHE and not is_long_haul:
             _hist_votes = {'4W': 0, 'JB': 0, '6W': 0}
             _hist_total = 0
@@ -5438,7 +5438,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 _hpref = _hinfo.get('preferred_truck', '')
                 _hconf = _hinfo.get('truck_confidence', 0)
                 _hcnt = _hinfo.get('trip_count', 0)
-                if _hpref in _hist_votes and _hconf >= 0.70 and _hcnt >= 5:
+                if _hpref in _hist_votes and _hconf >= 0.60 and _hcnt >= 5:
                     _hist_votes[_hpref] += 1
                     _hist_total += 1
             if _hist_total > 0:
@@ -5447,8 +5447,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 _hist_ratio = _hist_votes[_hist_top] / _hist_total
                 _hist_rank = _vrank.get(_hist_top, 1)
                 _sug_rank = _vrank.get(suggested, 1)
-                # upgrade ถ้า: historical truck ใหญ่กว่า + majority ≥70% + ข้อจำกัดสาขาอนุญาต
-                if _hist_ratio >= 0.70 and _hist_rank > _sug_rank and _hist_rank <= min_max_size:
+                # upgrade ถ้า: historical truck ใหญ่กว่า + majority ≥60% + ข้อจำกัดสาขาอนุญาต
+                if _hist_ratio >= 0.60 and _hist_rank > _sug_rank and _hist_rank <= min_max_size:
                     _old_sug = suggested
                     suggested = _hist_top
                     source += f" 📚 History({_hist_top},{_hist_ratio:.0%})"
