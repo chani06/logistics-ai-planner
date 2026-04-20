@@ -2980,11 +2980,12 @@ def load_excel(file_content, sheet_name=None):
         header_row = 0
         
         for i in range(min(10, len(df_temp))):
-            row_values = df_temp.iloc[i].astype(str).str.upper()
+            row_list = [str(v) for v in df_temp.iloc[i]]
+            row_upper = ' '.join(row_list).upper()
             match_count = sum([
-                'BRANCH' in ' '.join(row_values),
-                'TRIP' in ' '.join(row_values),
-                'รหัสสาขา' in ' '.join(df_temp.iloc[i].astype(str))
+                'BRANCH' in row_upper,
+                'TRIP' in row_upper,
+                'รหัสสาขา' in ' '.join(row_list)
             ])
             if match_count >= 2:
                 header_row = i
@@ -2995,7 +2996,9 @@ def load_excel(file_content, sheet_name=None):
         
         return df
     except Exception as e:
+        import traceback as _tb
         st.error(f"❌ Error: {e}")
+        safe_print(f"❌ load_excel traceback: {_tb.format_exc()}")
         return None
 
 def process_dataframe(df):
