@@ -13,6 +13,7 @@ from math import radians, sin, cos, sqrt, atan2
 import json
 import time as time_module
 import sys
+import re
 
 # ฟังก์ชัน safe print สำหรับ Windows console
 def safe_print(*args, **kwargs):
@@ -34,6 +35,20 @@ def safe_print(*args, **kwargs):
             sys.__stdout__.flush()
         except Exception:
             pass
+
+def safe_join(values, sep=', '):
+    """Join mixed-type values safely, skipping None/NaN."""
+    if values is None:
+        return ''
+    cleaned = []
+    for v in values:
+        try:
+            if v is None or bool(pd.isna(v)):
+                continue
+        except Exception:
+            pass
+        cleaned.append(str(v))
+    return sep.join(cleaned)
 
 # ── AI TRIP LEARNING SYSTEM ──────────────────────────────────────────────────
 # บันทึก/โหลดประวัติการจัดทริป เพื่อเรียนรู้ว่าสาขาไหนมักอยู่ทริปเดียวกัน
@@ -2242,7 +2257,7 @@ def load_master_data():
         safe_print(f"✅ โหลด MASTER_DATA: {len(df_from_sheets)} สาขา")
         
         # 🔍 Debug: แสดงคอลัมน์ทั้งหมดที่มี
-        safe_print(f"📋 คอลัมน์ทั้งหมด ({len(df_from_sheets.columns)}): {', '.join(df_from_sheets.columns.tolist())}")
+        safe_print(f"📋 คอลัมน์ทั้งหมด ({len(df_from_sheets.columns)}): {safe_join(df_from_sheets.columns.tolist())}")
         
         # 🔍 Debug: แสดงคอลัมน์ที่เกี่ยวข้องกับรถ (ค้นหาแบบยืดหยุ่น)
         vehicle_cols = [
@@ -2253,7 +2268,7 @@ def load_master_data():
         ]
         found_vehicle_cols = [col for col in vehicle_cols if col in df_from_sheets.columns]
         if found_vehicle_cols:
-            safe_print(f"✅ พบคอลัมน์ข้อจำกัดรถ: {', '.join(found_vehicle_cols)}")
+            safe_print(f"✅ พบคอลัมน์ข้อจำกัดรถ: {safe_join(found_vehicle_cols)}")
             # แสดงสถิติข้อจำกัดรถ
             for col in found_vehicle_cols:
                 vehicle_counts = df_from_sheets[col].value_counts(dropna=False)
@@ -3087,8 +3102,11 @@ def process_dataframe(df):
         
         # ตัดสาขาที่ชื่อมี keyword ที่ไม่ต้องการ
         if 'Name' in df.columns:
-            exclude_pattern = '|'.join(EXCLUDE_NAMES)
-            df = df[~df['Name'].str.contains(exclude_pattern, case=False, na=False)]
+            _excl_kws = [re.escape(str(n)) for n in EXCLUDE_NAMES
+                         if n is not None and not (isinstance(n, float) and pd.isna(n))]
+            if _excl_kws:
+                exclude_pattern = '|'.join(_excl_kws)
+                df = df[~df['Name'].str.contains(exclude_pattern, case=False, na=False)]
     
     for col in ['Weight', 'Cube']:
         if col not in df.columns:
