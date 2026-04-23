@@ -312,8 +312,34 @@ def sync_branch_data_from_sheets():
     Returns:
         DataFrame หรือ None ถ้าล้มเหลว
     """
-    global SHEETS_AVAILABLE, sh
-    
+    global SHEETS_AVAILABLE, sh, gc
+
+    # ── พยายาม reconnect ถ้า sh หรือ SHEETS_AVAILABLE เป็น False/None ──
+    if not SHEETS_AVAILABLE or sh is None:
+        try:
+            _creds = None
+            _scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+            if hasattr(st, 'secrets') and 'gcp_service_account' in st.secrets:
+                from oauth2client.service_account import ServiceAccountCredentials as _SAC
+                _creds = _SAC.from_json_keyfile_dict(dict(st.secrets['gcp_service_account']), _scope)
+            elif os.path.exists('credentials.json'):
+                from oauth2client.service_account import ServiceAccountCredentials as _SAC
+                _creds = _SAC.from_json_keyfile_name('credentials.json', _scope)
+            if _creds:
+                import socket as _s2
+                _pt = _s2.getdefaulttimeout()
+                _s2.setdefaulttimeout(15)
+                try:
+                    import gspread as _gs
+                    gc = _gs.authorize(_creds)
+                    sh = gc.open_by_key('12DmIfECwVpsWfl8rl2r1A_LB4_5XMrmnmwlPUHKNU-o')
+                    SHEETS_AVAILABLE = True
+                    safe_print("✅ Reconnect Google Sheets สำเร็จ")
+                finally:
+                    _s2.setdefaulttimeout(_pt)
+        except Exception as _re:
+            safe_print(f"⚠️ Reconnect ล้มเหลว: {_re}")
+
     json_file = 'branch_data.json'
     
     # โหลดข้อมูลเก่าจาก JSON
@@ -457,16 +483,16 @@ MODEL_PATH = 'models/decision_tree_model.pkl'
 
 # ขีดจำกัดรถแต่ละประเภท (มาตรฐาน)
 LIMITS = {
-    '4W': {'max_w': 2500, 'max_c': 5.0, 'max_drops': 12},   # ไม่เกิน 12 จุด, Cube ≤ 5
-    'JB': {'max_w': 3500, 'max_c': 7.0, 'max_drops': 12},   # ไม่เกิน 12 จุด, Cube ≤ 7
-    '6W': {'max_w': 6000, 'max_c': 20.0, 'max_drops': 999}  # ไม่จำกัดจุด, Cube ต้องเต็ม, Weight ≤ 6000
+    '4W': {'max_w': 1500, 'max_c': 4.8, 'max_drops': 12},   # ไม่เกิน 12 จุด, Cube ≤ 4.8, W ≤ 1500
+    'JB': {'max_w': 3000, 'max_c': 6.5, 'max_drops': 12},   # ไม่เกิน 12 จุด, Cube ≤ 6.5, W ≤ 3000
+    '6W': {'max_w': 5800, 'max_c': 19.0, 'max_drops': 999}  # ไม่จำกัดจุด, Cube ≤ 19, W ≤ 5800
 }
 
 # 🔒 ขีดจำกัดสำหรับ Punthai ล้วน (ห้ามเกิน 100%)
 PUNTHAI_LIMITS = {
-    '4W': {'max_w': 2500, 'max_c': 5.0, 'max_drops': 5},   # Punthai ล้วน 4W: สูงสุด 5 สาขา
-    'JB': {'max_w': 3500, 'max_c': 7.0, 'max_drops': 7},  # Punthai ล้วน JB: สูงสุด 7 สาขา
-    '6W': {'max_w': 6000, 'max_c': 20.0, 'max_drops': 999}
+    '4W': {'max_w': 1500, 'max_c': 4.8, 'max_drops': 5},   # Punthai ล้วน 4W: สูงสุด 5 สาขา
+    'JB': {'max_w': 3000, 'max_c': 6.5, 'max_drops': 7},  # Punthai ล้วน JB: สูงสุด 7 สาขา
+    '6W': {'max_w': 5800, 'max_c': 19.0, 'max_drops': 999}
 }
 
 #  Geographic Clustering Config
@@ -2221,7 +2247,7 @@ def check_trip_route_spread(trip_df):
 # ==========================================
 # LOAD MASTER DATA
 # ==========================================
-@st.cache_data(ttl=3600, show_spinner=False)  # Cache 1 ชม. (เพิ่มความเร็ว)
+@st.cache_data(ttl=300, show_spinner=False)  # Cache 5 นาที (real-time เมื่อ Sheets เปลี่ยน)
 def load_master_data():
     """โหลด Master Data จาก Google Sheets หรือ JSON (auto-sync)"""
     try:
@@ -2956,12 +2982,7 @@ def load_model():
             _warnings.simplefilter("always")
             with open(MODEL_PATH, 'rb') as f:
                 model_data = pickle.load(f)
-        # แสดง version mismatch warning ใน UI (ไม่แสดงแค่ใน terminal)
-        for w in _caught:
-            if 'InconsistentVersionWarning' in str(w.category.__name__) or 'version' in str(w.message).lower():
-                import sklearn as _sk
-                st.warning(f"⚠️ **Model Version Warning:** โมเดลถูก train ด้วย sklearn เวอร์ชันต่างกัน — ผลลัพธ์อาจแตกต่างเล็กน้อย (ติดตั้ง sklearn ใหม่แล้ว retrain model เพื่อความแม่นยำสูงสุด)")
-                break
+        # suppress model version mismatch warning in UI
         return model_data
     except Exception as e:
         st.error(f"❌ Error loading model: {e}")
@@ -3027,6 +3048,9 @@ def process_dataframe(df):
     # ลำดับ 2 = รหัสสาขา (BranchCode)
     if len(col_list) > 2:
         rename_map[col_list[2]] = 'Code'
+    # ลำดับ 3 = รหัส WMS
+    if len(col_list) > 3:
+        rename_map[col_list[3]] = 'WMSCode'
     # ลำดับ 4 = สาขา/ชื่อ (Branch)
     if len(col_list) > 4:
         rename_map[col_list[4]] = 'Name'
@@ -3036,6 +3060,9 @@ def process_dataframe(df):
     # ลำดับ 6 = TOTALWGT
     if len(col_list) > 6:
         rename_map[col_list[6]] = 'Weight'
+    # ลำดับ 7 = OriginalQTY
+    if len(col_list) > 7:
+        rename_map[col_list[7]] = 'OriginalQty'
     # ลำดับ 15 = latitude
     if len(col_list) > 15:
         rename_map[col_list[15]] = 'Latitude'
@@ -3097,6 +3124,12 @@ def process_dataframe(df):
             rename_map[col] = 'TripNo'
         elif col_upper == 'TRIP' or 'ทริป' in col_clean or 'เที่ยว' in col_clean:
             rename_map[col] = 'Trip'
+        # WMSCode
+        elif 'WMS' in col_upper or col_upper in ['WMSCODE', 'BRANCHCODEWMS', 'CODEWMS']:
+            rename_map[col] = 'WMSCode'
+        # OriginalQty
+        elif col_upper in ['ORIGINALQTY', 'ORIGINALQUANTITY', 'ORIGINALQTY', 'ORIG_QTY', 'ORIGQTY'] or 'ORIGINALQ' in col_upper:
+            rename_map[col] = 'OriginalQty'
         # Booking
         elif 'BOOKING' in col_upper:
             rename_map[col] = 'Booking'
@@ -5830,6 +5863,23 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
         safe_print("   ✅ Final Audit: ไม่พบการปนภาค/BKK")
 
     # ==========================================
+    # Step 8.9: Catch-all — สาขาที่ยังไม่ได้จัดทริป (Trip=0)
+    # รองรับ Z*, LUBE, SUPPLY, USE, สาขาไม่มีพิกัด ฯลฯ
+    # ==========================================
+    _catchall_remaining = df[df['Trip'] == 0].copy()
+    if len(_catchall_remaining) > 0:
+        safe_print(f"\n⚠️  Step 8.9: พบ {len(_catchall_remaining)} สาขายังไม่ได้จัดทริป → จัดทริปเดี่ยว...")
+        _ca_max_trip = int(df[df['Trip'] > 0]['Trip'].max()) if len(df[df['Trip'] > 0]) > 0 else 0
+        for _, _ca_row in _catchall_remaining.iterrows():
+            _ca_max_trip += 1
+            _ca_code = _ca_row['Code']
+            df.loc[df['Code'] == _ca_code, 'Trip'] = _ca_max_trip
+            _ca_veh = branch_max_vehicle_cache.get(str(_ca_code).strip().upper(), '6W')
+            df.loc[df['Code'] == _ca_code, 'Truck'] = f"{_ca_veh} ⚙️ จัดเดี่ยว"
+            safe_print(f"   ➕ {_ca_code} → Trip {_ca_max_trip} ({_ca_veh})")
+        safe_print(f"   ✅ Step 8.9: จัดทริปเพิ่ม {len(_catchall_remaining)} สาขา")
+
+    # ==========================================
     # Step 9: เรียงทริปใหม่ตามภาค → จังหวัด → ระยะทาง
     # ==========================================
     safe_print("\n📋 Step 9: เรียงทริปใหม่ตามภาค → จังหวัด → ระยะทาง...")
@@ -5901,7 +5951,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
     summary_df = pd.DataFrame(summary_data_new)
     summary_df = summary_df.sort_values('Trip').reset_index(drop=True)
     
-    safe_print(f"   ✅ เรียงใหม่: {len(sorted_trips)} ทริป (Trip 1 = ไกลสุด {trip_max_distances[sorted_trips[0]]:.0f} km)")
+    if sorted_trips:
+        safe_print(f"   ✅ เรียงใหม่: {len(sorted_trips)} ทริป (Trip 1 = ไกลสุด {trip_max_distances[sorted_trips[0]]:.0f} km)")
+    else:
+        safe_print("   ✅ เรียงใหม่: 0 ทริป")
     
     # 📋 เรียงลำดับสาขาภายในทริป: ระยะทางจาก DC ไกลก่อน (ไม่ใช้ตัวอักษรจังหวัด/อำเภอ)
     if '_distance_from_dc' in df.columns:
@@ -5925,194 +5978,521 @@ def main():
     # ── Global white/green theme CSS ──────────────────────────────────────
     st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-html, body, [class*="css"] { font-family: 'Inter', 'Segoe UI', system-ui, sans-serif !important; }
+@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 
-/* Main background */
-.stApp { background: #f0fdf4 !important; }
-.main .block-container {
-    padding-top: 1.5rem;
-    padding-bottom: 2rem;
-    max-width: 1400px;
+/* ═══════════════════════════════════════════════════════════════
+   RESET & BASE — FORCE LIGHT MODE
+═══════════════════════════════════════════════════════════════ */
+*, *::before, *::after { box-sizing: border-box; }
+html, body {
+    font-family: 'Sarabun', 'Inter', system-ui, sans-serif !important;
+    background: #f0faf4 !important;
+    color: #0f172a !important;
+    font-size: 16px !important;
+}
+[class*="css"] {
+    font-family: 'Sarabun', 'Inter', system-ui, sans-serif !important;
+}
+/* Nuke every possible dark container */
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stAppViewBlockContainer"],
+[data-testid="stMain"],
+[data-testid="stMainBlockContainer"],
+[data-testid="stVerticalBlock"],
+[data-testid="stHorizontalBlock"],
+[data-testid="stHeader"],
+[data-testid="stToolbar"],
+[data-testid="stDecoration"],
+[data-testid="stBottomBlockContainer"],
+section[tabindex="0"],
+.main, section.main, .block-container,
+div[data-layout="wide"] {
+    background-color: #f0faf4 !important;
+    color: #0f172a !important;
+}
+.stApp {
+    background: #f0faf4 !important;
+    background-image:
+        radial-gradient(ellipse 70% 40% at 50% -5%, rgba(16,185,129,0.10), transparent),
+        radial-gradient(ellipse 50% 35% at 90% 70%, rgba(6,182,212,0.05), transparent) !important;
+}
+.main .block-container, [data-testid="stMainBlockContainer"] {
+    padding-top: 0 !important;
+    padding-bottom: 4rem !important;
+    max-width: 1480px !important;
+    background-color: transparent !important;
 }
 
-/* Header / Title */
-h1 { color: #065f46 !important; font-weight: 800 !important; letter-spacing: -0.5px; }
-h2, h3, h4 { color: #0f172a !important; font-weight: 700 !important; }
-
-/* Metric cards */
-[data-testid="metric-container"] {
+/* ═══════════════════════════════════════════════════════════════
+   TOP NAV BAR
+═══════════════════════════════════════════════════════════════ */
+.app-navbar {
+    background: #ffffff;
+    border-bottom: 3px solid #10b981;
+    padding: 0 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 64px;
+    margin: -1rem -1rem 0 -1rem;
+    position: sticky;
+    top: 0;
+    z-index: 999;
+    box-shadow: 0 2px 16px rgba(16,185,129,0.10);
+}
+.app-navbar-brand {
+    display: flex; align-items: center; gap: 14px;
+    color: #064e3b !important;
+    font-size: 1.15rem;
+    font-weight: 800;
+    letter-spacing: -0.3px;
+    text-decoration: none;
+}
+.app-navbar-brand .brand-icon {
+    width: 40px; height: 40px;
+    background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.3rem;
+    box-shadow: 0 4px 12px rgba(16,185,129,0.3);
+    flex-shrink: 0;
+}
+.app-navbar-brand .brand-name { line-height: 1.1; }
+.app-navbar-brand .brand-name small { display: block; font-size: 0.65rem; font-weight: 500; color: #6b7280; letter-spacing: 0.5px; }
+.app-navbar-status {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 0.8rem; color: #047857;
+    font-weight: 500;
+}
+.nav-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #f0fdf4;
+    border: 1px solid #bbf7d0;
+    padding: 4px 12px; border-radius: 20px;
+    font-size: 0.76rem; font-weight: 600;
+    color: #065f46; white-space: nowrap;
+}
+.nav-sync-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #059669; color: #ffffff !important;
+    border: none; border-radius: 20px;
+    padding: 6px 16px; font-size: 0.78rem; font-weight: 700;
+    cursor: pointer; transition: background .2s, box-shadow .2s;
+    box-shadow: 0 2px 8px rgba(5,150,105,0.3);
+    text-decoration: none;
+}
+.nav-sync-btn:hover { background: #047857; box-shadow: 0 4px 12px rgba(5,150,105,0.4); }
+/* push stButton inside navbar area */
+.navbar-sync-wrapper { position: relative; margin: -64px 0 0 0; height: 64px; display: flex; align-items: center; justify-content: flex-end; padding-right: 2rem; pointer-events: none; }
+.navbar-sync-wrapper > * { pointer-events: all; }
+.nav-dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; display: inline-block; box-shadow: 0 0 6px rgba(74,222,128,0.9); animation: pulse-dot 2s infinite; flex-shrink: 0; }
+.nav-dot.offline { background: #fbbf24; box-shadow: 0 0 6px rgba(251,191,36,0.8); animation: none; }
+.nav-badge-warn { background: #fffbeb !important; border-color: #fde68a !important; color: #92400e !important; }
+@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+/* ── Page title ── */
+.page-section-title {
+    font-size: 1.4rem; font-weight: 800; color: #064e3b;
+    margin: 1.2rem 0 0.8rem;
+    display: flex; align-items: center; gap: 10px;
+}
+.page-section-title small { font-size: 0.82rem; font-weight: 500; color: #6b7280; }
+/* ── KPI cards ── */
+.kpi-card {
     background: #ffffff;
     border: 1.5px solid #d1fae5;
-    border-radius: 14px;
-    padding: 14px 18px !important;
-    box-shadow: 0 2px 10px rgba(5,150,105,.07);
-    transition: box-shadow .2s;
+    border-radius: 16px;
+    padding: 1rem 1.25rem;
+    text-align: center;
+    box-shadow: 0 2px 8px rgba(5,150,105,0.06);
+    transition: border-color .2s, box-shadow .2s;
+}
+.kpi-card:hover { border-color: #6ee7b7; box-shadow: 0 4px 16px rgba(16,185,129,0.12); }
+.kpi-value { font-size: 1.55rem; font-weight: 800; color: #059669; line-height: 1.1; }
+.kpi-label { font-size: 0.72rem; color: #6b7280; font-weight: 500; margin-top: 4px; }
+
+/* ═══════════════════════════════════════════════════════════════
+   SECTION CARD & DIVIDER
+═══════════════════════════════════════════════════════════════ */
+.glass-card {
+    background: #ffffff;
+    border: 1.5px solid #d1fae5;
+    border-radius: 20px;
+    padding: 1.75rem;
+    margin-bottom: 1.25rem;
+    box-shadow: 0 2px 8px rgba(5,150,105,0.06), 0 1px 3px rgba(15,23,42,0.05);
+    transition: border-color .2s, box-shadow .2s;
+}
+.glass-card:hover {
+    border-color: #6ee7b7;
+    box-shadow: 0 6px 24px rgba(16,185,129,0.12);
+}
+.divider-label {
+    display: flex; align-items: center; gap: 12px;
+    color: #059669; font-size: 0.78rem; font-weight: 800;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    margin: 2rem 0 1.25rem 0;
+}
+.divider-label::before, .divider-label::after {
+    content: ''; flex: 1; height: 1.5px;
+    background: linear-gradient(90deg, #d1fae5, transparent);
+}
+.divider-label::before { background: linear-gradient(90deg, transparent, #d1fae5); }
+
+/* ═══════════════════════════════════════════════════════════════
+   TYPOGRAPHY
+═══════════════════════════════════════════════════════════════ */
+h1 { color: #064e3b !important; font-weight: 900 !important; font-size: 2rem !important; }
+h2 { color: #065f46 !important; font-weight: 800 !important; font-size: 1.5rem !important; }
+h3 { color: #047857 !important; font-weight: 700 !important; font-size: 1.2rem !important; }
+h4 { color: #0f172a !important; font-weight: 700 !important; font-size: 1.05rem !important; }
+h5, h6 { color: #1e293b !important; font-weight: 600 !important; }
+[data-testid="stMarkdownContainer"] h1,
+[data-testid="stMarkdownContainer"] h2,
+[data-testid="stMarkdownContainer"] h3,
+[data-testid="stMarkdownContainer"] h4 {
+    color: #064e3b !important;
+}
+[data-testid="stMarkdownContainer"] p {
+    color: #1e293b !important;
+    font-size: 0.95rem !important;
+    line-height: 1.65 !important;
+}
+[data-testid="stMarkdownContainer"] li {
+    color: #374151 !important;
+    font-size: 0.95rem !important;
+}
+/* All text elements */
+label, span, div, p, td, th, li {
+    color: #0f172a;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   METRIC CARDS
+═══════════════════════════════════════════════════════════════ */
+[data-testid="metric-container"] {
+    background: #ffffff !important;
+    border: 1.5px solid #d1fae5 !important;
+    border-radius: 18px !important;
+    padding: 20px 24px !important;
+    box-shadow: 0 2px 8px rgba(5,150,105,0.07) !important;
+    transition: all .22s cubic-bezier(.4,0,.2,1) !important;
+    position: relative !important;
+    overflow: hidden !important;
+}
+[data-testid="metric-container"]::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, #059669, #10b981, #34d399);
+    border-radius: 18px 18px 0 0;
 }
 [data-testid="metric-container"]:hover {
-    box-shadow: 0 4px 20px rgba(5,150,105,.14);
+    border-color: #6ee7b7 !important;
+    box-shadow: 0 8px 28px rgba(16,185,129,0.15) !important;
+    transform: translateY(-3px) !important;
 }
-[data-testid="stMetricLabel"] { color: #6b7280 !important; font-size: 12px !important; font-weight: 600 !important; }
-[data-testid="stMetricValue"] { color: #065f46 !important; font-weight: 800 !important; }
-[data-testid="stMetricDelta"] { font-weight: 600 !important; }
+[data-testid="stMetricLabel"] {
+    color: #059669 !important;
+    font-size: 0.78rem !important;
+    font-weight: 800 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.08em !important;
+}
+[data-testid="stMetricValue"] {
+    color: #064e3b !important;
+    font-weight: 900 !important;
+    font-size: 2rem !important;
+    letter-spacing: -1px !important;
+}
+[data-testid="stMetricDelta"] { font-weight: 700 !important; font-size: 0.85rem !important; }
 
-/* Buttons */
+/* ═══════════════════════════════════════════════════════════════
+   BUTTONS
+═══════════════════════════════════════════════════════════════ */
 .stButton > button {
-    background: linear-gradient(135deg, #059669, #10b981) !important;
-    color: #ffffff !important;
-    border: none !important;
-    border-radius: 10px !important;
+    background: #ffffff !important;
+    color: #374151 !important;
+    border: 1.5px solid #d1d5db !important;
+    border-radius: 12px !important;
     font-weight: 700 !important;
     font-family: inherit !important;
-    transition: all .18s !important;
-    box-shadow: 0 2px 8px rgba(16,185,129,.3) !important;
+    font-size: 0.95rem !important;
+    padding: 0.6rem 1.3rem !important;
+    transition: all .18s cubic-bezier(.4,0,.2,1) !important;
+    box-shadow: 0 1px 3px rgba(15,23,42,0.08) !important;
 }
 .stButton > button:hover {
-    transform: translateY(-2px) !important;
-    box-shadow: 0 4px 16px rgba(16,185,129,.4) !important;
-    filter: brightness(1.05) !important;
-}
-.stButton > button[kind="secondary"] {
-    background: #f1f5f9 !important;
-    color: #475569 !important;
-    border: 1.5px solid #e2e8f0 !important;
-    box-shadow: none !important;
-}
-.stButton > button[kind="secondary"]:hover {
-    background: #e2e8f0 !important;
+    background: #f0fdf4 !important;
+    border-color: #10b981 !important;
+    color: #065f46 !important;
     transform: translateY(-1px) !important;
+    box-shadow: 0 4px 14px rgba(16,185,129,0.15) !important;
+}
+.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #059669 0%, #10b981 100%) !important;
+    color: #ffffff !important;
+    border: none !important;
+    font-weight: 800 !important;
+    font-size: 1rem !important;
+    padding: 0.7rem 1.75rem !important;
+    box-shadow: 0 4px 20px rgba(5,150,105,0.35) !important;
+}
+.stButton > button[kind="primary"]:hover {
+    background: linear-gradient(135deg, #047857 0%, #059669 100%) !important;
+    box-shadow: 0 8px 28px rgba(5,150,105,0.45) !important;
+    transform: translateY(-2px) !important;
 }
 
-/* Tabs */
+/* ═══════════════════════════════════════════════════════════════
+   TABS
+═══════════════════════════════════════════════════════════════ */
 .stTabs [data-baseweb="tab-list"] {
-    gap: 4px;
-    background: #ffffff;
-    border-radius: 12px;
-    padding: 4px;
+    gap: 3px;
+    background: #ecfdf5;
+    border-radius: 14px;
+    padding: 5px;
     border: 1.5px solid #d1fae5;
-    box-shadow: 0 2px 8px rgba(5,150,105,.06);
 }
 .stTabs [data-baseweb="tab"] {
-    border-radius: 9px !important;
-    font-weight: 600 !important;
+    border-radius: 10px !important;
+    font-weight: 700 !important;
     color: #6b7280 !important;
-    padding: 8px 20px !important;
+    padding: 10px 26px !important;
+    font-size: 0.92rem !important;
     transition: all .18s !important;
+    border: none !important;
+    background: transparent !important;
 }
 .stTabs [aria-selected="true"] {
     background: linear-gradient(135deg, #059669, #10b981) !important;
     color: #ffffff !important;
-    box-shadow: 0 2px 8px rgba(16,185,129,.35) !important;
+    box-shadow: 0 2px 12px rgba(5,150,105,0.35) !important;
+    font-weight: 800 !important;
 }
 [data-baseweb="tab-highlight"] { display: none !important; }
 [data-baseweb="tab-border"] { display: none !important; }
 
-/* Expanders */
+/* ═══════════════════════════════════════════════════════════════
+   EXPANDERS
+═══════════════════════════════════════════════════════════════ */
 details[data-testid="stExpander"] {
-    background: #ffffff;
-    border: 1.5px solid #d1fae5 !important;
-    border-radius: 12px !important;
-    box-shadow: 0 2px 8px rgba(5,150,105,.06);
-    margin-bottom: 8px;
+    background: #ffffff !important;
+    border: 1.5px solid #e2e8f0 !important;
+    border-radius: 14px !important;
+    margin-bottom: 10px;
+    box-shadow: 0 1px 4px rgba(15,23,42,0.05);
+    transition: all .2s;
+}
+details[data-testid="stExpander"][open] {
+    border-color: #6ee7b7 !important;
+    box-shadow: 0 3px 14px rgba(16,185,129,0.10) !important;
 }
 details[data-testid="stExpander"] summary {
     font-weight: 700 !important;
-    color: #065f46 !important;
-    padding: 12px 16px !important;
+    color: #1e293b !important;
+    padding: 15px 20px !important;
+    border-radius: 14px !important;
+    font-size: 0.95rem !important;
+    cursor: pointer;
+}
+details[data-testid="stExpander"] summary:hover { color: #059669 !important; }
+
+/* ═══════════════════════════════════════════════════════════════
+   HERO UPLOAD CARD
+═══════════════════════════════════════════════════════════════ */
+.hero-upload-card {
+    background: linear-gradient(135deg, #ecfdf5 0%, #f0fdf4 60%, #ffffff 100%);
+    border: 2px solid #a7f3d0;
+    border-radius: 24px;
+    padding: 2rem 2.5rem 1.5rem;
+    margin: 1rem 0 1.5rem;
+    box-shadow: 0 4px 24px rgba(16,185,129,0.08);
+}
+.hero-upload-title {
+    font-size: 1.3rem; font-weight: 800; color: #064e3b;
+    margin-bottom: 0.25rem;
+}
+.hero-upload-sub {
+    font-size: 0.88rem; color: #6b7280; margin-bottom: 1.2rem;
+}
+/* FILE UPLOADER */
+[data-testid="stFileUploader"] {
+    background: #ffffff !important;
+    border: 2px dashed #6ee7b7 !important;
+    border-radius: 16px !important;
+    padding: 1.2rem !important;
+    transition: all .25s;
+}
+[data-testid="stFileUploader"]:hover {
+    border-color: #10b981 !important;
+    background: #f0fdf4 !important;
+    box-shadow: 0 0 0 4px rgba(16,185,129,0.1) !important;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] { color: #6b7280 !important; }
+[data-testid="stFileUploaderDropzoneInstructions"] small { color: #9ca3af !important; }
+
+/* ═══════════════════════════════════════════════════════════════
+   INPUTS
+═══════════════════════════════════════════════════════════════ */
+[data-testid="stNumberInput"] > div,
+[data-testid="stTextInput"] > div > div {
+    background: #ffffff !important;
+    border: 1.5px solid #d1d5db !important;
     border-radius: 12px !important;
 }
-
-/* File uploader */
-[data-testid="stFileUploader"] {
-    background: #ffffff;
-    border: 2px dashed #6ee7b7 !important;
-    border-radius: 14px !important;
-    padding: 12px !important;
-    transition: border-color .2s;
-}
-[data-testid="stFileUploader"]:hover { border-color: #10b981 !important; }
-
-/* Number inputs */
-[data-testid="stNumberInput"] input {
-    background: #f0fdf4 !important;
-    border: 1.5px solid #bbf7d0 !important;
-    border-radius: 10px !important;
+[data-testid="stNumberInput"] input,
+[data-testid="stTextInput"] input {
+    background: transparent !important;
+    border: none !important;
     color: #0f172a !important;
     font-weight: 700 !important;
-    font-size: 15px !important;
+    font-size: 1.05rem !important;
+    caret-color: #10b981;
 }
-[data-testid="stNumberInput"] input:focus {
+[data-testid="stNumberInput"] > div:focus-within,
+[data-testid="stTextInput"] > div > div:focus-within {
     border-color: #10b981 !important;
-    box-shadow: 0 0 0 3px rgba(16,185,129,.12) !important;
-}
-
-/* Selectbox */
-[data-testid="stSelectbox"] > div > div {
+    box-shadow: 0 0 0 3px rgba(16,185,129,0.12) !important;
     background: #f0fdf4 !important;
-    border: 1.5px solid #bbf7d0 !important;
-    border-radius: 10px !important;
+}
+[data-testid="stSelectbox"] > div > div {
+    background: #ffffff !important;
+    border: 1.5px solid #d1d5db !important;
+    border-radius: 12px !important;
+    color: #0f172a !important;
+}
+/* Input labels */
+[data-testid="stNumberInput"] label,
+[data-testid="stTextInput"] label,
+[data-testid="stSelectbox"] label,
+.stSlider label {
+    color: #059669 !important;
+    font-size: 0.82rem !important;
+    font-weight: 800 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.06em !important;
 }
 
-/* Dataframe */
+/* ═══════════════════════════════════════════════════════════════
+   DATAFRAME
+═══════════════════════════════════════════════════════════════ */
 [data-testid="stDataFrame"] {
-    border-radius: 12px !important;
-    overflow: hidden;
+    border-radius: 14px !important;
+    overflow: hidden !important;
     border: 1.5px solid #d1fae5 !important;
+    box-shadow: 0 2px 8px rgba(5,150,105,0.06) !important;
 }
+[data-testid="stDataFrame"] thead th {
+    background: #ecfdf5 !important;
+    color: #065f46 !important;
+    font-weight: 800 !important;
+    font-size: 0.78rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.06em !important;
+    border-bottom: 1.5px solid #a7f3d0 !important;
+}
+[data-testid="stDataFrame"] tbody tr:hover td { background: #f0fdf4 !important; }
 
-/* Success / Warning / Error / Info banners */
+/* ═══════════════════════════════════════════════════════════════
+   ALERTS — LIGHT MODE COLORS
+═══════════════════════════════════════════════════════════════ */
 [data-testid="stAlert"] {
-    border-radius: 12px !important;
-    border-left-width: 4px !important;
-    font-weight: 500 !important;
+    border-radius: 14px !important;
+    font-weight: 600 !important;
+    font-size: 0.92rem !important;
+}
+[data-testid="stAlert"][data-type="success"],
+div.stAlert[data-baseweb="notification"].st-success {
+    background: #f0fdf4 !important;
+    border: 1.5px solid #a7f3d0 !important;
+    border-left: 4px solid #059669 !important;
+    color: #065f46 !important;
+}
+[data-testid="stAlert"][data-type="warning"] {
+    background: #fffbeb !important;
+    border: 1.5px solid #fde68a !important;
+    border-left: 4px solid #d97706 !important;
+    color: #92400e !important;
+}
+[data-testid="stAlert"][data-type="error"] {
+    background: #fef2f2 !important;
+    border: 1.5px solid #fecaca !important;
+    border-left: 4px solid #ef4444 !important;
+    color: #991b1b !important;
+}
+[data-testid="stAlert"][data-type="info"] {
+    background: #eff6ff !important;
+    border: 1.5px solid #bfdbfe !important;
+    border-left: 4px solid #3b82f6 !important;
+    color: #1e40af !important;
 }
 
-/* Download button */
+/* ═══════════════════════════════════════════════════════════════
+   DOWNLOAD BUTTON
+═══════════════════════════════════════════════════════════════ */
 [data-testid="stDownloadButton"] > button {
     background: linear-gradient(135deg, #059669, #10b981) !important;
     color: #ffffff !important;
-    font-weight: 700 !important;
-    border-radius: 10px !important;
     border: none !important;
-    box-shadow: 0 2px 8px rgba(16,185,129,.3) !important;
+    font-weight: 800 !important;
+    font-size: 0.95rem !important;
+    border-radius: 12px !important;
+    box-shadow: 0 3px 10px rgba(5,150,105,0.28) !important;
 }
 [data-testid="stDownloadButton"] > button:hover {
+    filter: brightness(1.07) !important;
     transform: translateY(-2px) !important;
-    box-shadow: 0 4px 16px rgba(16,185,129,.45) !important;
+    box-shadow: 0 7px 22px rgba(5,150,105,0.38) !important;
 }
 
-/* Horizontal rule */
-hr { border-color: #d1fae5 !important; }
+/* ═══════════════════════════════════════════════════════════════
+   PROGRESS & SPINNER
+═══════════════════════════════════════════════════════════════ */
+[data-testid="stProgress"] > div {
+    background: #d1fae5 !important;
+    border-radius: 99px !important;
+    overflow: hidden;
+}
+[data-testid="stProgress"] > div > div {
+    background: linear-gradient(90deg, #059669, #10b981, #34d399) !important;
+    border-radius: 99px !important;
+    box-shadow: 0 0 8px rgba(16,185,129,0.4);
+}
+[data-testid="stSpinner"] > div { border-top-color: #10b981 !important; }
 
-/* Spinner */
-[data-testid="stSpinner"] > div { border-top-color: #059669 !important; }
+/* ═══════════════════════════════════════════════════════════════
+   SCROLLBAR
+═══════════════════════════════════════════════════════════════ */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #f0fdf4; border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: #a7f3d0; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #6ee7b7; }
 
-/* Progress bar */
-[data-testid="stProgress"] > div > div { background: linear-gradient(90deg, #059669, #10b981) !important; }
+/* ═══════════════════════════════════════════════════════════════
+   MISC
+═══════════════════════════════════════════════════════════════ */
+[data-testid="stCheckbox"] label { font-weight: 700 !important; color: #1e293b !important; font-size: 0.95rem !important; }
+.stCaption { color: #6b7280 !important; font-size: 0.78rem !important; }
+hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin: 1.5rem 0 !important; }
+[data-testid="stRadio"] label { font-weight: 600 !important; color: #1e293b !important; font-size: 0.95rem !important; }
 
-/* Checkbox */
-[data-testid="stCheckbox"] label { font-weight: 600 !important; color: #374151 !important; }
-input[type="checkbox"]:checked + span { background: #059669 !important; border-color: #059669 !important; }
-
-/* Caption */
-.stCaption { color: #6b7280 !important; font-size: 11px !important; }
-
-/* Status bar area */
-#status-bar { background: #ffffff; border-radius: 12px; padding: 12px 16px; border: 1.5px solid #d1fae5; }
+/* ═══════════════════════════════════════════════════════════════
+   HIDE STREAMLIT BRANDING
+═══════════════════════════════════════════════════════════════ */
+#MainMenu, footer, header { visibility: hidden; }
+[data-testid="stAppViewContainer"] > section > div:first-child { padding-top: 0 !important; }
+.stDeployButton { display: none; }
 </style>
 """, unsafe_allow_html=True)
-    
+
+
     # ป้องกันการโหลดโซนซ้ำ - ใช้ session state
     if 'zones_loaded' not in st.session_state:
         st.session_state.zones_loaded = False
     if 'cache_stats_shown' not in st.session_state:
         st.session_state.cache_stats_shown = False
-    
-    # แสดงสถานะ cache (ครั้งแรกเท่านั้น)
-    if USE_CACHE and not st.session_state.cache_stats_shown:
-        st.session_state.cache_stats_shown = True
-        if len(DISTANCE_CACHE) > 0 or len(ROUTE_CACHE_DATA) > 0:
-            st.success(f"✅ ใช้ข้อมูลแคช: {len(DISTANCE_CACHE)} ระยะทาง, {len(ROUTE_CACHE_DATA)} เส้นทาง")
     
     # 🔄 Auto-refresh (Optional - ไม่กระทบการใช้งานหลักถ้าไม่มี)
     # ใช้สำหรับ refresh cache ทุกเที่ยงคืน (เฉพาะ local dev)
@@ -6144,55 +6524,107 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
             # ถ้า autorefresh มีปัญหา → ไม่แสดง error (ฟีเจอร์เสริมเท่านั้น)
             pass
     
-    # Header
-    st.title("🚚 ระบบจัดเที่ยว - Route Optimizer")
-    
-    # 📊 Status Bar - แสดงสถานะระบบแบบกระชับ
-    status_cols = st.columns([3, 1, 1])
-    with status_cols[0]:
-        if SHEETS_AVAILABLE:
-            st.success("📊 **Google Sheets:** เชื่อมต่อสำเร็จ | Auto-sync ทุก 5 นาที")
-        else:
-            st.warning("📊 **Data Source:** branch_data.json (local cache)")
-    with status_cols[1]:
-        st.metric("📍 Master Data", f"{len(MASTER_DATA):,} สาขา")
-    with status_cols[2]:
-        if st.button("🔄 ดึงข้อมูลใหม่", use_container_width=True, help="sync จาก Google Sheets และ rebuild MASTER_DATA_DICT"):
-            with st.spinner("⏳ กำลังดึงข้อมูลจาก Google Sheets..."):
+    # ── Top Navigation Bar ──────────────────────────────────────────────────
+    # check precompute status
+    _precompute_running = False
+    if st.session_state.get('_precompute_pid'):
+        import subprocess as _sp2
+        _pid = st.session_state['_precompute_pid']
+        try:
+            if os.name == 'nt':
+                _r = _sp2.run(['tasklist', '/FI', f'PID eq {_pid}', '/NH', '/FO', 'CSV'],
+                              capture_output=True, text=True)
+                _precompute_running = str(_pid) in _r.stdout
+            else:
+                os.kill(_pid, 0)
+                _precompute_running = True
+        except Exception:
+            _precompute_running = False
+        if not _precompute_running:
+            st.session_state.pop('_precompute_pid', None)
+
+    # ── Top Navbar ──────────────────────────────────────────────────────────
+    _sheets_ok    = SHEETS_AVAILABLE
+    _dot_color    = '#4ade80' if _sheets_ok else '#fbbf24'
+    _sheets_label = 'Google Sheets' if _sheets_ok else 'ออฟไลน์'
+    _sheets_sub   = 'เชื่อมต่อแล้ว' if _sheets_ok else 'ออฟไลน์'
+    _branch_count = len(MASTER_DATA) if not MASTER_DATA.empty else 0
+    _today_str    = datetime.now().strftime('%d %b %Y')
+    _rebuild_badge = '<span class="nav-badge nav-badge-warn">⏳ กำลัง Rebuild...</span>' if _precompute_running else ''
+    _dot_span = f'<span style="width:8px;height:8px;border-radius:50%;background:{_dot_color};display:inline-block;flex-shrink:0;margin-right:4px"></span>'
+    _badge1 = f'<span class="nav-badge">{_dot_span} {_sheets_label}: {_sheets_sub}</span>'
+    _badge2 = f'<span class="nav-badge">📍 {_branch_count:,} สาขา</span>'
+    _navbar_html = f'<div class="app-navbar"><div class="app-navbar-brand"><div class="brand-icon">🚚</div><div class="brand-name">Route <strong>Optimizer</strong><small>ระบบจัดเที่ยวอัจฉริยะ</small></div></div><div class="app-navbar-status">{_rebuild_badge}{_badge1}{_badge2}</div></div>'
+    st.markdown(_navbar_html, unsafe_allow_html=True)
+
+    # ── Page title ─────────────────────────────────────────────────────────
+    _cache_dist = len(DISTANCE_CACHE)
+    _cache_rt   = len(ROUTE_CACHE_DATA)
+    st.markdown(f'<div class="page-section-title"><span>📦</span> จัดเส้นทางจัดส่ง <small>· {_today_str}</small></div>', unsafe_allow_html=True)
+
+    # ── KPI row: 3 stats + sync button ──────────────────────────────────────
+    _kc1, _kc2, _kc3, _kc4 = st.columns(4)
+    with _kc1:
+        st.markdown(f'<div class="kpi-card"><div class="kpi-value">{_branch_count:,}</div><div class="kpi-label">🏪 สาขาในระบบ</div></div>', unsafe_allow_html=True)
+    with _kc2:
+        st.markdown(f'<div class="kpi-card"><div class="kpi-value">{_cache_dist:,}</div><div class="kpi-label">📍 ระยะทางแคช</div></div>', unsafe_allow_html=True)
+    with _kc3:
+        st.markdown(f'<div class="kpi-card"><div class="kpi-value">{_cache_rt:,}</div><div class="kpi-label">🛣️ เส้นทางแคช</div></div>', unsafe_allow_html=True)
+    with _kc4:
+        st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
+        if st.button("🔄 ซิงค์ข้อมูล", use_container_width=True, type="primary",
+                     help="ดึงข้อมูลจาก Google Sheets + rebuild distances"):
+            with st.spinner("⏳ กำลังดึงข้อมูล..."):
                 try:
-                    # ล้าง cache ทั้งหมด → module-level code จะ re-execute ตอน rerun
                     st.cache_data.clear()
-                    # clear trip result เก่าออก (ต้องจัดเที่ยวใหม่กับข้อมูลล่าสุด)
                     for _k in ['trip_result', 'trip_summary', '_imap_html', '_imap_key',
                                 'trip_result_excel', '_imap_build_time']:
                         st.session_state.pop(_k, None)
-                    st.success("✅ ล้าง cache เรียบร้อย — กำลังโหลดใหม่...")
+                    import subprocess as _sp, sys as _sys
+                    _precompute_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'precompute_branch_data.py')
+                    if os.path.exists(_precompute_script):
+                        _proc = _sp.Popen(
+                            [_sys.executable, _precompute_script],
+                            cwd=os.path.dirname(os.path.abspath(__file__)),
+                            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                            creationflags=_sp.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                        )
+                        st.session_state['_precompute_pid'] = _proc.pid
                 except Exception as _re:
-                    st.error(f"❌ ดึงข้อมูลไม่สำเร็จ: {_re}")
+                    st.error(f"❌ {_re}")
                 finally:
                     st.rerun()
-    
-    st.markdown("---")
-    
+        if _precompute_running:
+            st.caption("⏳ กำลัง rebuild...")
+
     # โหลดโมเดล
     model_data = load_model()
-    
     if not model_data:
         st.error("❌ ไม่พบข้อมูลโมเดล กรุณาเทรนโมเดลก่อนใช้งาน")
-        st.info("💡 รันคำสั่ง: `python test_model.py`")
         st.stop()
-    
-    # อัปโหลดไฟล์ครั้งเดียว
-    st.markdown("### 📂 อัปโหลดไฟล์รายการออเดอร์")
+
+    # ── Upload card ─────────────────────────────────────────────────────────
+    st.markdown("""
+<div class="hero-upload-card">
+  <div class="hero-upload-title">📂 นำเข้าไฟล์ออเดอร์</div>
+  <div class="hero-upload-sub">รองรับไฟล์ Excel (.xlsx) ที่มีรายการสาขาและน้ำหนัก / คิว</div>
+</div>""", unsafe_allow_html=True)
     uploaded_file = st.file_uploader(
-        "เลือกไฟล์ Excel (.xlsx)", 
-        type=['xlsx'],
-        help="อัปโหลดไฟล์ Excel ที่มีรายการสาขาและออเดอร์"
+        "upload", type=['xlsx'],
+        help="อัปโหลดไฟล์ Excel ที่มีรายการสาขาและออเดอร์",
+        label_visibility="collapsed"
     )
     
     if uploaded_file:
         # เก็บไฟล์ต้นฉบับไว้ใน session_state เพื่อใช้ตอน export
         uploaded_file_content = uploaded_file.read()
+        # เคลียร์ผลลัพธ์เก่าถ้าไฟล์เปลี่ยน
+        _prev_file_id = st.session_state.get('_uploaded_file_id')
+        _curr_file_id = (uploaded_file.name, uploaded_file.size)
+        if _prev_file_id != _curr_file_id:
+            for _k in ('trip_result', 'trip_summary', 'fleet_used', 'fleet_limits', 'trip_buffers', '_trip_result_fresh', '_trip_elapsed'):
+                st.session_state.pop(_k, None)
+            st.session_state['_uploaded_file_id'] = _curr_file_id
         st.session_state['original_file_content'] = uploaded_file_content
         # เคลียร์ log buffer ก่อนโหลด
         st.session_state['_ui_log'] = []
@@ -6288,13 +6720,13 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                         _show_cols = [c for c in ['Code', 'Name', 'Province', 'District'] if c in missing_df.columns]
                         st.dataframe(missing_df[_show_cols].reset_index(drop=True), hide_index=True)
             
-            st.markdown("---")
-            
+            st.markdown('<div class="divider-label">⚙️ การจัดการ</div>', unsafe_allow_html=True)
+
             # แท็บหลัก
             tab1, tab2, tab3 = st.tabs([
-                "📦 จัดเที่ยว (ตามน้ำหนัก)",
+                "📦 จัดเที่ยว",
                 "🗺️ จัดกลุ่มตามภาค",
-                "🏙️ โซนจัดส่งสาขา"
+                "🏙️ โซนจัดส่ง"
             ])
                 
             # ==========================================
@@ -6308,7 +6740,7 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                 # ==========================================
                 # ตัวเลือกการตั้งค่า
                 # ==========================================
-                st.markdown("#### ⚙️ ตั้งค่าการจัดทริป")
+                st.markdown('<div class="divider-label">⚙️ ตั้งค่าการจัดทริป</div>', unsafe_allow_html=True)
                 
                 # กรอก Buffer แยกตามประเภท
                 col_buf1, col_buf2 = st.columns(2)
@@ -6335,8 +6767,7 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                 punthai_buffer_value = punthai_buffer / 100.0
                 maxmart_buffer_value = maxmart_buffer / 100.0
 
-                st.markdown("---")
-                st.markdown("#### 🚛 จำนวนรถที่มี (ใส่ 0 = ไม่จำกัด)")
+                st.markdown('<div class="divider-label">🚛 กำหนดจำนวนรถ</div>', unsafe_allow_html=True)
                 col_f1, col_f2, col_f3 = st.columns(3)
                 with col_f1:
                     fleet_4w = st.number_input("🚗 4W (คัน)", min_value=0, max_value=99, value=0, step=1, key="fleet_4w",
@@ -6353,8 +6784,7 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                     '6W': int(fleet_6w) if fleet_6w > 0 else 999,
                 }
 
-                st.markdown("---")
-                st.markdown("### 📋 สรุปข้อจำกัดรถจาก Master Data")
+                st.markdown('<div class="divider-label">📋 ข้อจำกัดรถจาก Master Data</div>', unsafe_allow_html=True)
                 
                 # บึงแคช: vehicle_restrictions (เร็ว - ไม่ใช้ iterrows)
                 vehicle_restrictions = {code: get_max_vehicle_for_branch(code) for code in df['Code']}
@@ -6409,40 +6839,76 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                         display_restricted.columns = ['รหัสสาขา', 'ชื่อสาขา', 'รถสูงสุด']
                         st.dataframe(display_restricted.sort_values('รถสูงสุด'), width="stretch", height=300)
                 
-                st.markdown("---")
-                
                 # ปุ่มจัดทริป
                 if st.button("🚀 เริ่มจัดเที่ยว", type="primary", width="stretch"):
+                    # เคลียร์ log เก่า
+                    st.session_state['_ui_log'] = []
+                    st.session_state['_trip_log'] = []
                     # สร้าง status container แบบ popup
                     with st.status("🚀 กำลังประมวลผล...", expanded=True) as status:
-                        # Progress bar
                         progress_bar = st.progress(0)
                         status_text = st.empty()
-                        
+                        log_area = st.empty()
+
                         status_text.write("⏳ กำลังเตรียมข้อมูล...")
                         progress_bar.progress(10)
-                        
-                        # จัดเรียงตามภาค/จังหวัด/อำเภอ/ตำบล/Route (ในฟังก์ชัน predict_trips)
+
                         df_to_process = df.copy()
-                        
                         progress_bar.progress(20)
-                        
-                        import time as time_module
+
+                        import time as time_module, threading as _threading
                         start_time = time_module.time()
-                        
-                        # ส่ง buffer แยกตาม BU
-                        result_df, summary, fleet_used = predict_trips(
-                            df_to_process,
-                            model_data,
-                            punthai_buffer=punthai_buffer_value,
-                            maxmart_buffer=maxmart_buffer_value,
-                            fleet_limits=fleet_limits_input
-                        )
 
+                        # ── รัน predict_trips ใน thread แยก เพื่อให้ log แสดง live ──
+                        _result_box = {'result': None, 'error': None, 'done': False}
+
+                        def _run_predict():
+                            try:
+                                _result_box['result'] = predict_trips(
+                                    df_to_process, model_data,
+                                    punthai_buffer=punthai_buffer_value,
+                                    maxmart_buffer=maxmart_buffer_value,
+                                    fleet_limits=fleet_limits_input
+                                )
+                            except Exception as _ex:
+                                _result_box['error'] = _ex
+                            finally:
+                                _result_box['done'] = True
+
+                        _t = _threading.Thread(target=_run_predict, daemon=True)
+                        _t.start()
+
+                        # ── polling loop: อัปเดต log ทุก 0.4s ──
+                        _tick = 0
+                        while not _result_box['done']:
+                            time_module.sleep(0.4)
+                            _tick += 1
+                            _logs_now = st.session_state.get('_ui_log', [])
+                            if _logs_now:
+                                _last_line = _logs_now[-1]
+                                status_text.write(f"⏳ {_last_line[:120]}")
+                                log_area.code('\n'.join(_logs_now[-30:]), language=None)
+                            progress_bar.progress(min(88, 20 + _tick * 2))
+
+                        _t.join()
+
+                        if _result_box['error']:
+                            status.update(label=f"❌ เกิดข้อผิดพลาด", state="error", expanded=True)
+                            st.error(f"❌ {_result_box['error']}")
+                            import traceback as _tb2
+                            st.code(_tb2.format_exc(), language='text')
+                            st.stop()
+
+                        result_df, summary, fleet_used = _result_box['result']
                         elapsed_time = time_module.time() - start_time
-                        progress_bar.progress(90)
 
-                        # 💾 เก็บผลลัพธ์ใน session_state เพื่อใช้ตอน export
+                        # snapshot log หลังเสร็จ
+                        _collected_log = list(st.session_state.get('_ui_log', []))
+                        st.session_state['_trip_log'] = _collected_log
+                        if _collected_log:
+                            log_area.code('\n'.join(_collected_log[-30:]), language=None)
+
+                        # 💾 เก็บผลลัพธ์ใน session_state
                         st.session_state['trip_result'] = result_df
                         st.session_state['trip_summary'] = summary
                         st.session_state['fleet_used'] = fleet_used
@@ -6451,17 +6917,25 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                             'punthai': punthai_buffer_value,
                             'maxmart': maxmart_buffer_value
                         }
-                        st.session_state['_trip_result_fresh'] = True  # แสดง balloons ครั้งแรกเท่านั้น
-                        st.session_state['_trip_elapsed'] = elapsed_time  # เก็บเวลาจัดทริป
-                        
+                        st.session_state['_trip_result_fresh'] = True
+                        st.session_state['_trip_elapsed'] = elapsed_time
+
                         progress_bar.progress(100)
                         status_text.write(f"✅ จัดทริปเสร็จสิ้น! (ใช้เวลา {elapsed_time:.1f} วินาที)")
                         status.update(label=f"✅ ประมวลผลเสร็จสมบูรณ์! ({elapsed_time:.1f}s)", state="complete", expanded=False)
+                    st.rerun()
                 
                 # 📊 แสดงผลลัพธ์ถ้ามีข้อมูลใน session_state
                 if 'trip_result' in st.session_state and 'trip_summary' in st.session_state:
                     result_df = st.session_state['trip_result']
                     summary = st.session_state['trip_summary']
+
+                    # ── แสดง log การจัดทริป ──
+                    _trip_log = st.session_state.get('_trip_log', [])
+                    if _trip_log:
+                        _elapsed = st.session_state.get('_trip_elapsed', 0)
+                        with st.expander(f"📋 Log การจัดทริป ({len(_trip_log)} บรรทัด · {_elapsed:.1f}s)", expanded=False):
+                            st.code('\n'.join(_trip_log), language=None)
 
                     # ── เรียงลำดับ result_df: ทริป → ระยะทางจาก DC (ไกลก่อน) ──
                     _rd_sort_cols = ['Trip']
@@ -6476,10 +6950,13 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                     ).reset_index(drop=True)
                     st.session_state['trip_result'] = result_df
 
-                    # ตรวจสอบสาขาที่ไม่ได้จัดทริป (Trip = 0)
+                    # ตรวจสอบสาขาที่ไม่ได้จัดทริป (Trip = 0) — ควรเป็น 0 หลัง Step 8.9
                     unassigned_count = len(result_df[result_df['Trip'] == 0])
                     if unassigned_count > 0:
                         st.warning(f"⚠️ มี {unassigned_count} สาขาที่ไม่ได้จัดทริป (Trip = 0)")
+                        with st.expander(f"🔍 ดูรายละเอียดสาขาที่ไม่ได้จัดทริป ({unassigned_count} สาขา)"):
+                            _ua_cols = [c for c in ['Code', 'Name', 'BU', 'Weight', 'Cube', 'Province'] if c in result_df.columns]
+                            st.dataframe(result_df[result_df['Trip'] == 0][_ua_cols].reset_index(drop=True), hide_index=True)
                     
                     # กรองเฉพาะสาขาที่จัดทริปแล้ว สำหรับการแสดงผล
                     assigned_df = result_df[result_df['Trip'] > 0].copy()
@@ -6490,10 +6967,7 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                         st.session_state['_trip_result_fresh'] = False
                     st.success(f"✅ **จัดทริปเสร็จสมบูรณ์!** รวม **{len(summary)}** ทริป ({len(assigned_df)} สาขา)")
                     
-                    st.markdown("---")
-                    
-                    # สถิติโดยรวม
-                    st.markdown("### 📊 สรุปผลการจัดทริป")
+                    st.markdown('<div class="divider-label">📊 สรุปผลการจัดทริป</div>', unsafe_allow_html=True)
                     
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
@@ -6513,7 +6987,7 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                     _any_limit = any(v < 999 for v in _fl.values()) if _fl else False
                     if _fu:
                         st.markdown("---")
-                        st.markdown("#### 🚛 สรุปการใช้รถ")
+                        st.markdown('<div class="divider-label">🚛 การใช้รถ</div>', unsafe_allow_html=True)
                         _fc1, _fc2, _fc3 = st.columns(3)
                         for _col, _vtype, _icon in [(_fc1, '4W', '🚗'), (_fc2, 'JB', '🚚'), (_fc3, '6W', '🚛')]:
                             _used = _fu.get(_vtype, 0)
@@ -6541,7 +7015,7 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                                 _tc2.metric("🗺️ สร้างแผนที่", f"{_map_elapsed:.1f}s")
                             _tc3.metric("💾 cache", f"{len(st.session_state.get('_imap_key',''))*0:.0f}+{len(summary)} trips")
 
-                    st.markdown("### 🚛 รายละเอียดแต่ละทริป")
+                    st.markdown('<div class="divider-label">🚛 รายละเอียดแต่ละทริป</div>', unsafe_allow_html=True)
                     
                     # ตรวจสอบว่า summary มีคอลัมน์ที่ต้องการหรือไม่
                     format_dict = {}
@@ -6756,11 +7230,27 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                                 _ynfmt_r = _wb_xl.add_format({'bg_color':'#FFE699','border':1,'num_format':'#,##0.00','font_color':'#FF0000','bold':True})
                                 _wnfmt_r = _wb_xl.add_format({'bg_color':'#FFFFFF','border':1,'num_format':'#,##0.00','font_color':'#FF0000','bold':True})
 
+                                # คอลัมน์ที่ export แบบ fixed แล้ว (ไม่นับซ้ำใน extra)
+                                _FIXED_EXPORT_COLS = {
+                                    'BU','Code','WMSCode','Name','Cube','Weight','OriginalQty','Trip',
+                                    'Truck','MaxVehicle','VehicleCheck','Region','Distance_from_DC',
+                                    'Province','District','Subdistrict','TripNo','Booking',
+                                    'Latitude','Longitude','Max_Distance_in_Trip',
+                                }
+                                # คอลัมน์ extra จากไฟล์ต้นฉบับที่ยังไม่ได้ export
+                                _extra_export_cols = [
+                                    c for c in _rd.columns
+                                    if c not in _FIXED_EXPORT_COLS and not str(c).startswith('_')
+                                ]
+
                                 _hdrs = ['Sep.','BU','รหัสสาขา','รหัส WMS','สาขา','ตำบล','อำเภอ','จังหวัด','Route',
                                          'Total Cube','Total Wgt','Original QTY','Trip','Trip no']
+                                _hdrs += _extra_export_cols   # ต่อท้ายด้วยคอลัมน์ extra จากไฟล์
                                 _ws_xl.write_row(0, 0, _hdrs, _hdr_fmt)
                                 _ws_xl.set_row(0, 18)
-                                for _ci_w, _cw in enumerate([6,6,12,12,30,14,14,16,12,11,11,12,6,10]):
+                                _base_widths = [6,6,12,12,30,14,14,16,12,11,11,12,6,10]
+                                _extra_widths = [max(12, len(str(c))+2) for c in _extra_export_cols]
+                                for _ci_w, _cw in enumerate(_base_widths + _extra_widths):
                                     _ws_xl.set_column(_ci_w, _ci_w, _cw)
 
                                 use_yellow = True
@@ -6778,10 +7268,11 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                                     _tno_str  = str(_tno)
                                     for _rec in _rows:
                                         _bc = str(_rec.get('Code', ''))
+                                        _wms = str(_rec.get('WMSCode', _bc))  # ใช้ WMSCode จากไฟล์ ถ้าไม่มีใช้ Code
                                         _ws_xl.write_row(_row_xl, 0, [
                                             sep_num,
                                             _rec.get('BU', 211),
-                                            _bc, _bc,
+                                            _bc, _wms,
                                             str(_rec.get('Name', '')),
                                             str(_rec.get('_sp_eff', '') or _rec.get('_sp', '')),
                                             str(_rec.get('_sd_eff', '') or _rec.get('_sd', '')),
@@ -6793,6 +7284,11 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                                         _ws_xl.write(_row_xl, 11, int(  float(_rec.get('OriginalQty', 0) or 0)), _tf)
                                         _ws_xl.write(_row_xl, 12, _tnum_int, _tf)
                                         _ws_xl.write(_row_xl, 13, _tno_str,  _tf)
+                                        # เขียนคอลัมน์ extra จากไฟล์ต้นฉบับ
+                                        for _xi, _xc in enumerate(_extra_export_cols):
+                                            _xv = _rec.get(_xc, '')
+                                            _xv = '' if _xv is None or (isinstance(_xv, float) and _xv != _xv) else _xv
+                                            _ws_xl.write(_row_xl, 14 + _xi, _xv, _tf)
                                         _row_xl += 1
                                         sep_num  += 1
 
@@ -6824,42 +7320,23 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                         width="stretch"
                     )
 
-                    # ── 🧠 AI LEARNING PANEL ──────────────────────────────────
-                    with st.expander("🧠 ระบบ AI เรียนรู้การจัดทริป", expanded=False):
-                        _ai_stats = get_trip_learning_stats()
-                        _c1, _c2, _c3 = st.columns(3)
-                        _c1.metric("Sessions ที่บันทึก", _ai_stats['sessions'])
-                        _c2.metric("คู่สาขาที่เรียนรู้", f"{_ai_stats['unique_pairs']:,}")
-                        _c3.metric("ทริปในระบบ", f"{sum(s.get('trips',0) for s in (json.load(open(TRIP_HISTORY_FILE,encoding='utf-8')).get('sessions',[]) if os.path.exists(TRIP_HISTORY_FILE) else []))}")
-
-                        if st.button("💾 บันทึกการเรียนรู้จากทริปนี้", type="secondary", use_container_width=True):
-                            _n_saved = save_trip_history(assigned_df)
-                            st.success(f"✅ บันทึก {_n_saved:,} คู่สาขาสำเร็จ — AI จะใช้ข้อมูลนี้ในการจัดทริปครั้งถัดไป")
-
-                        if _ai_stats['top_pairs']:
-                            st.markdown("**คู่สาขาที่บ่อยที่สุด:**")
-                            for _pk, _pv in _ai_stats['top_pairs'][:5]:
-                                _pa, _pb = _pk.split('|')
-                                st.caption(f"• {_pa} ↔ {_pb}: {_pv} ครั้ง")
-                    # ────────────────────────────────────────────────────────
-
                     st.markdown("---")
                     
                     # 🗺️ แผนที่เส้นทาง (Interactive - Leaflet.js)
                     with st.expander("🗺️ แผนที่เส้นทาง (Interactive)", expanded=True):
                         try:
                             import importlib as _imp, trip_map_interactive as _tmi
-                            _imp.reload(_tmi)
-                            _build_imap = _tmi.build_interactive_map_html
+                            import time as _time_mod
                             import streamlit.components.v1 as _cmp2
                             import hashlib as _hl
+                            _build_imap = _tmi.build_interactive_map_html
 
-                            _imap_sig = f"v29|{len(assigned_df)}|{int(assigned_df['Trip'].max())}|{sorted(assigned_df['Trip'].unique().tolist())}"
+                            _imap_sig = f"v30|{len(assigned_df)}|{int(assigned_df['Trip'].max())}|{sorted(assigned_df['Trip'].unique().tolist())}"
                             _imap_key = _hl.md5(_imap_sig.encode()).hexdigest()[:12]
 
                             if st.session_state.get('_imap_key') != _imap_key:
                                 with st.spinner("🗺️ กำลังสร้างแผนที่..."):
-                                    _t_map = time_module.time()
+                                    _t_map = _time_mod.time()
                                     _imap_html = _build_imap(
                                         result_df=assigned_df,
                                         summary_df=summary,
@@ -6871,27 +7348,28 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                                     )
                                     st.session_state['_imap_html'] = _imap_html
                                     st.session_state['_imap_key'] = _imap_key
-                                    st.session_state['_imap_build_time'] = time_module.time() - _t_map
+                                    st.session_state['_imap_build_time'] = _time_mod.time() - _t_map
 
-                            # components.v1.html() — HTML inline ทุกอย่าง (CSS+JS) ไม่ต้อง load ภายนอก
-                            _htm = st.session_state['_imap_html']
-                            # Sanitize: drop any surrogate characters that break UTF-8 encoding
-                            try:
-                                _htm.encode('utf-8')
-                            except UnicodeEncodeError:
-                                _htm = _htm.encode('utf-8', errors='replace').decode('utf-8')
-                                st.session_state['_imap_html'] = _htm
-                            import re as _re
-                            _nb = len(_re.findall(r'"code":', _htm))
-                            st.caption(f"🗺️ HTML: {len(_htm)//1024}KB · branches in HTML: {_nb} · _lat col: {'_lat' in assigned_df.columns} · valid coords: {int((assigned_df.get('_lat',0)>0).sum()) if '_lat' in assigned_df.columns else 0}")
-                            _cmp2.html(_htm, height=840, scrolling=False)
+                            _htm = st.session_state.get('_imap_html', '')
+                            if not _htm:
+                                st.warning("⚠️ ยังไม่มีข้อมูลแผนที่ กดจัดเที่ยวก่อน")
+                            else:
+                                # Sanitize surrogates
+                                try:
+                                    _htm.encode('utf-8')
+                                except UnicodeEncodeError:
+                                    _htm = _htm.encode('utf-8', errors='replace').decode('utf-8')
+                                    st.session_state['_imap_html'] = _htm
+                                import re as _re
+                                _nb = len(_re.findall(r'"code":', _htm))
+                                _build_t = st.session_state.get('_imap_build_time', 0)
+                                st.caption(f"🗺️ HTML: {len(_htm)//1024} KB · {_nb} สาขา · build: {_build_t:.1f}s")
+                                _cmp2.html(_htm, height=860, scrolling=False)
                         except Exception as _e:
                             import traceback as _tb
                             st.error(f"❌ Interactive map error: {_e}")
                             st.code(_tb.format_exc(), language='text')
-                            st.info(f"📋 assigned_df columns: {list(assigned_df.columns)}\n\nrows: {len(assigned_df)}, trips: {sorted(assigned_df['Trip'].unique().tolist())}")
-                        else:
-                            _FOLIUM_FALLBACK_ = False
+                            st.info(f"📋 columns: {list(assigned_df.columns)} | rows: {len(assigned_df)} | trips: {sorted(assigned_df['Trip'].unique().tolist())}")
 
                     # ── FOLIUM FALLBACK (ใช้เมื่อ interactive map error) ──
                     if 'FOLIUM_AVAILABLE' in dir() and FOLIUM_AVAILABLE and locals().get('_FOLIUM_FALLBACK_', False):
@@ -7479,7 +7957,7 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                 
                 # แสดงตามภาค
                 st.markdown("---")
-                st.markdown("### 🗺️ สาขาแยกตามภาค")
+                st.markdown('<div class="divider-label">🗺️ สาขาแยกตามภาค</div>', unsafe_allow_html=True)
                 
                 region_summary = df_region.groupby('Region').agg({
                     'Code': 'nunique',
@@ -7503,7 +7981,7 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
                 
                 # แสดงกลุ่มสาขาที่เคยไปด้วยกัน
                 st.markdown("---")
-                st.markdown("### 🔗 กลุ่มสาขาที่เคยไปด้วยกัน (จากประวัติ)")
+                st.markdown('<div class="divider-label">🔗 กลุ่มสาขาที่เคยไปด้วยกัน</div>', unsafe_allow_html=True)
                 
                 paired_groups = [g for g in groups if len(g['codes']) > 1]
                 if paired_groups:
@@ -7544,7 +8022,7 @@ input[type="checkbox"]:checked + span { background: #059669 !important; border-c
             # แท็บ 3: โซนจัดส่งสาขา (geographic zone classification)
             # ==========================================
             with tab3:
-                st.markdown("### 🏙️ การจำแนกโซนจัดส่งของสาขา")
+                st.markdown('<div class="divider-label">🏙️ โซนจัดส่งของสาขา</div>', unsafe_allow_html=True)
                 st.markdown(
                     "จัดทุกสาขาเข้าโซนจัดส่งตาม **ที่ตั้งทางภูมิศาสตร์** (ไม่คำนึงถึง Weight/Cube)  \n"
                     "กรุงเทพฯ แบ่ง **9 sub-zone** (ใจกลาง + 8 ทิศ)  •  จังหวัดอื่นอิง **LOGISTICS_ZONES** (เส้นทางถนน)"
