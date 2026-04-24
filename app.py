@@ -7955,13 +7955,18 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                 # คอลัมน์ geo จากต้นฉบับ → ข้าม (จะแทรกหลัง Name แทน)
                                 _SKIP_IKEYS = {'Route','Reference','_rt',
                                                'Subdistrict','ตำบล','District','อำเภอ','Province','จังหวัด',
-                                               '__TRIP__','__TRIPNO__','__SEP__',
+                                               '__TRIP__','__TRIPNO__',
                                                '__PROV_BLANK__','__SUB_GEN__','__DIS_GEN__','__PROV_GEN__',
                                                '__LOAD_DATE__','__LOAD_TIME__','__DOOR__',
                                                'remark','Remark','REMARK','หมายเหตุ'}
                                 # Trip / Trip no / วันที่โหลด / เวลาโหลด / ประตู → แทนด้วย generated ในตำแหน่งเดิม
                                 _SCH_COLOR  = '#FCE4D6'   # สีส้มอ่อน — วันที่/เวลา/ประตู
                                 _REPLACE_MAP = {
+                                    'Sep.':            ('__SEP__',       '#D9D9D9'),
+                                    'Sep':             ('__SEP__',       '#D9D9D9'),
+                                    'SEP':             ('__SEP__',       '#D9D9D9'),
+                                    'sep.':            ('__SEP__',       '#D9D9D9'),
+                                    'ลำดับ':          ('__SEP__',       '#D9D9D9'),
                                     'Trip':            ('__TRIP__',      _TRIP_COLOR),
                                     'T':               ('__TRIP__',      _TRIP_COLOR),
                                     'Trip no':         ('__TRIPNO__',    _TRIP_COLOR),
@@ -7982,6 +7987,7 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                 _orig_has_loaddate= False
                                 _orig_has_loadtime= False
                                 _orig_has_door    = False
+                                _orig_has_sep     = False
                                 _geo_inserted    = False   # แทรก geo หลัง Name แค่ครั้งเดียว
                                 if _orig_hdr_info:
                                     for _oname, _oclr in _orig_hdr_info:
@@ -7991,7 +7997,9 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                         if _ikey in _REPLACE_MAP:
                                             _gen_ikey, _gen_clr = _REPLACE_MAP[_ikey]
                                             _col_plan.append((_oname, _gen_clr, _gen_ikey))
-                                            if _gen_ikey == '__TRIP__':
+                                            if _gen_ikey == '__SEP__':
+                                                _orig_has_sep = True
+                                            elif _gen_ikey == '__TRIP__':
                                                 _orig_has_trip = True
                                             elif _gen_ikey == '__TRIPNO__':
                                                 _orig_has_tripno = True
@@ -8033,6 +8041,8 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                         _col_plan.append((_ec, '#D9D9D9', _ec))
 
                                 # เพิ่ม T + Trip no ท้ายสุด เฉพาะกรณีต้นฉบับไม่มี
+                                if not _orig_has_sep:
+                                    _col_plan.insert(0, ('Sep.', '#D9D9D9', '__SEP__'))
                                 if not _orig_has_trip:
                                     _col_plan.append(('T',           _TRIP_COLOR, '__TRIP__'))
                                 if not _orig_has_tripno:
