@@ -212,8 +212,9 @@ def _save_cache():
 
 def get_road_distance(lat1, lon1, lat2, lon2):
     """
-    ดึงระยะทางถนนจาก OSRM cache (ที่ build ไว้ล่วงหน้าแล้ว)
-    cache miss → haversine × 1.35 เป็น fallback ใน precompute
+    ดึงระยะทางถนนจาก OSRM cache ก่อน
+    cache miss → เรียก OSRM Table API live และบันทึก cache (ไม่ใช้เส้นตรง)
+    คืน (distance_km, is_road: True=OSRM, False=ล้มเหลว)
     """
     key = f"{lat1:.4f},{lon1:.4f}_{lat2:.4f},{lon2:.4f}"
     key_rev = f"{lat2:.4f},{lon2:.4f}_{lat1:.4f},{lon1:.4f}"
@@ -221,9 +222,24 @@ def get_road_distance(lat1, lon1, lat2, lon2):
         return OSRM_CACHE[key], True
     if key_rev in OSRM_CACHE:
         return OSRM_CACHE[key_rev], True
-    # cache miss → ประมาณ haversine × 1.35
-    dist = haversine(lat1, lon1, lat2, lon2) * 1.35
-    return round(dist, 3), False
+    # cache miss → เรียก OSRM live (Table API: lon,lat format)
+    try:
+        url = (
+            f"http://router.project-osrm.org/table/v1/driving/"
+            f"{lon1},{lat1};{lon2},{lat2}?annotations=distance"
+        )
+        r = requests.get(url, timeout=8)
+        data = r.json()
+        if data.get("code") == "Ok":
+            dist_m = data["distances"][0][1]
+            if dist_m and dist_m > 0:
+                dist_km = round(dist_m / 1000.0, 3)
+                OSRM_CACHE[key] = dist_km   # บันทึก cache
+                return dist_km, True
+    except Exception:
+        pass
+    # OSRM ล้มเหลว → คืน None เพื่อให้ caller ตัดสินใจเอง
+    return None, False
 
 def haversine(lat1, lon1, lat2, lon2):
     """คำนวณระยะทาง Haversine (km)"""
@@ -342,7 +358,7 @@ def precompute_all():
     # ——— Build/fill OSRM cache ก่อน ———
     build_osrm_cache_batched(branch_data)
 
-    # 4. หาสาขาใกล้เคียง (< 15 km ตาม Haversine pre-filter → ใช้ OSRM cache)
+    # 4. หาสาขาใกล้เคียง (< 20 km ตามระยะทางถนน OSRM)
     print("\n🔍 คำนวณสาขาใกล้เคียง (< 20 km)...")
     nearby_branches = {}
     osrm_used = 0
@@ -367,6 +383,9 @@ def precompute_all():
                 penalty_used += 1
             
             # เก็บเฉพาะที่ระยะทางถนนจริง < 20 km
+            if road_dist is None:
+                road_dist = haversine(b1['lat'], b1['lon'], b2['lat'], b2['lon']) * 1.35
+                is_road = False
             if road_dist < 20:
                 nearby.append({
                     'code': b2['code'],
@@ -383,7 +402,7 @@ def precompute_all():
 
     avg_nearby = sum(len(v) for v in nearby_branches.values()) / max(len(nearby_branches), 1)
     print(f"   ✅ คำนวณสำเร็จ: เฉลี่ย {avg_nearby:.1f} สาขาใกล้เคียง/สาขา")
-    print(f"   📡 OSRM cache hit: {osrm_used:,} คู่ | haversine×1.35 est.: {penalty_used} คู่")
+    print(f"   📡 OSRM cache hit: {osrm_used:,} คู่ | OSRM live: {penalty_used} คู่")
     
     # 5. บันทึกผลลัพธ์
     print("\n💾 บันทึกผลลัพธ์...")
@@ -418,7 +437,7 @@ def precompute_all():
     # บันทึก branch_clusters.json
     cluster_data = {
         'branch_info': branch_info,                # 🆕 ข้อมูลพิกัดสาขา (app ต้องการ)
-        'nearby_branches': nearby_branches,         # 🆕 ระยะทาง OSRM/haversine
+        'nearby_branches': nearby_branches,         # ระยะทาง OSRM road distance
         'clusters': clusters,                        # 🆕 กลุ่มตาม district/province/etc (app ต้องการ)
         # เก็บ format เดิมไว้ด้วยเพื่อ backward compatibility
         'distance_clusters': {str(k): v for k, v in distance_clusters.items()},
@@ -460,10 +479,109 @@ def precompute_all():
         count = stats['direction_distribution'].get(direction, 0)
         print(f"   {direction:3s}: {count:4d} สาขา")
     
+    # สร้าง branch_groups.json
+    build_branch_groups(branch_data, max_km=0.5)
+
     print("\n✅ Pre-compute เสร็จสิ้น!")
     _save_cache()
     print(f"💾 distance_cache.json: {len(OSRM_CACHE):,} รายการ")
     return stats
+
+def build_branch_groups(branch_data, max_km=0.5):
+    """
+    สร้าง branch_groups.json:
+    กลุ่มสาขาที่อยู่ในที่เดียวกัน = ≤500m + ตำบล/อำเภอ/จังหวัดเดียวกัน
+    ใช้ Union-Find เพื่อรองรับ transitive grouping
+    """
+    print(f"\n🏘️  สร้าง branch_groups (≤{max_km*1000:.0f}m + ตำบล/อำเภอ/จังหวัดเดียวกัน)...")
+
+    # รวบรวมสาขาที่มีพิกัด
+    branches = []
+    for code, b in branch_data.items():
+        try:
+            lat = float(b.get('ละ', 0) or 0)
+            lon = float(b.get('ลอง', 0) or 0)
+            if lat and lon:
+                branches.append({
+                    'code': str(code).strip().upper(),
+                    'lat': lat, 'lon': lon,
+                    'subdistrict': str(b.get('ตำบล', '') or '').strip(),
+                    'district':    str(b.get('อำเภอ', '') or '').strip(),
+                    'province':    str(b.get('จังหวัด', '') or '').strip(),
+                })
+        except Exception:
+            continue
+
+    n = len(branches)
+    print(f"   {n} สาขาที่มีพิกัด")
+
+    # Union-Find
+    parent = list(range(n))
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    def union(x, y):
+        px, py = find(x), find(y)
+        if px != py:
+            parent[px] = py
+
+    # จับคู่สาขาที่อยู่ในกลุ่มเดียวกัน
+    # กรองด้วย ตำบล/อำเภอ/จังหวัดก่อน แล้วใช้ระยะทางถนน OSRM จริง (ไม่ใช้เส้นตรง)
+    pairs = 0
+    osrm_hit = 0
+    osrm_miss = 0
+
+    def _ne(a, b_): return a and b_ and a != b_
+
+    for i in range(n):
+        bi = branches[i]
+        for j in range(i + 1, n):
+            bj = branches[j]
+            # ต้องตำบล/อำเภอ/จังหวัดเดียวกัน (ถ้ามีค่า)
+            if _ne(bi['province'],    bj['province']):    continue
+            if _ne(bi['district'],    bj['district']):    continue
+            if _ne(bi['subdistrict'], bj['subdistrict']): continue
+            # ใช้ระยะทางถนนจาก OSRM (cache หรือ live, ไม่ใช้เส้นตรง)
+            road_d, is_road = get_road_distance(bi['lat'], bi['lon'], bj['lat'], bj['lon'])
+            if road_d is None:
+                osrm_miss += 1
+                continue   # ข้ามคู่นี้ถ้า OSRM ล้มเหลว
+            if is_road:
+                osrm_hit += 1
+            else:
+                osrm_miss += 1
+            if road_d <= max_km:
+                union(i, j)
+                pairs += 1
+
+    print(f"   OSRM hit: {osrm_hit:,}  OSRM live (cache miss): {osrm_miss:,}")
+
+    # รวบรวมกลุ่ม (เฉพาะกลุ่มที่มี ≥2 สาขา)
+    from collections import defaultdict as _dd
+    groups_raw = _dd(list)
+    for i, b in enumerate(branches):
+        groups_raw[find(i)].append(b['code'])
+
+    groups = {}
+    gnum = 1
+    for root, codes in sorted(groups_raw.items()):
+        if len(codes) >= 2:
+            gid = f"G{gnum:04d}"
+            groups[gid] = sorted(codes)
+            gnum += 1
+
+    result = {'groups': groups}
+    with open('branch_groups.json', 'w', encoding='utf-8') as f:
+        import json as _json
+        _json.dump(result, f, ensure_ascii=False, indent=2)
+
+    total_in_groups = sum(len(v) for v in groups.values())
+    print(f"   ✅ {len(groups)} กลุ่ม, {total_in_groups} สาขา ({pairs} คู่ที่จับได้)")
+    print(f"   💾 บันทึก branch_groups.json")
+    return groups
+
 
 if __name__ == "__main__":
     try:

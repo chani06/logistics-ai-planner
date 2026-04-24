@@ -7,3 +7,10 @@ gatherUsageStats = false
 
 [runner]
 magicEnabled = false
+
+[theme]
+base = "light"
+backgroundColor = "#f0f4f8"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#0f172a"
+primaryColor = "#059669"
