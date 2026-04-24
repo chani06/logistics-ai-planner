@@ -8135,9 +8135,9 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                             elif _ikey == '__PROV_BLANK__':
                                                 _val = ''   # ว่างไว้ให้ user กรอกเอง
                                             elif _ikey == '__TRIP__':
-                                                _val = _tno_str
-                                            elif _ikey == '__TRIPNO__':
                                                 _val = _tnum_int
+                                            elif _ikey == '__TRIPNO__':
+                                                _val = _tno_str
                                             elif _ikey == 'BU':
                                                 _val = _rec.get('BU', 211)
                                             elif _ikey == 'Code':
@@ -8200,9 +8200,9 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                         elif _ikey == '__DOOR__':
                                             _dcval = trip_door.get(_tnum, '')
                                         elif _ikey == '__TRIP__':
-                                            _dcval = _tno_str
-                                        elif _ikey == '__TRIPNO__':
                                             _dcval = _tnum_int
+                                        elif _ikey == '__TRIPNO__':
+                                            _dcval = _tno_str
                                         elif _ikey == '__LOAD_DATE__':
                                             _dcval = trip_load_date.get(_tnum, '')
                                         else:
