@@ -8315,6 +8315,15 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                             elif _ikey == '__PROV_BLANK__':
                                                 _val = ''   # ว่างไว้ให้ user กรอกเอง
                                             elif _ikey == '__TRIP__':
+                                                if _tn_col:
+                                                    _xl_r2   = _row_xl + 1
+                                                    _tn_r2   = f'${_tn_col}{_xl_r2}'
+                                                    _tn_rng2 = f'${_tn_col}$3:${_tn_col}{_xl_r2}'
+                                                    _sp2 = f'IFERROR(SUMPRODUCT((1/COUNTIF({_tn_rng2},{_tn_rng2}))*({_tn_rng2}<>"")),1)'
+                                                    _ws_xl.write_formula(_row_xl, _ci,
+                                                        f'=IF({_tn_r2}=""," ",TEXT({_sp2},"000"))',
+                                                        _dfmt, str(_tnum_int))
+                                                    continue
                                                 _val = _tnum_int
                                             elif _ikey == '__TRIPNO__':
                                                 _val = _tno_str
@@ -8401,6 +8410,15 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                         elif _ikey == '__DOOR__':
                                             _dcval = trip_door.get(_tnum, '')
                                         elif _ikey == '__TRIP__':
+                                            if _tn_col:
+                                                _xl_r2   = _row_xl + 1
+                                                _tn_r2   = f'${_tn_col}{_xl_r2}'
+                                                _tn_rng2 = f'${_tn_col}$3:${_tn_col}{_xl_r2}'
+                                                _sp2 = f'IFERROR(SUMPRODUCT((1/COUNTIF({_tn_rng2},{_tn_rng2}))*({_tn_rng2}<>"")),1)'
+                                                _ws_xl.write_formula(_row_xl, _ci,
+                                                    f'=IF({_tn_r2}=""," ",TEXT({_sp2},"000"))',
+                                                    _tf, str(_tnum_int))
+                                                continue
                                             _dcval = _tnum_int
                                         elif _ikey == '__TRIPNO__':
                                             _dcval = _tno_str
