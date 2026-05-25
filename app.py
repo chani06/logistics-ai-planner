@@ -3214,15 +3214,21 @@ def load_excel(file_content, sheet_name=None):
         
         # หา header row
         df_temp = pd.read_excel(xls, sheet_name=target_sheet, header=None)
-        header_row = 0
-        
+        header_row = 1  # default: row 2 (1-indexed) ตามโครงสร้างไฟล์จริง
+
         for i in range(min(10, len(df_temp))):
             row_list = [str(v) for v in df_temp.iloc[i]]
-            row_upper = ' '.join(row_list).upper()
+            row_joined = ' '.join(row_list)
+            row_upper = row_joined.upper()
             match_count = sum([
                 'BRANCH' in row_upper,
                 'TRIP' in row_upper,
-                'รหัสสาขา' in ' '.join(row_list)
+                'รหัสสาขา' in row_joined,
+                'จำนวนชิ้น' in row_joined,
+                'น้ำหนัก' in row_joined or 'น้ําหนัก' in row_joined,
+                'คิว' in row_joined,
+                'WMS' in row_upper,
+                'SEP' in row_upper,
             ])
             if match_count >= 2:
                 header_row = i
