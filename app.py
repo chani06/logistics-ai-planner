@@ -4763,7 +4763,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
         _fu_unassigned = df[df['Trip'] == 0].copy()
         if _fu_unassigned.empty:
             break
-        # กรอง: ภาค/จังหวัดเดียวกัน + ระยะ ≤ 60km
+        # กรอง: ภาค/จังหวัดเดียวกัน + ระยะแบบ dynamic
+        _BKK_FU = 'กรุงเทพมหานคร'
         _fu_cands = []
         for _, _fur in _fu_unassigned.iterrows():
             _fu_lat = float(_fur.get('_lat', 0) or 0)
@@ -4781,7 +4782,14 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 continue
             _fu_min_d = min(haversine_distance(_fu_lat, _fu_lon, _tlat, _tlon, use_osrm_cache=False)
                            for _tlat, _tlon in _ft_coords)
-            if _fu_min_d > _FILLUP_MAX_KM:
+            # radius แบบ dynamic
+            if _ft_prov == _BKK_FU or _fu_prov == _BKK_FU:
+                _fu_radius = 10.0   # กรุงเทพ: เขตเดียว/เขตติดเท่านั้น
+            elif _fu_prov == _ft_prov:
+                _fu_radius = _FILLUP_MAX_KM   # จังหวัดเดียวกัน
+            else:
+                _fu_radius = 300.0 if _ft_util < 0.80 else 200.0  # ภาคเดียวกัน ต่างจังหวัด: ไกลได้
+            if _fu_min_d > _fu_radius:
                 continue
             _fu_cands.append((_fu_min_d, _fur['Code'], float(_fur.get('Weight', 0) or 0), float(_fur.get('Cube', 0) or 0)))
         _fu_cands.sort(key=lambda x: x[0])  # ใกล้สุดก่อน
@@ -5112,15 +5120,20 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 
                 dist_to_trip = branch_row['_dist_to_current']
 
-                # ขยาย merge radius ตาม utilization + ตาม province
-                # จังหวัดเดียวกัน: 150km / 80km  |  ต่างจังหวัด: 80km / 40km
-                _b_prov = branch_row.get('_province', '')  # ต้องนิยามก่อนใช้ใน _mg_same_prov
+                # ขยาย merge radius ตาม utilization + province + BKK strict
+                _b_prov = branch_row.get('_province', '')
                 _mg_util = max(trip_cap['weight'] / trip_cap['max_w'], trip_cap['cube'] / trip_cap['max_c'])
                 _mg_same_prov = bool(trip_cap.get('provinces', set()) & {_b_prov}) if _b_prov else False
-                if _mg_same_prov:
-                    _mg_dist_limit = 150 if _mg_util < 0.60 else 80
+                _BKK_MG = 'กรุงเทพมหานคร'
+                _trip_has_bkk = _BKK_MG in trip_cap.get('provinces', set())
+                _b_is_bkk    = (_b_prov == _BKK_MG)
+                if _trip_has_bkk or _b_is_bkk:
+                    _mg_dist_limit = 10.0   # กรุงเทพ: เขตเดียว/เขตติดเท่านั้น (≤10km)
+                elif _mg_same_prov:
+                    _mg_dist_limit = 200 if _mg_util < 0.97 else 100  # จังหวัดเดียวกัน
                 else:
-                    _mg_dist_limit = 80 if _mg_util < 0.60 else 40  # ต่างจังหวัด: จำกัดระยะ
+                    # ต่างจังหวัด ภาคเดียวกัน: เติมได้ไกล เน้น consecutive (ใกล้สุดก่อน)
+                    _mg_dist_limit = 300 if _mg_util < 0.80 else 200 if _mg_util < 0.97 else 80
                 if dist_to_trip > _mg_dist_limit:
                     continue
                 
