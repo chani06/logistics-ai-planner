@@ -8279,16 +8279,13 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                 for _tnum in export_sorted_trips:
                                     _rows = _trip_rows.get(_tnum, [])
                                     _tno  = trip_no_map.get(_tnum, '')
-                                    _is_f = _tnum in failed_trips
+                                    _is_f   = _tnum in failed_trips
                                     _is_low = _trip_util_map.get(_tnum, 1.0) < 0.98
-                                    if _is_low:
-                                        _tf = _rfmt
-                                        _nf = _rnfmt
-                                    else:
-                                        _tf = (_yfmt_r if _is_f else _yfmt) if use_yellow else (_wfmt_r if _is_f else _wfmt)
-                                        _nf = (_ynfmt_r if _is_f else _ynfmt) if use_yellow else (_wnfmt_r if _is_f else _wnfmt)
-                                    if not _is_low:
-                                        use_yellow = not use_yellow
+                                    # ตัวอักษรแดงถ้า util < 98% หรือเป็น failed_trip; พื้นเหลือง/ขาวสลับปกติ
+                                    _red_text = _is_low or _is_f
+                                    _tf = (_yfmt_r if _red_text else _yfmt) if use_yellow else (_wfmt_r if _red_text else _wfmt)
+                                    _nf = (_ynfmt_r if _red_text else _ynfmt) if use_yellow else (_wnfmt_r if _red_text else _wnfmt)
+                                    use_yellow = not use_yellow
                                     _tnum_int = int(_tnum)
                                     _tno_str  = str(_tno)
                                     _first_row_of_trip = True
