@@ -8088,7 +8088,8 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                           'Cube':11,'Weight':11,'OriginalQty':12,
                                           '__SUB_GEN__':14,'__DIS_GEN__':14,'__PROV_GEN__':16,'__PROV_BLANK__':16,
                                           '__TRIP__':6,'__TRIPNO__':10,
-                                          '__LOAD_DATE__':14,'__LOAD_TIME__':14,'__DOOR__':8,'__REMARK__':28}
+                                          '__LOAD_DATE__':14,'__LOAD_TIME__':14,'__DOOR__':8,'__REMARK__':28,
+                                          '__TN_ORIG__':0}
 
                                 # สร้าง column plan: [(display_name, color, internal_key), ...]
                                 _GEO_COLOR  = '#E2EFDA'
@@ -8203,6 +8204,8 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                     _col_plan.append(('หมายเหตุ', _SCH_COLOR, '__REMARK__'))
                                 # จังหวัด (ว่าง) — ท้ายสุดเสมอ
                                 _col_plan.append(('จังหวัด', _GEO_COLOR, '__PROV_BLANK__'))
+                                # hidden anchor: static TripNo ใช้เป็น key สำหรับสูตรรันเลขทริป
+                                _col_plan.append(('TN_orig', '#FFFFFF', '__TN_ORIG__'))
 
                                 # ── Set column widths FIRST (must precede any write() with constant_memory=True) ──
                                 for _ci, (_, _, _ikey) in enumerate(_col_plan):
@@ -8287,20 +8290,24 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                 _tripno_ci_f = next((i for i, (_, _, k) in enumerate(_col_plan) if k == '__TRIPNO__'), None)
                                 _weight_ci_f = next((i for i, (_, _, k) in enumerate(_col_plan) if k == 'Weight'), None)
                                 _cube_ci_f   = next((i for i, (_, _, k) in enumerate(_col_plan) if k == 'Cube'), None)
+                                _torig_ci_f  = next((i for i, (_, _, k) in enumerate(_col_plan) if k == '__TN_ORIG__'), None)
                                 try:
                                     from xlsxwriter.utility import xl_col_to_name as _xcn
                                     _tn_col = _xcn(_tripno_ci_f) if _tripno_ci_f is not None else None
                                     _wt_col = _xcn(_weight_ci_f) if _weight_ci_f is not None else None
                                     _cb_col = _xcn(_cube_ci_f)   if _cube_ci_f   is not None else None
+                                    _tk_col = _xcn(_torig_ci_f)  if _torig_ci_f  is not None else None
                                 except Exception:
-                                    _tn_col = _wt_col = _cb_col = None
+                                    _tn_col = _wt_col = _cb_col = _tk_col = None
 
+                                _xl_trip_seq = 0
                                 for _tnum in export_sorted_trips:
+                                    _xl_trip_seq += 1
                                     _rows = _trip_rows.get(_tnum, [])
                                     _tno  = trip_no_map.get(_tnum, '')
                                     _tf = _wfmt
                                     _nf = _wnfmt
-                                    _tnum_int = int(_tnum)
+                                    _tnum_int = _xl_trip_seq  # sequential 1,2,3… ตาม export order
                                     _tno_str  = str(_tno)
                                     _first_row_of_trip = True
                                     _trip_start_row = _row_xl  # เก็บแถวเริ่มต้น (0-indexed) สำหรับสูตร SUM
@@ -8313,9 +8320,29 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                             elif _ikey == '__PROV_BLANK__':
                                                 _val = ''   # ว่างไว้ให้ user กรอกเอง
                                             elif _ikey == '__TRIP__':
+                                                if _tk_col:
+                                                    _xl_r2   = _row_xl + 1
+                                                    _tk_r2   = f'${_tk_col}{_xl_r2}'
+                                                    _tk_rng2 = f'${_tk_col}$3:${_tk_col}{_xl_r2}'
+                                                    _sp2 = f'IFERROR(SUMPRODUCT((1/COUNTIF({_tk_rng2},{_tk_rng2}))*({_tk_rng2}<>"")),1)'
+                                                    _ws_xl.write_formula(_row_xl, _ci,
+                                                        f'=IF({_tk_r2}=""," ",TEXT({_sp2},"000"))',
+                                                        _dfmt, '')
+                                                    continue
                                                 _val = _tnum_int
                                             elif _ikey == '__TRIPNO__':
+                                                if _tk_col:
+                                                    _xl_r2   = _row_xl + 1
+                                                    _tk_r2   = f'${_tk_col}{_xl_r2}'
+                                                    _tk_rng2 = f'${_tk_col}$3:${_tk_col}{_xl_r2}'
+                                                    _sp2 = f'IFERROR(SUMPRODUCT((1/COUNTIF({_tk_rng2},{_tk_rng2}))*({_tk_rng2}<>"")),1)'
+                                                    _ws_xl.write_formula(_row_xl, _ci,
+                                                        f'=IF({_tk_r2}=""," ",LEFT({_tk_r2},2)&TEXT({_sp2},"000"))',
+                                                        _dfmt, '')
+                                                    continue
                                                 _val = _tno_str
+                                            elif _ikey == '__TN_ORIG__':
+                                                _val = _tno_str  # static anchor สำหรับสูตร
                                             elif _ikey == 'BU':
                                                 _val = _rec.get('BU', 211)
                                             elif _ikey == 'Code':
@@ -8399,8 +8426,28 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                         elif _ikey == '__DOOR__':
                                             _dcval = trip_door.get(_tnum, '')
                                         elif _ikey == '__TRIP__':
+                                            if _tk_col:
+                                                _xl_r2   = _row_xl + 1
+                                                _tk_r2   = f'${_tk_col}{_xl_r2}'
+                                                _tk_rng2 = f'${_tk_col}$3:${_tk_col}{_xl_r2}'
+                                                _sp2 = f'IFERROR(SUMPRODUCT((1/COUNTIF({_tk_rng2},{_tk_rng2}))*({_tk_rng2}<>"")),1)'
+                                                _ws_xl.write_formula(_row_xl, _ci,
+                                                    f'=IF({_tk_r2}=""," ",TEXT({_sp2},"000"))',
+                                                    _tf, '')
+                                                continue
                                             _dcval = _tnum_int
                                         elif _ikey == '__TRIPNO__':
+                                            if _tk_col:
+                                                _xl_r2   = _row_xl + 1
+                                                _tk_r2   = f'${_tk_col}{_xl_r2}'
+                                                _tk_rng2 = f'${_tk_col}$3:${_tk_col}{_xl_r2}'
+                                                _sp2 = f'IFERROR(SUMPRODUCT((1/COUNTIF({_tk_rng2},{_tk_rng2}))*({_tk_rng2}<>"")),1)'
+                                                _ws_xl.write_formula(_row_xl, _ci,
+                                                    f'=IF({_tk_r2}=""," ",LEFT({_tk_r2},2)&TEXT({_sp2},"000"))',
+                                                    _tf, '')
+                                                continue
+                                            _dcval = _tno_str
+                                        elif _ikey == '__TN_ORIG__':
                                             _dcval = _tno_str
                                         elif _ikey == '__LOAD_DATE__':
                                             _dcval = trip_load_date.get(_tnum, '')
@@ -8412,43 +8459,42 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                     _row_xl += 1
                                     _row_seq += 1
 
-                                # Conditional format: auto highlight + font color (formula-driven)
+                                # Conditional format: auto highlight + font color (Excel 2016 compatible)
                                 if _tn_col and _wt_col and _cb_col and _row_xl > 2:
                                     _cf_last_r = _row_xl - 1
-                                    _cf_ncols  = len(_col_plan)
-                                    _tn3       = f'${_tn_col}3'          # abs-col, rel-row
-                                    _tn_exp    = f'${_tn_col}$3:${_tn_col}3'  # expanding range
-                                    _tn_rng_cf = f'${_tn_col}$3:${_tn_col}$9999'
+                                    # ยกเว้นคอลัมน์ซ่อน __TN_ORIG__ ออกจาก range
+                                    _cf_ncols  = (_torig_ci_f if _torig_ci_f is not None else len(_col_plan))
+                                    # anchor: ใช้ __TN_ORIG__ (static) แทน TripNo (formula) → ไม่มี formula dependency
+                                    _anc_col   = _tk_col if _tk_col else _tn_col
+                                    _anc3      = f'${_anc_col}3'           # abs-col, rel-row
+                                    _anc_exp   = f'${_anc_col}$3:${_anc_col}3'  # expanding range
+                                    _anc_rng   = f'${_anc_col}$3:${_anc_col}$9999'
                                     _wt_rng_cf = f'${_wt_col}$3:${_wt_col}$9999'
                                     _cb_rng_cf = f'${_cb_col}$3:${_cb_col}$9999'
-                                    _vw3 = f'IF(LEFT({_tn3},2)="6W",5500,IF(LEFT({_tn3},2)="JB",3000,2000))'
-                                    _vc3 = f'IF(LEFT({_tn3},2)="6W",25,IF(LEFT({_tn3},2)="JB",10,7))'
-                                    # count distinct TripNo values from row 3 to current row
+                                    _vw3 = f'IF(LEFT({_anc3},2)="6W",5500,IF(LEFT({_anc3},2)="JB",3000,2000))'
+                                    _vc3 = f'IF(LEFT({_anc3},2)="6W",25,IF(LEFT({_anc3},2)="JB",10,7))'
+                                    # นับจำนวน TripNo ที่ไม่ซ้ำจากแถวบนถึงแถวปัจจุบัน (IFERROR ป้องกัน error)
                                     _odd_grp = (
-                                        f'ISODD(SUMPRODUCT((1/COUNTIF({_tn_exp},{_tn_exp}))*'
-                                        f'({_tn_exp}<>"")))'
+                                        f'ISODD(IFERROR(SUMPRODUCT((1/COUNTIF({_anc_exp},{_anc_exp}))*'
+                                        f'({_anc_exp}<>"")),1))'
                                     )
                                     _util_lt = (
-                                        f'MAX(SUMIF({_tn_rng_cf},{_tn3},{_wt_rng_cf})/{_vw3},'
-                                        f'SUMIF({_tn_rng_cf},{_tn3},{_cb_rng_cf})/{_vc3})<0.98'
+                                        f'MAX(SUMIF({_anc_rng},{_anc3},{_wt_rng_cf})/{_vw3},'
+                                        f'SUMIF({_anc_rng},{_anc3},{_cb_rng_cf})/{_vc3})<0.98'
                                     )
                                     _util_ge = (
-                                        f'MAX(SUMIF({_tn_rng_cf},{_tn3},{_wt_rng_cf})/{_vw3},'
-                                        f'SUMIF({_tn_rng_cf},{_tn3},{_cb_rng_cf})/{_vc3})>=0.98'
+                                        f'MAX(SUMIF({_anc_rng},{_anc3},{_wt_rng_cf})/{_vw3},'
+                                        f'SUMIF({_anc_rng},{_anc3},{_cb_rng_cf})/{_vc3})>=0.98'
                                     )
-                                    # 4 rules: (odd/even trip group) × (low/high util)
+                                    # 4 rules: (odd/even trip group) × (util ต่ำ/สูง)
                                     _cf_rules = [
-                                        # yellow bg + red font  (odd, <98%)
-                                        (f'=AND({_tn3}<>"",{_odd_grp},{_util_lt})',
+                                        (f'=AND({_anc3}<>"",{_odd_grp},{_util_lt})',
                                          _wb_xl.add_format(_f({'bg_color':'#FFE699','border':1,'font_color':'#CC0000'}))),
-                                        # white bg + red font   (even, <98%)
-                                        (f'=AND({_tn3}<>"",NOT({_odd_grp}),{_util_lt})',
+                                        (f'=AND({_anc3}<>"",NOT({_odd_grp}),{_util_lt})',
                                          _wb_xl.add_format(_f({'bg_color':'#FFFFFF','border':1,'font_color':'#CC0000'}))),
-                                        # yellow bg + black font (odd, >=98%)
-                                        (f'=AND({_tn3}<>"",{_odd_grp},{_util_ge})',
+                                        (f'=AND({_anc3}<>"",{_odd_grp},{_util_ge})',
                                          _wb_xl.add_format(_f({'bg_color':'#FFE699','border':1,'font_color':'#000000'}))),
-                                        # white bg + black font  (even, >=98%)
-                                        (f'=AND({_tn3}<>"",NOT({_odd_grp}),{_util_ge})',
+                                        (f'=AND({_anc3}<>"",NOT({_odd_grp}),{_util_ge})',
                                          _wb_xl.add_format(_f({'bg_color':'#FFFFFF','border':1,'font_color':'#000000'}))),
                                     ]
                                     for _cf_fml, _cf_fmt in _cf_rules:
@@ -8473,14 +8519,22 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                     # trip_no_map ต้องพร้อมสำหรับแผนที่ด้านล่าง
                     trip_no_map = st.session_state.get('_trip_no_map', {})
 
-                    st.download_button(
-                        label="📥 ดาวน์โหลดผลลัพธ์ (Excel)",
-                        data=st.session_state.get('_excel_bytes', b''),
-                        file_name=f"ผลจัดทริป_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        type="primary",
-                        width="stretch"
-                    )
+                    _btn_col1, _btn_col2 = st.columns([1, 3])
+                    with _btn_col1:
+                        if st.button("🔢 รันเลขทริปใหม่",
+                                     help="สร้าง Excel ใหม่ รันเลขทริป 001,002,... ตามลำดับปัจจุบัน",
+                                     use_container_width=True):
+                            st.session_state.pop('_excel_key', None)
+                            st.rerun()
+                    with _btn_col2:
+                        st.download_button(
+                            label="📥 ดาวน์โหลดผลลัพธ์ (Excel)",
+                            data=st.session_state.get('_excel_bytes', b''),
+                            file_name=f"ผลจัดทริป_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            type="primary",
+                            use_container_width=True
+                        )
 
                     st.markdown("---")
                     
