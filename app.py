@@ -8436,17 +8436,18 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                 if _tn_col and _wt_col and _cb_col and _row_xl > 2:
                                     _cf_last_r = _row_xl - 1
                                     _cf_ncols  = len(_col_plan)
-                                    _anc3      = f'${_tn_col}3'
-                                    _anc_exp   = f'${_tn_col}$3:${_tn_col}3'
-                                    _anc_rng   = f'${_tn_col}$3:${_tn_col}$9999'
-                                    _wt_rng_cf = f'${_wt_col}$3:${_wt_col}$9999'
-                                    _cb_rng_cf = f'${_cb_col}$3:${_cb_col}$9999'
+                                    _anc3         = f'${_tn_col}3'
+                                    _anc_exp_cur  = f'${_tn_col}$3:${_tn_col}3'
+                                    _anc_exp_prev = f'${_tn_col}$2:${_tn_col}2'
+                                    _anc_rng      = f'${_tn_col}$3:${_tn_col}$9999'
+                                    _wt_rng_cf    = f'${_wt_col}$3:${_wt_col}$9999'
+                                    _cb_rng_cf    = f'${_cb_col}$3:${_cb_col}$9999'
                                     _vw3 = f'IF(LEFT({_anc3},2)="6W",5500,IF(LEFT({_anc3},2)="JB",3000,2000))'
                                     _vc3 = f'IF(LEFT({_anc3},2)="6W",25,IF(LEFT({_anc3},2)="JB",10,7))'
-                                    # นับจำนวน TripNo ที่ไม่ซ้ำจากแถวบนถึงแถวปัจจุบัน (IFERROR ป้องกัน error)
+                                    # นับจำนวน transition (แถวปัจจุบัน≠แถวบน) — ไม่มี division → Excel 2016 safe
                                     _odd_grp = (
-                                        f'ISODD(IFERROR(SUMPRODUCT((1/COUNTIF({_anc_exp},{_anc_exp}))*'
-                                        f'({_anc_exp}<>"")),1))'
+                                        f'ISODD(SUMPRODUCT(({_anc_exp_cur}<>{_anc_exp_prev})'
+                                        f'*({_anc_exp_cur}<>"")))'
                                     )
                                     _util_lt = (
                                         f'MAX(SUMIF({_anc_rng},{_anc3},{_wt_rng_cf})/{_vw3},'
