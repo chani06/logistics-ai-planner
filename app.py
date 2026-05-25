@@ -1578,13 +1578,30 @@ def get_region_code(province):
     province = _alias.get(province, province)
     return REGION_CODE.get(province, '99')
 
+_region_name_cache: dict = {}
 def get_region_name(province):
-    """ดึงชื่อภาคจากจังหวัด"""
+    """ดึงชื่อภาคจากจังหวัด (cached)"""
+    _k = str(province)
+    if _k in _region_name_cache:
+        return _region_name_cache[_k]
     code = get_region_code(province)
     if code == '99':
+        _region_name_cache[_k] = 'ไม่ระบุ'
         return 'ไม่ระบุ'
     region_prefix = code[0]
-    return REGION_NAMES.get(region_prefix, 'ไม่ระบุ')
+    _v = REGION_NAMES.get(region_prefix, 'ไม่ระบุ')
+    _region_name_cache[_k] = _v
+    return _v
+
+def _hav_vec(lat0: float, lon0: float, lats, lons) -> np.ndarray:
+    """Vectorized haversine×1.35 จาก 1 จุด → numpy array ของจุดปลาย (km)"""
+    R = 6371.0 * 1.35
+    phi0 = radians(lat0)
+    phi1 = np.radians(lats)
+    dphi = np.radians(lats - lat0)
+    dlam = np.radians(lons - lon0)
+    a = np.sin(dphi / 2) ** 2 + cos(phi0) * np.cos(phi1) * np.sin(dlam / 2) ** 2
+    return R * 2 * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a))
 
 # ==========================================
 # LOGISTICS ZONE FUNCTIONS
@@ -3447,7 +3464,15 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
         maxmart_buffer: Buffer สำหรับ Maxmart/ผสม (เช่น 1.10 = 110%)
     """
     branch_vehicles = model_data.get('branch_vehicles', {})
-    
+
+    # pre-build MASTER_DATA dict สำหรับ O(1) lookup แทน O(N) scan ในลูป
+    _master_dict: dict = {}
+    if not MASTER_DATA.empty and 'Plan Code' in MASTER_DATA.columns:
+        for _, _mr in MASTER_DATA.iterrows():
+            _mc = str(_mr.get('Plan Code', '')).strip().upper()
+            if _mc:
+                _master_dict[_mc] = _mr
+
     # ==========================================
     # Step 1: สร้าง location_map จากข้อมูล MASTER_DATA (Google Sheets) + พิกัด
     # ==========================================
@@ -3463,14 +3488,13 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
         subdistrict = ''
         route = ''
         
-        # ลองหาจาก MASTER_DATA ก่อน (ข้อมูลล่าสุดจาก Sheets)
-        if isinstance(model_data, pd.DataFrame) and not model_data.empty and 'Plan Code' in model_data.columns:
-            master_row = model_data[model_data['Plan Code'] == code]
-            if not master_row.empty:
-                province    = str(master_row.iloc[0].get('จังหวัด', '')).strip() if pd.notna(master_row.iloc[0].get('จังหวัด')) else ''
-                district    = str(master_row.iloc[0].get('อำเภอ', '')).strip()   if pd.notna(master_row.iloc[0].get('อำเภอ'))   else ''
-                subdistrict = str(master_row.iloc[0].get('ตำบล', '')).strip()    if pd.notna(master_row.iloc[0].get('ตำบล'))    else ''
-                route       = str(master_row.iloc[0].get('Route', '')).strip()   if pd.notna(master_row.iloc[0].get('Route'))   else ''
+        # ลองหาจาก MASTER_DATA ก่อน (O(1) dict lookup แทน scan)
+        _mrow = _master_dict.get(code)
+        if _mrow is not None:
+            province    = str(_mrow.get('จังหวัด', '')).strip() if pd.notna(_mrow.get('จังหวัด')) else ''
+            district    = str(_mrow.get('อำเภอ', '')).strip()   if pd.notna(_mrow.get('อำเภอ'))   else ''
+            subdistrict = str(_mrow.get('ตำบล', '')).strip()    if pd.notna(_mrow.get('ตำบล'))    else ''
+            route       = str(_mrow.get('Route', '')).strip()   if pd.notna(_mrow.get('Route'))   else ''
         
         # Fallback → Excel upload
         if not province:    province    = str(row.get('Province', '')).strip()    if pd.notna(row.get('Province'))    else ''
@@ -3914,41 +3938,46 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
             _ep_best_dist = 999.0
             _ep_best_priority = 9  # 0=ตำบล, 1=อำเภอ, 2=จังหวัดเดียวกัน, 3=ภาคเดียวกัน, 4=nearest
 
-            for _, _eprow in unassigned_df.iterrows():
-                _eplat = float(_eprow.get('_lat', 0) or 0)
-                _eplon = float(_eprow.get('_lon', 0) or 0)
-                if _eplat > 0 and _eplon > 0:
-                    _epd = min(
-                        haversine_distance(_eplat, _eplon, _lt, _ln, False)
-                        for _lt, _ln in _last_trip_all_coords
-                    )
-                    if _epd <= _EPIDEMIC_NEXT_KM:
-                        # ถ้ารู้ภาคของทริปล่าสุด → กรองเฉพาะภาคเดียวกัน
-                        _ep_cand_region = get_region_name(str(_eprow.get('_province', '') or ''))
-                        if (_last_trip_region and _last_trip_region not in ('', 'ไม่ระบุ') and
-                                _ep_cand_region and _ep_cand_region not in ('', 'ไม่ระบุ') and
-                                _ep_cand_region != _last_trip_region):
-                            continue  # ต่างภาค → ข้าม (ปล่อยให้ pointer จัดการ)
-                        # คำนวณ priority: ตำบล=0, อำเภอ=1, จังหวัด=2, ภาค=3, อื่น=4
-                        _ep_sub  = str(_eprow.get('_subdistrict', '') or '')
-                        _ep_dis  = str(_eprow.get('_district', '') or '')
-                        _ep_prov = str(_eprow.get('_province', '') or '')
-                        if _last_trip_subdistricts and _ep_sub and _ep_sub in _last_trip_subdistricts:
-                            _ep_prio = 0
-                        elif _last_trip_districts and _ep_dis and _ep_dis in _last_trip_districts:
-                            _ep_prio = 1
-                        elif _last_trip_province and _ep_prov and _ep_prov == _last_trip_province:
-                            _ep_prio = 2
-                        elif _last_trip_region and _ep_cand_region and _ep_cand_region == _last_trip_region:
-                            _ep_prio = 3
-                        else:
-                            _ep_prio = 4
-                        # เลือก: priority ต่ำก่อน; priority เท่ากัน → ใกล้สุดก่อน
-                        if (_ep_prio < _ep_best_priority or
-                                (_ep_prio == _ep_best_priority and _epd < _ep_best_dist)):
-                            _ep_best_priority = _ep_prio
-                            _ep_best_dist = _epd
-                            _ep_best = _eprow
+            # ── vectorized distance: คำนวณ min-dist ทุก unassigned ด้วย numpy ──
+            _ep_lats_a = unassigned_df['_lat'].fillna(0).to_numpy(dtype=float)
+            _ep_lons_a = unassigned_df['_lon'].fillna(0).to_numpy(dtype=float)
+            _ep_valid_a = (_ep_lats_a > 0) & (_ep_lons_a > 0)
+            _ep_min_d_a = np.full(len(unassigned_df), 999.0)
+            for _lt, _ln in _last_trip_all_coords:
+                _d_arr = _hav_vec(_lt, _ln, _ep_lats_a, _ep_lons_a)
+                np.minimum(_ep_min_d_a, _d_arr, out=_ep_min_d_a)
+            _ep_min_d_a[~_ep_valid_a] = 999.0
+
+            for _ep_i, (_, _eprow) in enumerate(unassigned_df.iterrows()):
+                _epd = float(_ep_min_d_a[_ep_i])
+                if _epd > _EPIDEMIC_NEXT_KM:
+                    continue
+                # ถ้ารู้ภาคของทริปล่าสุด → กรองเฉพาะภาคเดียวกัน
+                _ep_cand_region = get_region_name(str(_eprow.get('_province', '') or ''))
+                if (_last_trip_region and _last_trip_region not in ('', 'ไม่ระบุ') and
+                        _ep_cand_region and _ep_cand_region not in ('', 'ไม่ระบุ') and
+                        _ep_cand_region != _last_trip_region):
+                    continue  # ต่างภาค → ข้าม
+                # คำนวณ priority: ตำบล=0, อำเภอ=1, จังหวัด=2, ภาค=3, อื่น=4
+                _ep_sub  = str(_eprow.get('_subdistrict', '') or '')
+                _ep_dis  = str(_eprow.get('_district', '') or '')
+                _ep_prov = str(_eprow.get('_province', '') or '')
+                if _last_trip_subdistricts and _ep_sub and _ep_sub in _last_trip_subdistricts:
+                    _ep_prio = 0
+                elif _last_trip_districts and _ep_dis and _ep_dis in _last_trip_districts:
+                    _ep_prio = 1
+                elif _last_trip_province and _ep_prov and _ep_prov == _last_trip_province:
+                    _ep_prio = 2
+                elif _last_trip_region and _ep_cand_region and _ep_cand_region == _last_trip_region:
+                    _ep_prio = 3
+                else:
+                    _ep_prio = 4
+                # เลือก: priority ต่ำก่อน; priority เท่ากัน → ใกล้สุดก่อน
+                if (_ep_prio < _ep_best_priority or
+                        (_ep_prio == _ep_best_priority and _epd < _ep_best_dist)):
+                    _ep_best_priority = _ep_prio
+                    _ep_best_dist = _epd
+                    _ep_best = _eprow
             if _ep_best is not None:
                 farthest_row = _ep_best
 
@@ -4763,35 +4792,44 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
         _fu_unassigned = df[df['Trip'] == 0].copy()
         if _fu_unassigned.empty:
             break
-        # กรอง: ภาค/จังหวัดเดียวกัน + ระยะแบบ dynamic
+        # กรอง: ภาค/จังหวัดเดียวกัน + ระยะแบบ dynamic (vectorized numpy)
         _BKK_FU = 'กรุงเทพมหานคร'
+        if not _ft_coords:
+            continue
         _fu_cands = []
-        for _, _fur in _fu_unassigned.iterrows():
-            _fu_lat = float(_fur.get('_lat', 0) or 0)
-            _fu_lon = float(_fur.get('_lon', 0) or 0)
-            if _fu_lat <= 0 or _fu_lon <= 0:
-                continue
-            _fu_prov = str(_fur.get('_province', '') or '')
-            _fu_reg  = get_region_name(_fu_prov) if _fu_prov else ''
-            # ตรวจภาค
-            if (_ft_region and _ft_region not in ('', 'ไม่ระบุ') and
-                    _fu_reg and _fu_reg not in ('', 'ไม่ระบุ') and
-                    _fu_reg != _ft_region):
-                continue
-            if not _ft_coords:
-                continue
-            _fu_min_d = min(haversine_distance(_fu_lat, _fu_lon, _tlat, _tlon, use_osrm_cache=False)
-                           for _tlat, _tlon in _ft_coords)
-            # radius แบบ dynamic
-            if _ft_prov == _BKK_FU or _fu_prov == _BKK_FU:
-                _fu_radius = 10.0   # กรุงเทพ: เขตเดียว/เขตติดเท่านั้น
-            elif _fu_prov == _ft_prov:
-                _fu_radius = _FILLUP_MAX_KM   # จังหวัดเดียวกัน
-            else:
-                _fu_radius = 300.0 if _ft_util < 0.80 else 200.0  # ภาคเดียวกัน ต่างจังหวัด: ไกลได้
-            if _fu_min_d > _fu_radius:
-                continue
-            _fu_cands.append((_fu_min_d, _fur['Code'], float(_fur.get('Weight', 0) or 0), float(_fur.get('Cube', 0) or 0)))
+        if not _fu_unassigned.empty:
+            _fu_lats_v = _fu_unassigned['_lat'].fillna(0).to_numpy(dtype=float)
+            _fu_lons_v = _fu_unassigned['_lon'].fillna(0).to_numpy(dtype=float)
+            _fu_valid_v = (_fu_lats_v > 0) & (_fu_lons_v > 0)
+            # คำนวณ min-distance จากทุกพิกัดทริป
+            _fu_dists_v = np.full(len(_fu_unassigned), 999.0)
+            for _tlat, _tlon in _ft_coords:
+                _d_v = _hav_vec(_tlat, _tlon, _fu_lats_v, _fu_lons_v)
+                np.minimum(_fu_dists_v, _d_v, out=_fu_dists_v)
+            _fu_dists_v[~_fu_valid_v] = 999.0
+            _fu_provs_v = _fu_unassigned['_province'].fillna('').to_numpy()
+            _fu_codes_v = _fu_unassigned['Code'].to_numpy()
+            _fu_w_v = _fu_unassigned['Weight'].to_numpy(dtype=float)
+            _fu_c_v = _fu_unassigned['Cube'].to_numpy(dtype=float)
+            for _vi in range(len(_fu_unassigned)):
+                if not _fu_valid_v[_vi]:
+                    continue
+                _fu_prov = str(_fu_provs_v[_vi] or '')
+                _fu_reg  = get_region_name(_fu_prov) if _fu_prov else ''
+                if (_ft_region and _ft_region not in ('', 'ไม่ระบุ') and
+                        _fu_reg and _fu_reg not in ('', 'ไม่ระบุ') and
+                        _fu_reg != _ft_region):
+                    continue
+                _fu_min_d = float(_fu_dists_v[_vi])
+                if _ft_prov == _BKK_FU or _fu_prov == _BKK_FU:
+                    _fu_radius = 10.0
+                elif _fu_prov == _ft_prov:
+                    _fu_radius = _FILLUP_MAX_KM
+                else:
+                    _fu_radius = 300.0 if _ft_util < 0.80 else 200.0
+                if _fu_min_d > _fu_radius:
+                    continue
+                _fu_cands.append((_fu_min_d, str(_fu_codes_v[_vi]), float(_fu_w_v[_vi]), float(_fu_c_v[_vi])))
         _fu_cands.sort(key=lambda x: x[0])  # ใกล้สุดก่อน
         for _fu_d, _fu_code, _fu_w, _fu_c in _fu_cands:
             if _ft_util >= 1.0:
@@ -5095,14 +5133,14 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
             if len(next_trip_data) == 0:
                 continue
             
-            # คำนวณระยะห่างของแต่ละสาขาใน next_trip จาก centroid ของ current_trip
-            next_trip_data['_dist_to_current'] = next_trip_data.apply(
-                lambda row: haversine_distance(
-                    trip_cap['centroid_lat'], trip_cap['centroid_lon'],
-                    row['_lat'], row['_lon'], use_osrm_cache=False
-                ) if row['_lat'] > 0 and row['_lon'] > 0 else 999,
-                axis=1
-            )
+            # คำนวณระยะห่างของแต่ละสาขาใน next_trip จาก centroid ของ current_trip (vectorized)
+            _ntd_lats = next_trip_data['_lat'].fillna(0).to_numpy(dtype=float)
+            _ntd_lons = next_trip_data['_lon'].fillna(0).to_numpy(dtype=float)
+            _ntd_valid = (_ntd_lats > 0) & (_ntd_lons > 0)
+            _ntd_dists = _hav_vec(trip_cap['centroid_lat'], trip_cap['centroid_lon'], _ntd_lats, _ntd_lons)
+            _ntd_dists[~_ntd_valid] = 999.0
+            next_trip_data = next_trip_data.copy()
+            next_trip_data['_dist_to_current'] = _ntd_dists
             
             # เรียงตามระยะใกล้สุดก่อน
             next_trip_data = next_trip_data.sort_values('_dist_to_current')
