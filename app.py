@@ -4109,8 +4109,14 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
             #  (ลบ fallback สาย province / logistics-zone / highway ออก —
             #   การ "กระโดด" ข้ามโซนที่ไม่ได้เชื่อมกันจริงทำให้ทริปกระจาย)
             # ─────────────────────────────────────────────────────────────────
-            _CHAIN_KM      = 50   # ระยะสูงสุดเพื่อ "เชื่อมต่อ" ภายในโซน
-            _CROSS_ZONE_KM = 20   # ระยะสูงสุดเพื่อข้ามโซน
+            # BKK/ปริมณฑล: ลด radius เพื่อป้องกัน epidemic ข้ามทั่วกรุงเทพ
+            _is_bkk_metro = (
+                str(trip_logistics_zone or '').startswith('ZONE_BKK_') or
+                str(trip_logistics_zone or '').startswith('ZONE_NEARBY_') or
+                trip_original_province == 'กรุงเทพมหานคร'
+            )
+            _CHAIN_KM      = 20 if _is_bkk_metro else 50   # BKK: 20km, ต่างจังหวัด: 50km
+            _CROSS_ZONE_KM = 10 if _is_bkk_metro else 20
 
             same_zone_df = None
             filter_level  = ""
@@ -4169,13 +4175,16 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                     reach_codes.add(str(_rc0).strip().upper())
 
             # Level 1: 🦠 Epidemic frontier — ทุกสาขาใน reach_codes (≤_CHAIN_KM จากสาขาใดในทริป)
-            # ไม่จำกัด _prov_zone: ให้ epidemic แพร่ข้ามโซนได้ตามธรรมชาติ
-            # province/region/BKK guard ทำในลูป candidate ด้านล่าง
             if reach_codes:
                 _sz_df = remaining_df[
                     remaining_df['Code'].apply(lambda x: str(x).strip().upper() in reach_codes)
                 ].copy()
                 if not _sz_df.empty:
+                    # 🔒 BKK/ปริมณฑล: lock logistics zone ป้องกันกระโดดข้ามโซน
+                    if _is_bkk_metro and trip_logistics_zone:
+                        _lz_locked = _sz_df[_sz_df['_logistics_zone'] == trip_logistics_zone]
+                        if not _lz_locked.empty:
+                            _sz_df = _lz_locked
                     same_zone_df = _sz_df
                     filter_level = f"epidemic-frontier({_CHAIN_KM}km)"
 
@@ -4216,15 +4225,19 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                     if (trip_original_region and trip_original_region not in ('', 'ไม่ระบุ') and
                             _nr2 and _nr2 not in ('', 'ไม่ระบุ') and _nr2 != trip_original_region):
                         continue
-                    # ตรวจ BKK isolation
+                    # ตรวจ BKK isolation + zone lock
                     _nb_r2 = remaining_df[remaining_df['Code'].apply(
                         lambda x: str(x).strip().upper() == _nc2)]
                     if _nb_r2.empty:
                         continue
-                    _nb_prov2 = str(_nb_r2.iloc[0].get('_province', '') or '')
+                    _nb_prov2  = str(_nb_r2.iloc[0].get('_province', '') or '')
+                    _nb_lzone2 = str(_nb_r2.iloc[0].get('_logistics_zone', '') or '')
                     _BKK = 'กรุงเทพมหานคร'
                     if ((_nb_prov2 == _BKK and trip_original_province not in ('', None) and trip_original_province != _BKK) or
                             (trip_original_province == _BKK and _nb_prov2 and _nb_prov2 != _BKK)):
+                        continue
+                    # BKK/ปริมณฑล: cluster-jump ต้องอยู่ logistics zone เดียวกัน
+                    if _is_bkk_metro and trip_logistics_zone and _nb_lzone2 and _nb_lzone2 != trip_logistics_zone:
                         continue
                     # ✅ ดึง seed ใหม่เข้า same_zone_df
                     same_zone_df = _nb_r2.copy()
