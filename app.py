@@ -7895,10 +7895,13 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                 except Exception:
                                     return base_date_str
 
-                            _trip_order_map = {t: i for i, t in enumerate(sorted_trips)}
+                            _trip_order_map = {t: i for i, t in enumerate(export_sorted_trips)}
                             _rd['_trip_order'] = _rd['Trip'].map(_trip_order_map)
-                            # เรียงแถว: ทริป → ระยะทางจาก DC ไกลก่อน (ไม่ใช้อักษร)
-                            if _dist_src_col:
+                            # เรียงแถว: ทริป → จังหวัด → ระยะทางจาก DC ไกลก่อน
+                            _prov_col_rd2 = '_province' if '_province' in _rd.columns else ('Province' if 'Province' in _rd.columns else None)
+                            if _prov_col_rd2 and _dist_src_col:
+                                _rd = _rd.sort_values(['_trip_order', _prov_col_rd2, _dist_src_col], ascending=[True, True, False])
+                            elif _dist_src_col:
                                 _rd = _rd.sort_values(['_trip_order', _dist_src_col], ascending=[True, False])
                             else:
                                 _rd = _rd.sort_values(['_trip_order'])
