@@ -8088,8 +8088,7 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                           'Cube':11,'Weight':11,'OriginalQty':12,
                                           '__SUB_GEN__':14,'__DIS_GEN__':14,'__PROV_GEN__':16,'__PROV_BLANK__':16,
                                           '__TRIP__':6,'__TRIPNO__':10,
-                                          '__LOAD_DATE__':14,'__LOAD_TIME__':14,'__DOOR__':8,'__REMARK__':28,
-                                          '__TN_ORIG__':0}
+                                          '__LOAD_DATE__':14,'__LOAD_TIME__':14,'__DOOR__':8,'__REMARK__':28}
 
                                 # สร้าง column plan: [(display_name, color, internal_key), ...]
                                 _GEO_COLOR  = '#E2EFDA'
@@ -8204,8 +8203,6 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                     _col_plan.append(('หมายเหตุ', _SCH_COLOR, '__REMARK__'))
                                 # จังหวัด (ว่าง) — ท้ายสุดเสมอ
                                 _col_plan.append(('จังหวัด', _GEO_COLOR, '__PROV_BLANK__'))
-                                # hidden anchor: static TripNo ใช้เป็น key สำหรับสูตรรันเลขทริป
-                                _col_plan.append(('TN_orig', '#FFFFFF', '__TN_ORIG__'))
 
                                 # ── Set column widths FIRST (must precede any write() with constant_memory=True) ──
                                 for _ci, (_, _, _ikey) in enumerate(_col_plan):
@@ -8290,15 +8287,13 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                 _tripno_ci_f = next((i for i, (_, _, k) in enumerate(_col_plan) if k == '__TRIPNO__'), None)
                                 _weight_ci_f = next((i for i, (_, _, k) in enumerate(_col_plan) if k == 'Weight'), None)
                                 _cube_ci_f   = next((i for i, (_, _, k) in enumerate(_col_plan) if k == 'Cube'), None)
-                                _torig_ci_f  = next((i for i, (_, _, k) in enumerate(_col_plan) if k == '__TN_ORIG__'), None)
                                 try:
                                     from xlsxwriter.utility import xl_col_to_name as _xcn
                                     _tn_col = _xcn(_tripno_ci_f) if _tripno_ci_f is not None else None
                                     _wt_col = _xcn(_weight_ci_f) if _weight_ci_f is not None else None
                                     _cb_col = _xcn(_cube_ci_f)   if _cube_ci_f   is not None else None
-                                    _tk_col = _xcn(_torig_ci_f)  if _torig_ci_f  is not None else None
                                 except Exception:
-                                    _tn_col = _wt_col = _cb_col = _tk_col = None
+                                    _tn_col = _wt_col = _cb_col = None
 
                                 _xl_trip_seq = 0
                                 for _tnum in export_sorted_trips:
@@ -8320,29 +8315,9 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                             elif _ikey == '__PROV_BLANK__':
                                                 _val = ''   # ว่างไว้ให้ user กรอกเอง
                                             elif _ikey == '__TRIP__':
-                                                if _tk_col:
-                                                    _xl_r2   = _row_xl + 1
-                                                    _tk_r2   = f'${_tk_col}{_xl_r2}'
-                                                    _tk_rng2 = f'${_tk_col}$3:${_tk_col}{_xl_r2}'
-                                                    _sp2 = f'IFERROR(SUMPRODUCT((1/COUNTIF({_tk_rng2},{_tk_rng2}))*({_tk_rng2}<>"")),1)'
-                                                    _ws_xl.write_formula(_row_xl, _ci,
-                                                        f'=IF({_tk_r2}=""," ",TEXT({_sp2},"000"))',
-                                                        _dfmt, '')
-                                                    continue
                                                 _val = _tnum_int
                                             elif _ikey == '__TRIPNO__':
-                                                if _tk_col:
-                                                    _xl_r2   = _row_xl + 1
-                                                    _tk_r2   = f'${_tk_col}{_xl_r2}'
-                                                    _tk_rng2 = f'${_tk_col}$3:${_tk_col}{_xl_r2}'
-                                                    _sp2 = f'IFERROR(SUMPRODUCT((1/COUNTIF({_tk_rng2},{_tk_rng2}))*({_tk_rng2}<>"")),1)'
-                                                    _ws_xl.write_formula(_row_xl, _ci,
-                                                        f'=IF({_tk_r2}=""," ",LEFT({_tk_r2},2)&TEXT({_sp2},"000"))',
-                                                        _dfmt, '')
-                                                    continue
                                                 _val = _tno_str
-                                            elif _ikey == '__TN_ORIG__':
-                                                _val = _tno_str  # static anchor สำหรับสูตร
                                             elif _ikey == 'BU':
                                                 _val = _rec.get('BU', 211)
                                             elif _ikey == 'Code':
@@ -8426,28 +8401,8 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                         elif _ikey == '__DOOR__':
                                             _dcval = trip_door.get(_tnum, '')
                                         elif _ikey == '__TRIP__':
-                                            if _tk_col:
-                                                _xl_r2   = _row_xl + 1
-                                                _tk_r2   = f'${_tk_col}{_xl_r2}'
-                                                _tk_rng2 = f'${_tk_col}$3:${_tk_col}{_xl_r2}'
-                                                _sp2 = f'IFERROR(SUMPRODUCT((1/COUNTIF({_tk_rng2},{_tk_rng2}))*({_tk_rng2}<>"")),1)'
-                                                _ws_xl.write_formula(_row_xl, _ci,
-                                                    f'=IF({_tk_r2}=""," ",TEXT({_sp2},"000"))',
-                                                    _tf, '')
-                                                continue
                                             _dcval = _tnum_int
                                         elif _ikey == '__TRIPNO__':
-                                            if _tk_col:
-                                                _xl_r2   = _row_xl + 1
-                                                _tk_r2   = f'${_tk_col}{_xl_r2}'
-                                                _tk_rng2 = f'${_tk_col}$3:${_tk_col}{_xl_r2}'
-                                                _sp2 = f'IFERROR(SUMPRODUCT((1/COUNTIF({_tk_rng2},{_tk_rng2}))*({_tk_rng2}<>"")),1)'
-                                                _ws_xl.write_formula(_row_xl, _ci,
-                                                    f'=IF({_tk_r2}=""," ",LEFT({_tk_r2},2)&TEXT({_sp2},"000"))',
-                                                    _tf, '')
-                                                continue
-                                            _dcval = _tno_str
-                                        elif _ikey == '__TN_ORIG__':
                                             _dcval = _tno_str
                                         elif _ikey == '__LOAD_DATE__':
                                             _dcval = trip_load_date.get(_tnum, '')
@@ -8462,13 +8417,10 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                 # Conditional format: auto highlight + font color (Excel 2016 compatible)
                                 if _tn_col and _wt_col and _cb_col and _row_xl > 2:
                                     _cf_last_r = _row_xl - 1
-                                    # ยกเว้นคอลัมน์ซ่อน __TN_ORIG__ ออกจาก range
-                                    _cf_ncols  = (_torig_ci_f if _torig_ci_f is not None else len(_col_plan))
-                                    # anchor: ใช้ __TN_ORIG__ (static) แทน TripNo (formula) → ไม่มี formula dependency
-                                    _anc_col   = _tk_col if _tk_col else _tn_col
-                                    _anc3      = f'${_anc_col}3'           # abs-col, rel-row
-                                    _anc_exp   = f'${_anc_col}$3:${_anc_col}3'  # expanding range
-                                    _anc_rng   = f'${_anc_col}$3:${_anc_col}$9999'
+                                    _cf_ncols  = len(_col_plan)
+                                    _anc3      = f'${_tn_col}3'
+                                    _anc_exp   = f'${_tn_col}$3:${_tn_col}3'
+                                    _anc_rng   = f'${_tn_col}$3:${_tn_col}$9999'
                                     _wt_rng_cf = f'${_wt_col}$3:${_wt_col}$9999'
                                     _cb_rng_cf = f'${_cb_col}$3:${_cb_col}$9999'
                                     _vw3 = f'IF(LEFT({_anc3},2)="6W",5500,IF(LEFT({_anc3},2)="JB",3000,2000))'
