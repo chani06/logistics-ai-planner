@@ -3366,7 +3366,7 @@ def process_dataframe(df):
                 exclude_pattern = '|'.join(_excl_kws)
                 df = df[~df['Name'].str.contains(exclude_pattern, case=False, na=False)]
     
-    for col in ['Weight', 'Cube']:
+    for col in ['Weight', 'Cube', 'OriginalQty']:
         if col not in df.columns:
             df[col] = 0.0
         else:
