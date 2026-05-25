@@ -7895,7 +7895,7 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                 except Exception:
                                     return base_date_str
 
-                            _trip_order_map = {t: i for i, t in enumerate(export_sorted_trips)}
+                            _trip_order_map = {t: i for i, t in enumerate(sorted_trips)}
                             _rd['_trip_order'] = _rd['Trip'].map(_trip_order_map)
                             # เรียงแถว: ทริป → จังหวัด → ระยะทางจาก DC ไกลก่อน
                             _prov_col_rd2 = '_province' if '_province' in _rd.columns else ('Province' if 'Province' in _rd.columns else None)
