@@ -8030,6 +8030,11 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                 _wnfmt   = _wb_xl.add_format(_f({'bg_color':'#FFFFFF','border':1,'num_format':'#,##0.00'}))
                                 _ynfmt_r = _wb_xl.add_format(_f({'bg_color':'#FFE699','border':1,'num_format':'#,##0.00','font_color':'#FF0000'}))
                                 _wnfmt_r = _wb_xl.add_format(_f({'bg_color':'#FFFFFF','border':1,'num_format':'#,##0.00','font_color':'#FF0000'}))
+                                # ── แดง: ทริปที่ util < 98% ──
+                                _LOW_BG  = '#FFCCCC'  # พื้นแดงอ่อน
+                                _LOW_FG  = '#CC0000'  # ตัวอักษรแดงเข้ม
+                                _rfmt    = _wb_xl.add_format(_f({'bg_color':_LOW_BG,'border':1,'font_color':_LOW_FG}))
+                                _rnfmt   = _wb_xl.add_format(_f({'bg_color':_LOW_BG,'border':1,'num_format':'#,##0.00','font_color':_LOW_FG}))
                                 # DC summary row formats
                                 _dc_fmt  = _wb_xl.add_format(_f({'bg_color':'#BDD7EE','border':1,'bold':True}))
                                 _dc_nfmt = _wb_xl.add_format(_f({'bg_color':'#BDD7EE','border':1,'bold':True,'num_format':'#,##0.00'}))
@@ -8253,6 +8258,20 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                     return (_ds, _tm)
                                 export_sorted_trips = sorted(sorted_trips, key=_dt_sort_key)
 
+                                # ── pre-compute util% ต่อทริป (สำหรับ highlight แดง < 98%) ──
+                                _trip_util_map: dict = {}
+                                for _tu in sorted_trips:
+                                    _ru = _trip_rows.get(_tu, [])
+                                    _vtu = trip_vehicle_map.get(_tu, '6W')
+                                    _is_pt_u = all(str(_r.get('BU','')).strip() in ('211','PUNTHAI') for _r in _ru) if _ru else False
+                                    _lim_u = (PUNTHAI_LIMITS if _is_pt_u else LIMITS).get(_vtu, LIMITS['6W'])
+                                    _buf_u = punthai_buffer if _is_pt_u else maxmart_buffer
+                                    _tw_u = sum(float(_r.get('Weight',0) or 0) for _r in _ru)
+                                    _tc_u = sum(float(_r.get('Cube',0) or 0) for _r in _ru)
+                                    _wu_u = _tw_u / (_lim_u['max_w'] * _buf_u) if _lim_u['max_w'] > 0 else 0
+                                    _cu_u = _tc_u / (_lim_u['max_c'] * _buf_u) if _lim_u['max_c'] > 0 else 0
+                                    _trip_util_map[_tu] = max(_wu_u, _cu_u)
+
                                 use_yellow = True
                                 _row_xl = 2
                                 _row_seq = 1   # Sep. sequential ต่อแถว (รวม DC row)
@@ -8261,9 +8280,15 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                     _rows = _trip_rows.get(_tnum, [])
                                     _tno  = trip_no_map.get(_tnum, '')
                                     _is_f = _tnum in failed_trips
-                                    _tf = (_yfmt_r if _is_f else _yfmt) if use_yellow else (_wfmt_r if _is_f else _wfmt)
-                                    _nf = (_ynfmt_r if _is_f else _ynfmt) if use_yellow else (_wnfmt_r if _is_f else _wnfmt)
-                                    use_yellow = not use_yellow
+                                    _is_low = _trip_util_map.get(_tnum, 1.0) < 0.98
+                                    if _is_low:
+                                        _tf = _rfmt
+                                        _nf = _rnfmt
+                                    else:
+                                        _tf = (_yfmt_r if _is_f else _yfmt) if use_yellow else (_wfmt_r if _is_f else _wfmt)
+                                        _nf = (_ynfmt_r if _is_f else _ynfmt) if use_yellow else (_wnfmt_r if _is_f else _wnfmt)
+                                    if not _is_low:
+                                        use_yellow = not use_yellow
                                     _tnum_int = int(_tnum)
                                     _tno_str  = str(_tno)
                                     _first_row_of_trip = True
