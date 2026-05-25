@@ -3092,148 +3092,101 @@ def load_model():
         st.error(f"❌ Error loading model: {e}")
         return None
 
-def _extract_header_info(file_content):
+@st.cache_data(show_spinner=False)
+def _extract_all_info(file_content):
     """
-    อ่าน header row จากไฟล์ Excel ต้นฉบับ
-    คืนค่า [(col_name, '#RRGGBB'), ...] — ชื่อและสีพื้นหลังของแต่ละ header cell
-    ใช้ openpyxl เพื่อดึงสีที่แท้จริง
+    เปิด openpyxl ครั้งเดียว แล้วดึง header info + style info + DC row ในรอบเดียว
+    คืน (header_list, style_dict, dc_dict)
     """
+    import openpyxl
+
+    header_list = []
+    style_dict  = {'row_height': 15.0, 'font_name': 'Angsana New', 'font_size': 14.0}
+    dc_dict     = {}
+
     try:
-        import openpyxl
         wb = openpyxl.load_workbook(io.BytesIO(file_content), data_only=True, read_only=False)
-        # เลือก sheet เดียวกับ load_excel
-        ws = None
-        for sn in wb.sheetnames:
-            if 'punthai' in sn.lower() or '2.' in sn.lower():
-                ws = wb[sn]
-                break
-        if ws is None:
-            ws = wb.active
-        # หา header row (ใช้เงื่อนไขเดียวกับ load_excel)
+        ws = next((wb[sn] for sn in wb.sheetnames
+                   if 'punthai' in sn.lower() or '2.' in sn.lower()), wb.active)
+
+        # หา header row
         hrow = 1
+        headers = []
         for ri, row in enumerate(ws.iter_rows(min_row=1, max_row=min(10, ws.max_row)), start=1):
-            vals = ' '.join(str(c.value or '').upper() for c in row)
-            if sum(kw in vals for kw in ('BRANCH', 'TRIP', 'รหัสสาขา', 'BU')) >= 2:
+            vals_upper = ' '.join(str(c.value or '').upper() for c in row)
+            if sum(kw in vals_upper for kw in ('BRANCH', 'TRIP', 'รหัสสาขา', 'BU')) >= 2:
                 hrow = ri
+                headers = [str(c.value) if c.value is not None else '' for c in row]
                 break
-        result = []
+
+        # ── 1. header colors ──
         for cell in ws[hrow]:
             if cell.column > ws.max_column:
                 break
-            name = str(cell.value) if cell.value is not None else ''
-            color = '#D9D9D9'  # fallback grey
+            name  = str(cell.value) if cell.value is not None else ''
+            color = '#D9D9D9'
             try:
                 fill = cell.fill
                 if fill and fill.fill_type == 'solid' and fill.fgColor:
                     fg = fill.fgColor
                     if fg.type == 'rgb' and fg.rgb and len(fg.rgb) >= 6:
-                        rgb_hex = fg.rgb[-6:]   # AARRGGBB → RRGGBB
+                        rgb_hex = fg.rgb[-6:]
                         if rgb_hex.upper() not in ('FFFFFF', '000000'):
                             color = '#' + rgb_hex
             except Exception:
                 pass
-            result.append((name, color))
-        wb.close()
-        return result
-    except Exception as ex:
-        safe_print(f"⚠️ _extract_header_info: {ex}")
-        return []
+            header_list.append((name, color))
 
-
-def _extract_style_info(file_content):
-    """
-    อ่าน row height + font จากแถวข้อมูลแรกของไฟล์ต้นฉบับ
-    คืน {'row_height': float, 'font_name': str, 'font_size': float}
-    """
-    result = {'row_height': 15.0, 'font_name': 'Angsana New', 'font_size': 14.0}
-    try:
-        import openpyxl
-        wb = openpyxl.load_workbook(io.BytesIO(file_content), data_only=True, read_only=False)
-        ws = None
-        for sn in wb.sheetnames:
-            if 'punthai' in sn.lower() or '2.' in sn.lower():
-                ws = wb[sn]
-                break
-        if ws is None:
-            ws = wb.active
-        # หา header row
-        hrow = 1
-        for ri, row in enumerate(ws.iter_rows(min_row=1, max_row=min(10, ws.max_row)), start=1):
-            vals = ' '.join(str(c.value or '').upper() for c in row)
-            if sum(kw in vals for kw in ('BRANCH', 'TRIP', 'รหัสสาขา', 'BU')) >= 2:
-                hrow = ri
-                break
-        # อ่านแถวข้อมูลแรก (หลัง header)
+        # ── 2. style (row height + font จากแถวข้อมูลแรก) ──
         data_row_idx = hrow + 1
         rd = ws.row_dimensions.get(data_row_idx)
         if rd and rd.height:
-            result['row_height'] = float(rd.height)
-        # อ่าน font จาก cell แรกที่มีข้อมูล
+            style_dict['row_height'] = float(rd.height)
         for cell in ws[data_row_idx]:
             if cell.value is not None:
                 try:
                     if cell.font:
-                        if cell.font.name:
-                            result['font_name'] = cell.font.name
-                        if cell.font.size:
-                            result['font_size'] = float(cell.font.size)
+                        if cell.font.name:  style_dict['font_name'] = cell.font.name
+                        if cell.font.size:  style_dict['font_size'] = float(cell.font.size)
                 except Exception:
                     pass
                 break
-        wb.close()
-    except Exception as ex:
-        safe_print(f"⚠️ _extract_style_info: {ex}")
-    return result
 
-
-def _extract_dc_row_info(file_content):
-    """
-    อ่านแถว DC (DC011/PTDC) จากไฟล์ต้นฉบับ
-    คืน dict {orig_col_name: value} ของแถวนั้น
-    """
-    try:
-        import openpyxl
-        wb = openpyxl.load_workbook(io.BytesIO(file_content), data_only=True)
-        ws = None
-        for sn in wb.sheetnames:
-            if 'punthai' in sn.lower() or '2.' in sn.lower():
-                ws = wb[sn]
-                break
-        if ws is None:
-            ws = wb.active
-        # หา header row (เงื่อนไขเดียวกับ _extract_header_info)
-        hrow = 1
-        headers = []
-        for ri, row in enumerate(ws.iter_rows(min_row=1, max_row=min(10, ws.max_row)), start=1):
-            vals = ' '.join(str(c.value or '').upper() for c in row)
-            if sum(kw in vals for kw in ('BRANCH', 'TRIP', 'รหัสสาขา', 'BU')) >= 2:
-                hrow = ri
-                headers = [str(c.value) if c.value is not None else '' for c in row]
-                break
+        # ── 3. DC row ──
         if not headers:
             headers = [str(c.value) if c.value is not None else ''
-                       for c in list(ws.iter_rows(min_row=hrow, max_row=hrow))[0]]
-        # ค้นหาแถว DC
+                       for c in next(ws.iter_rows(min_row=hrow, max_row=hrow))]
         _DC_CODES = {'DC011', 'PTDC', 'PTG DISTRIBUTION CENTER'}
         for row in ws.iter_rows(min_row=hrow + 1, max_row=ws.max_row):
             vals = [c.value for c in row]
-            for v in vals[:6]:
-                if str(v or '').strip().upper() in _DC_CODES:
-                    row_dict = {headers[i]: ('' if vals[i] is None else vals[i])
-                                for i in range(min(len(headers), len(vals)))}
-                    wb.close()
-                    return row_dict
+            if any(str(v or '').strip().upper() in _DC_CODES for v in vals[:6]):
+                dc_dict = {headers[i]: ('' if vals[i] is None else vals[i])
+                           for i in range(min(len(headers), len(vals)))}
+                break
+
         wb.close()
     except Exception as ex:
-        safe_print(f"⚠️ _extract_dc_row_info: {ex}")
-    return {}
+        safe_print(f"⚠️ _extract_all_info: {ex}")
+
+    return header_list, style_dict, dc_dict
 
 
+def _extract_header_info(file_content):
+    return _extract_all_info(file_content)[0]
+
+def _extract_style_info(file_content):
+    return _extract_all_info(file_content)[1]
+
+def _extract_dc_row_info(file_content):
+    return _extract_all_info(file_content)[2]
+
+
+@st.cache_data(show_spinner=False)
 def load_excel(file_content, sheet_name=None):
-    """โหลด Excel"""
+    """โหลด Excel — อ่านไฟล์ครั้งเดียว, cache ตาม content hash"""
     try:
         xls = pd.ExcelFile(io.BytesIO(file_content))
-        
+
         target_sheet = None
         if sheet_name and sheet_name in xls.sheet_names:
             target_sheet = sheet_name
@@ -3242,40 +3195,31 @@ def load_excel(file_content, sheet_name=None):
                 if 'punthai' in s.lower() or '2.' in s.lower():
                     target_sheet = s
                     break
-        
         if not target_sheet:
             target_sheet = xls.sheet_names[0]
-        
-        # หา header row
-        df_temp = pd.read_excel(xls, sheet_name=target_sheet, header=None)
-        header_row = 1  # default: row 2 (1-indexed) ตามโครงสร้างไฟล์จริง
 
-        for i in range(min(10, len(df_temp))):
-            row_list = [str(v) for v in df_temp.iloc[i]]
-            row_joined = ' '.join(row_list)
-            row_upper = row_joined.upper()
-            match_count = sum([
-                'BRANCH' in row_upper,
-                'TRIP' in row_upper,
-                'รหัสสาขา' in row_joined,
-                'จำนวนชิ้น' in row_joined,
-                'น้ำหนัก' in row_joined or 'น้ําหนัก' in row_joined,
-                'คิว' in row_joined,
-                'WMS' in row_upper,
-                'SEP' in row_upper,
-            ])
-            if match_count >= 2:
+        # อ่านครั้งเดียว header=None แล้วหา header row จาก df ที่โหลดแล้ว
+        df_raw = pd.read_excel(xls, sheet_name=target_sheet, header=None)
+        header_row = 1
+        for i in range(min(10, len(df_raw))):
+            row_joined = ' '.join(str(v) for v in df_raw.iloc[i])
+            row_upper  = row_joined.upper()
+            if sum(['BRANCH' in row_upper, 'TRIP' in row_upper,
+                    'รหัสสาขา' in row_joined, 'จำนวนชิ้น' in row_joined,
+                    'น้ำหนัก' in row_joined or 'น้ําหนัก' in row_joined,
+                    'คิว' in row_joined, 'WMS' in row_upper, 'SEP' in row_upper]) >= 2:
                 header_row = i
                 break
-        
-        df = pd.read_excel(xls, sheet_name=target_sheet, header=header_row)
+
+        # ใช้ df_raw แทนการอ่านซ้ำ
+        df = df_raw.iloc[header_row + 1:].copy()
+        df.columns = df_raw.iloc[header_row].tolist()
+        df = df.reset_index(drop=True)
         df = df.loc[:, ~df.columns.duplicated()]
-        
         return df
     except Exception as e:
         import traceback as _tb
-        st.error(f"❌ Error: {e}")
-        safe_print(f"❌ load_excel traceback: {_tb.format_exc()}")
+        safe_print(f"❌ load_excel: {e}\n{_tb.format_exc()}")
         return None
 
 def process_dataframe(df):
@@ -7174,18 +7118,19 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
         # เคลียร์ log buffer ก่อนโหลด
         st.session_state['_ui_log'] = []
         
-        with st.spinner("⏳ กำลังอ่านข้อมูล..."):
-            df = load_excel(uploaded_file_content)
-            # ดึงชื่อและสีหัวคอลัมน์จากไฟล์ต้นฉบับก่อน rename
-            _orig_hdr = _extract_header_info(uploaded_file_content)
-            if _orig_hdr:
-                st.session_state['_orig_headers'] = _orig_hdr
-            _orig_style = _extract_style_info(uploaded_file_content)
-            st.session_state['_orig_style_info'] = _orig_style
-            _orig_dc_raw = _extract_dc_row_info(uploaded_file_content)
-            if _orig_dc_raw:
-                st.session_state['_orig_dc_row_raw'] = _orig_dc_raw
-            df = process_dataframe(df)
+        if _prev_file_id != _curr_file_id:
+            with st.spinner("⏳ กำลังอ่านข้อมูล..."):
+                df = load_excel(uploaded_file_content)
+                _orig_hdr, _orig_style, _orig_dc_raw = _extract_all_info(uploaded_file_content)
+                if _orig_hdr:
+                    st.session_state['_orig_headers'] = _orig_hdr
+                st.session_state['_orig_style_info'] = _orig_style
+                if _orig_dc_raw:
+                    st.session_state['_orig_dc_row_raw'] = _orig_dc_raw
+                df = process_dataframe(df)
+                st.session_state['_df_processed'] = df
+        else:
+            df = st.session_state.get('_df_processed')
         
         # ►►► แสดง log หลังโหลด
         _logs = st.session_state.get('_ui_log', [])
