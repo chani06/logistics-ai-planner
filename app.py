@@ -8022,12 +8022,12 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                     return {**d, 'font_name': _ofont, 'font_size': _ofsize}
 
                                 _hdr_fmt = _wb_xl.add_format(_f({'bold':True,'border':1,'bg_color':'#D9D9D9','align':'center'}))
-                                _yfmt    = _wb_xl.add_format(_f({'bg_color':'#FFE699','border':1}))
-                                _wfmt    = _wb_xl.add_format(_f({'bg_color':'#FFFFFF','border':1}))
+                                _yfmt    = _wb_xl.add_format(_f({'bg_color':'#FFE699','border':1,'font_color':'#000000'}))
+                                _wfmt    = _wb_xl.add_format(_f({'bg_color':'#FFFFFF','border':1,'font_color':'#000000'}))
                                 _yfmt_r  = _wb_xl.add_format(_f({'bg_color':'#FFE699','border':1,'font_color':'#FF0000'}))
                                 _wfmt_r  = _wb_xl.add_format(_f({'bg_color':'#FFFFFF','border':1,'font_color':'#FF0000'}))
-                                _ynfmt   = _wb_xl.add_format(_f({'bg_color':'#FFE699','border':1,'num_format':'#,##0.00'}))
-                                _wnfmt   = _wb_xl.add_format(_f({'bg_color':'#FFFFFF','border':1,'num_format':'#,##0.00'}))
+                                _ynfmt   = _wb_xl.add_format(_f({'bg_color':'#FFE699','border':1,'num_format':'#,##0.00','font_color':'#000000'}))
+                                _wnfmt   = _wb_xl.add_format(_f({'bg_color':'#FFFFFF','border':1,'num_format':'#,##0.00','font_color':'#000000'}))
                                 _ynfmt_r = _wb_xl.add_format(_f({'bg_color':'#FFE699','border':1,'num_format':'#,##0.00','font_color':'#FF0000'}))
                                 _wnfmt_r = _wb_xl.add_format(_f({'bg_color':'#FFFFFF','border':1,'num_format':'#,##0.00','font_color':'#FF0000'}))
                                 # ── แดง: ทริปที่ util < 98% ──
