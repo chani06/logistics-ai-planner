@@ -19,15 +19,15 @@ except Exception:
     _LEAFLET_JS_CONTENT = ""
 
 VEHICLE_LIMITS = {
-    "4W":  {"max_w": 2500, "max_c": 5.0,  "max_drops": 12},
-    "JB":  {"max_w": 3500, "max_c": 7.0,  "max_drops": 12},
-    "6W":  {"max_w": 6000, "max_c": 20.0, "max_drops": 999},
+    "4W":  {"max_w": 1500, "max_c": 5.0,  "max_drops": 999},
+    "JB":  {"max_w": 3000, "max_c": 7.0,  "max_drops": 999},
+    "6W":  {"max_w": 5800, "max_c": 20.0, "max_drops": 999},
 }
 
 PUNTHAI_VEHICLE_LIMITS = {
-    "4W":  {"max_w": 2500, "max_c": 5.0,  "max_drops": 5},
-    "JB":  {"max_w": 3500, "max_c": 7.0,  "max_drops": 7},
-    "6W":  {"max_w": 6000, "max_c": 20.0, "max_drops": 999},
+    "4W":  {"max_w": 1500, "max_c": 5.0,  "max_drops": 999},
+    "JB":  {"max_w": 3000, "max_c": 7.0,  "max_drops": 999},
+    "6W":  {"max_w": 5800, "max_c": 20.0, "max_drops": 999},
 }
 
 TRIP_COLORS = [

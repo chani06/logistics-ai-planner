@@ -8283,14 +8283,23 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                 _row_xl = 2
                                 _row_seq = 1   # Sep. sequential ต่อแถว (รวม DC row)
 
+                                # Column letters for Excel SUMIF formula in หมายเหตุ
+                                _tripno_ci_f = next((i for i, (_, _, k) in enumerate(_col_plan) if k == '__TRIPNO__'), None)
+                                _weight_ci_f = next((i for i, (_, _, k) in enumerate(_col_plan) if k == 'Weight'), None)
+                                _cube_ci_f   = next((i for i, (_, _, k) in enumerate(_col_plan) if k == 'Cube'), None)
+                                try:
+                                    from xlsxwriter.utility import xl_col_to_name as _xcn
+                                    _tn_col = _xcn(_tripno_ci_f) if _tripno_ci_f is not None else None
+                                    _wt_col = _xcn(_weight_ci_f) if _weight_ci_f is not None else None
+                                    _cb_col = _xcn(_cube_ci_f)   if _cube_ci_f   is not None else None
+                                except Exception:
+                                    _tn_col = _wt_col = _cb_col = None
+
                                 for _tnum in export_sorted_trips:
                                     _rows = _trip_rows.get(_tnum, [])
                                     _tno  = trip_no_map.get(_tnum, '')
-                                    _is_low = _trip_util_map.get(_tnum, 1.0) < 0.98
-                                    # util < 98% → ตัวอักษรแดง  |  >= 98% → ดำ (ไม่ว่าจะเป็น failed หรือไม่)
-                                    _tf = (_yfmt_r if _is_low else _yfmt) if use_yellow else (_wfmt_r if _is_low else _wfmt)
-                                    _nf = (_ynfmt_r if _is_low else _ynfmt) if use_yellow else (_wnfmt_r if _is_low else _wnfmt)
-                                    use_yellow = not use_yellow
+                                    _tf = _wfmt
+                                    _nf = _wnfmt
                                     _tnum_int = int(_tnum)
                                     _tno_str  = str(_tno)
                                     _first_row_of_trip = True
@@ -8336,7 +8345,28 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                             elif _ikey == '__DOOR__':
                                                 _val = trip_door.get(_tnum, '')  # ทุกแถว
                                             elif _ikey == '__REMARK__':
-                                                _val = trip_remark.get(_tnum, '') if _first_row_of_trip else ''
+                                                _xl_r = _row_xl + 1
+                                                if _tn_col and _wt_col and _cb_col:
+                                                    _tn_r   = f'${_tn_col}{_xl_r}'
+                                                    _tn_rng = f'${_tn_col}$3:${_tn_col}$9999'
+                                                    _wt_rng = f'${_wt_col}$3:${_wt_col}$9999'
+                                                    _cb_rng = f'${_cb_col}$3:${_cb_col}$9999'
+                                                    _vw  = f'IF(LEFT({_tn_r},2)="6W",5500,IF(LEFT({_tn_r},2)="JB",3000,2000))'
+                                                    _vc  = f'IF(LEFT({_tn_r},2)="6W",25,IF(LEFT({_tn_r},2)="JB",10,7))'
+                                                    _sw  = f'SUMIF({_tn_rng},{_tn_r},{_wt_rng})'
+                                                    _sc  = f'SUMIF({_tn_rng},{_tn_r},{_cb_rng})'
+                                                    _uw  = f'({_sw}/{_vw})'
+                                                    _uc  = f'({_sc}/{_vc})'
+                                                    _fml = (
+                                                        f'=IF({_tn_r}=""," ",IF({_uw}>={_uc},'
+                                                        f'"น้ำหนัก "&TEXT({_sw},"#,##0")&"/"&TEXT({_vw},"#,##0")&"kg ("&TEXT({_uw},"0%")&")",'
+                                                        f'"คิว "&TEXT({_sc},"#,##0.00")&"/"&TEXT({_vc},"#,##0")&"m³ ("&TEXT({_uc},"0%")&")"'
+                                                        f'))'
+                                                    )
+                                                    _ws_xl.write_formula(_row_xl, _ci, _fml, _dfmt, '')
+                                                    continue
+                                                else:
+                                                    _val = trip_remark.get(_tnum, '') if _first_row_of_trip else ''
                                             else:
                                                 # คอลัมน์จากต้นฉบับ — ใช้ค่าตรงๆ จากไฟล์
                                                 _val = _rec.get(_ikey, '')
@@ -8382,6 +8412,48 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                     _row_xl += 1
                                     _row_seq += 1
 
+                                # Conditional format: auto highlight + font color (formula-driven)
+                                if _tn_col and _wt_col and _cb_col and _row_xl > 2:
+                                    _cf_last_r = _row_xl - 1
+                                    _cf_ncols  = len(_col_plan)
+                                    _tn3       = f'${_tn_col}3'          # abs-col, rel-row
+                                    _tn_exp    = f'${_tn_col}$3:${_tn_col}3'  # expanding range
+                                    _tn_rng_cf = f'${_tn_col}$3:${_tn_col}$9999'
+                                    _wt_rng_cf = f'${_wt_col}$3:${_wt_col}$9999'
+                                    _cb_rng_cf = f'${_cb_col}$3:${_cb_col}$9999'
+                                    _vw3 = f'IF(LEFT({_tn3},2)="6W",5500,IF(LEFT({_tn3},2)="JB",3000,2000))'
+                                    _vc3 = f'IF(LEFT({_tn3},2)="6W",25,IF(LEFT({_tn3},2)="JB",10,7))'
+                                    # count distinct TripNo values from row 3 to current row
+                                    _odd_grp = (
+                                        f'ISODD(SUMPRODUCT((1/COUNTIF({_tn_exp},{_tn_exp}))*'
+                                        f'({_tn_exp}<>"")))'
+                                    )
+                                    _util_lt = (
+                                        f'MAX(SUMIF({_tn_rng_cf},{_tn3},{_wt_rng_cf})/{_vw3},'
+                                        f'SUMIF({_tn_rng_cf},{_tn3},{_cb_rng_cf})/{_vc3})<0.98'
+                                    )
+                                    _util_ge = (
+                                        f'MAX(SUMIF({_tn_rng_cf},{_tn3},{_wt_rng_cf})/{_vw3},'
+                                        f'SUMIF({_tn_rng_cf},{_tn3},{_cb_rng_cf})/{_vc3})>=0.98'
+                                    )
+                                    # 4 rules: (odd/even trip group) × (low/high util)
+                                    _cf_rules = [
+                                        # yellow bg + red font  (odd, <98%)
+                                        (f'=AND({_tn3}<>"",{_odd_grp},{_util_lt})',
+                                         _wb_xl.add_format(_f({'bg_color':'#FFE699','border':1,'font_color':'#CC0000'}))),
+                                        # white bg + red font   (even, <98%)
+                                        (f'=AND({_tn3}<>"",NOT({_odd_grp}),{_util_lt})',
+                                         _wb_xl.add_format(_f({'bg_color':'#FFFFFF','border':1,'font_color':'#CC0000'}))),
+                                        # yellow bg + black font (odd, >=98%)
+                                        (f'=AND({_tn3}<>"",{_odd_grp},{_util_ge})',
+                                         _wb_xl.add_format(_f({'bg_color':'#FFE699','border':1,'font_color':'#000000'}))),
+                                        # white bg + black font  (even, >=98%)
+                                        (f'=AND({_tn3}<>"",NOT({_odd_grp}),{_util_ge})',
+                                         _wb_xl.add_format(_f({'bg_color':'#FFFFFF','border':1,'font_color':'#000000'}))),
+                                    ]
+                                    for _cf_fml, _cf_fmt in _cf_rules:
+                                        _ws_xl.conditional_format(2, 0, _cf_last_r, _cf_ncols - 1,
+                                            {'type': 'formula', 'criteria': _cf_fml, 'format': _cf_fmt})
                                 _wb_xl.close()
                                 _output.seek(0)
 
