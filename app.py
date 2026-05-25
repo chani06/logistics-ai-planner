@@ -6498,11 +6498,14 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
     else:
         safe_print("   ✅ เรียงใหม่: 0 ทริป")
     
-    # 📋 เรียงลำดับสาขาภายในทริป: ระยะทางจาก DC ไกลก่อน (ไม่ใช้ตัวอักษรจังหวัด/อำเภอ)
+    # 📋 เรียงลำดับสาขาภายในทริป: จังหวัด → ระยะทาง DC (ไกลก่อน)
+    _sort_cols = ['Trip']
+    _sort_asc  = [True]
+    if '_province' in df.columns:
+        _sort_cols.append('_province'); _sort_asc.append(True)
     if '_distance_from_dc' in df.columns:
-        df = df.sort_values(['Trip', '_distance_from_dc'], ascending=[True, False]).reset_index(drop=True)
-    else:
-        df = df.sort_values('Trip', ascending=True).reset_index(drop=True)
+        _sort_cols.append('_distance_from_dc'); _sort_asc.append(False)
+    df = df.sort_values(_sort_cols, ascending=_sort_asc).reset_index(drop=True)
     
     # ลบคอลัมน์ชั่วคราว (เก็บ _province, _district, _subdistrict, _max_vehicle, _lat, _lon, _distance_from_dc ไว้สำหรับแผนที่)
     cols_to_drop = ['_region_name', '_route', '_group_key', '_region_order', '_prov_max_dist', '_dist_max_dist', '_subdist_max_dist', '_region_allowed_vehicles', '_vehicle_priority']
@@ -8260,18 +8263,17 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                     _evt = trip_vehicle_map.get(_et, '6W')
                                     trip_no_map[_et] = f"{_evt}{_exp_seq:03d}"
 
-                                # ── pre-compute util% ต่อทริป (สำหรับ highlight แดง < 98%) ──
+                                # ── pre-compute util% ต่อทริป (เทียบกับ max ไม่รวม buffer เหมือน remark column) ──
                                 _trip_util_map: dict = {}
                                 for _tu in sorted_trips:
                                     _ru = _trip_rows.get(_tu, [])
                                     _vtu = trip_vehicle_map.get(_tu, '6W')
                                     _is_pt_u = all(str(_r.get('BU','')).strip() in ('211','PUNTHAI') for _r in _ru) if _ru else False
                                     _lim_u = (PUNTHAI_LIMITS if _is_pt_u else LIMITS).get(_vtu, LIMITS['6W'])
-                                    _buf_u = punthai_buffer if _is_pt_u else maxmart_buffer
                                     _tw_u = sum(float(_r.get('Weight',0) or 0) for _r in _ru)
                                     _tc_u = sum(float(_r.get('Cube',0) or 0) for _r in _ru)
-                                    _wu_u = _tw_u / (_lim_u['max_w'] * _buf_u) if _lim_u['max_w'] > 0 else 0
-                                    _cu_u = _tc_u / (_lim_u['max_c'] * _buf_u) if _lim_u['max_c'] > 0 else 0
+                                    _wu_u = _tw_u / _lim_u['max_w'] if _lim_u['max_w'] > 0 else 0
+                                    _cu_u = _tc_u / _lim_u['max_c'] if _lim_u['max_c'] > 0 else 0
                                     _trip_util_map[_tu] = max(_wu_u, _cu_u)
 
                                 use_yellow = True
