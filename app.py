@@ -529,6 +529,23 @@ REGION_ORDER = {
     'ไม่ระบุ': 99
 }
 
+# จังหวัดที่ควรอยู่ในทริปเดียวกัน (bypass zone check) — แต่ละ frozenset = กลุ่มที่รวมได้
+PROVINCE_PAIR_GROUPS: list = [
+    frozenset(['ฉะเชิงเทรา', 'ชลบุรี']),          # ตะวันออก: สาย 304/331 ผ่านกัน
+    frozenset(['ชลบุรี', 'ระยอง']),               # EEC ชายฝั่งตะวันออก
+    frozenset(['ฉะเชิงเทรา', 'ปราจีนบุรี']),       # สาย 304 เดียวกัน
+    frozenset(['จันทบุรี', 'ตราด']),               # ปลายตะวันออก
+]
+
+def _provinces_are_paired(prov_a: str, prov_b: str) -> bool:
+    """คืน True ถ้า 2 จังหวัดอยู่ใน PROVINCE_PAIR_GROUPS เดียวกัน"""
+    if not prov_a or not prov_b or prov_a == prov_b:
+        return False
+    for _grp in PROVINCE_PAIR_GROUPS:
+        if prov_a in _grp and prov_b in _grp:
+            return True
+    return False
+
 # ════════════════════════════════════════════════════════════════
 # PROVINCE ZONE MAP — ตรงกับ zone_viewer.py (ใช้จัดทริป ป้องกันกระโดด)
 # ════════════════════════════════════════════════════════════════
@@ -4469,7 +4486,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                     not _c_prov or not trip_original_province or   # ไม่มีข้อมูล → อนุญาต
                     _c_prov == trip_original_province or           # จังหวัดเดียวกับต้นทาง
                     _c_prov == trip_province or                    # จังหวัดเดียวกับปัจจุบัน
-                    _c_zone == trip_logistics_zone                 # โซนเดียวกับปัจจุบัน
+                    _c_zone == trip_logistics_zone or              # โซนเดียวกับปัจจุบัน
+                    _provinces_are_paired(_c_prov, trip_original_province) or  # กลุ่มจังหวัดที่รวมได้
+                    _provinces_are_paired(_c_prov, trip_province)
                 )
                 if not _zone_compat:
                     # 🌟 Proximity override: ถ้าสาขาอยู่ใกล้มาก (<10km) และภาคเดียวกัน → ข้ามข้อจำกัด zone
@@ -5231,14 +5250,14 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                     if _b_prov and _trip_provs_mg and _b_prov not in _trip_provs_mg:
                         safe_print(f"      🚫 NEARBY strict merge: ตัด {branch_code} ({_b_prov}/{_b_zone}) ≠ trip provinces {_trip_provs_mg}")
                         continue
+                _trip_provs_mg = trip_cap.get('provinces', set())
                 _zone_ok = (
-                    _b_prov in trip_cap.get('provinces', set()) or
-                    _b_zone in trip_cap.get('logistics_zones', set())
-                    # 🔒 ลบ highway-only check ออก: ป้องกัน cross-zone merge
-                    # (เช่น ZONE_H highway='2/24' merge เข้า ZONE_K highway='24' ผ่าน intersection)
+                    _b_prov in _trip_provs_mg or
+                    _b_zone in trip_cap.get('logistics_zones', set()) or
+                    any(_provinces_are_paired(_b_prov, _tp) for _tp in _trip_provs_mg)  # กลุ่มจังหวัดที่รวมได้
                 )
                 if not _zone_ok:
-                    safe_print(f"      🚫 merge skip {branch_code} ({_b_prov}/{_b_zone}) ≠ trip zone {trip_cap.get('provinces')}")
+                    safe_print(f"      🚫 merge skip {branch_code} ({_b_prov}/{_b_zone}) ≠ trip zone {_trip_provs_mg}")
                     continue
 
                 # เช็คว่าเพิ่มสาขานี้ได้ไหม
@@ -6417,14 +6436,22 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
         if _dp not in _prov_max9 or _d > _prov_max9[_dp]:
             _prov_max9[_dp] = _d
 
-    # sort key: (-province_max_dist, -trip_max_dist) → จังหวัดไกลสุดก่อน แล้วระยะทริปไกลสุดก่อน
+    # sort key: (region_order, -province_max_dist, -trip_max_dist)
+    # → ภาค (ไกลสุดก่อน) → จังหวัดไกลสุดก่อน → ระยะทริปไกลสุดก่อน
+    def _prov_rord9(prov):
+        return REGION_ORDER.get(get_region_name(str(prov)), 99)
+
     trip_sort9_keys = {
-        trip_num: (-_prov_max9.get(_trip_dom_prov9.get(trip_num, ''), 0), -trip_max_distances[trip_num])
+        trip_num: (
+            _prov_rord9(_trip_dom_prov9.get(trip_num, '')),
+            -_prov_max9.get(_trip_dom_prov9.get(trip_num, ''), 0),
+            -trip_max_distances[trip_num]
+        )
         for trip_num in trip_max_distances
     }
 
-    # เรียงทริปตามจังหวัด (ไกลสุดก่อน) → ระยะทาง (ไกลสุดก่อน)
-    sorted_trips = sorted(trip_max_distances.keys(), key=lambda x: trip_sort9_keys.get(x, (0, 0)))
+    # เรียงทริปตามภาค → จังหวัด (ไกลสุดก่อน) → ระยะทาง (ไกลสุดก่อน)
+    sorted_trips = sorted(trip_max_distances.keys(), key=lambda x: trip_sort9_keys.get(x, (99, 0, 0)))
     
     # สร้าง mapping ใหม่
     trip_renumber = {old_trip: new_trip for new_trip, old_trip in enumerate(sorted_trips, 1)}
@@ -7790,15 +7817,22 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                 if _dp2 not in _prov_maxd or _d2 > _prov_maxd[_dp2]:
                                     _prov_maxd[_dp2] = _d2
 
-                            # pass 3: sort key = (-province_max_dist, -trip_max_dist)
+                            # pass 3: sort key = (region_order, -province_max_dist, -trip_max_dist)
+                            def _get_rord(prov):
+                                return REGION_ORDER.get(get_region_name(str(prov)), 99)
+
                             trip_sort_keys = {
-                                _tn3: (-_prov_maxd.get(_trip_prov.get(_tn3, ''), 0), -_trip_pmx.get(_tn3, 0))
+                                _tn3: (
+                                    _get_rord(_trip_prov.get(_tn3, '')),
+                                    -_prov_maxd.get(_trip_prov.get(_tn3, ''), 0),
+                                    -_trip_pmx.get(_tn3, 0)
+                                )
                                 for _tn3 in _trip_pmx
                             }
 
                             sorted_trips = sorted(
                                 [t for t in result_df['Trip'].unique() if t != 0],
-                                key=lambda t: trip_sort_keys.get(t, (0, 0))
+                                key=lambda t: trip_sort_keys.get(t, (99, 0, 0))
                             )
 
                             trip_vehicle_map = {}   # _tnum → '4W'/'JB'/'6W'
