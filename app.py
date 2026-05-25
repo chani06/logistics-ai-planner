@@ -8246,17 +8246,19 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                                     else:
                                         trip_remark[_t_rm] = f"คิว {_tc_rm:.2f}/{_lim_rm['max_c']:.1f}m\u00b3 ({_cu_rm*100:.0f}%)"
 
-                                # เรียงทริปตามเวลาโหลด (เพื่อให้ Excel เรียงตามลำดับโหลดจริง)
-                                def _dt_sort_key(t):
-                                    _d = trip_load_date.get(t, '31/12/9999')
-                                    _tm = trip_load_time.get(t, '99:99')
-                                    try:
-                                        _p = _d.split('/')
-                                        _ds = f"{_p[2]}/{_p[1]}/{_p[0]}"  # DD/MM/YYYY → YYYY/MM/DD
-                                    except Exception:
-                                        _ds = '9999/99/99'
-                                    return (_ds, _tm)
-                                export_sorted_trips = sorted(sorted_trips, key=_dt_sort_key)
+                                # เรียงทริป export: ภาค → จังหวัด → ระยะทาง (ใช้ trip_sort_keys ที่สร้างไว้แล้ว)
+                                export_sorted_trips = sorted(
+                                    sorted_trips,
+                                    key=lambda t: trip_sort_keys.get(t, (99, 0, 0))
+                                )
+
+                                # re-number trip_no_map ตาม export order ใหม่
+                                _exp_vehicle_counts: dict = {'4W': 0, 'JB': 0, '6W': 0}
+                                _exp_seq = 0
+                                for _et in export_sorted_trips:
+                                    _exp_seq += 1
+                                    _evt = trip_vehicle_map.get(_et, '6W')
+                                    trip_no_map[_et] = f"{_evt}{_exp_seq:03d}"
 
                                 # ── pre-compute util% ต่อทริป (สำหรับ highlight แดง < 98%) ──
                                 _trip_util_map: dict = {}
