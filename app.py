@@ -4735,8 +4735,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
     # เฉพาะสาขาที่อยู่ในภาค/จังหวัดเดียวกัน และใกล้ทริปนั้น ≤ 60km
     # ==========================================
     safe_print("🔋 Fill-up pass: ตรวจสอบทริปที่ยังไม่เต็ม...")
-    _FILLUP_MIN_UTIL = 0.70   # ทริปที่ util < 70% → ลองเติม
-    _FILLUP_MAX_KM   = 60.0  # รัศมีเพิ่มสาขา (km)
+    _FILLUP_MIN_UTIL = 0.97   # ทริปที่ util < 97% → ลองเติม
+    _FILLUP_MAX_KM   = 120.0  # รัศมีเพิ่มสาขา (km) — ขยายเพื่อให้ถึง 97%
     _fillup_added = 0
     for _ft in df[df['Trip'] > 0]['Trip'].unique():
         _ft_rows = df[df['Trip'] == _ft]
@@ -5078,7 +5078,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
         w_util = trip_cap['weight'] / trip_cap['max_w']
         c_util = trip_cap['cube'] / trip_cap['max_c']
         
-        if max(w_util, c_util) >= 0.95:  # ถ้าเต็มแล้วไม่ต้องเติม
+        if max(w_util, c_util) >= 0.97:  # ถ้าเต็มแล้วไม่ต้องเติม
             continue
         
         # หาสาขาจากทริปถัดไปที่ใกล้กับทริปนี้
@@ -5132,7 +5132,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 # เช็คว่าเต็มหรือยัง
                 w_util = trip_cap['weight'] / trip_cap['max_w']
                 c_util = trip_cap['cube'] / trip_cap['max_c']
-                if max(w_util, c_util) >= 0.95:
+                if max(w_util, c_util) >= 0.97:
                     break  # เต็มแล้ว หยุด
                 
                 # 🚫 Zone + Region compatibility: ห้ามรวมสาขาคนละทิศ/highway/ภาค
@@ -6346,30 +6346,34 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
     
     # หาระยะทางไกลสุดและ dominant province/region ของแต่ละทริป
     trip_max_distances = {}
-    trip_sort9_keys = {}
+    _trip_dom_prov9: dict = {}
     for trip_num in df[df['Trip'] > 0]['Trip'].unique():
         trip_data = df[df['Trip'] == trip_num]
         max_dist = trip_data['_distance_from_dc'].max() if '_distance_from_dc' in trip_data.columns else 0
         trip_max_distances[trip_num] = max_dist if pd.notna(max_dist) else 0
-        # dominant province (most frequent in trip)
         _prov_col9 = '_province' if '_province' in trip_data.columns else ('Province' if 'Province' in trip_data.columns else None)
         _dom_prov9 = ''
-        _rorder9 = 99
         if _prov_col9:
             _vc9 = trip_data[_prov_col9].value_counts()
             if len(_vc9):
-                _dom_prov9 = _vc9.index[0]
-                _rorder9 = REGION_ORDER.get(get_region_name(str(_dom_prov9)), 99)
-        _dist_col9 = '_district' if '_district' in trip_data.columns else ('District' if 'District' in trip_data.columns else None)
-        _dom_dist9 = ''
-        if _dist_col9:
-            _vcd9 = trip_data[_dist_col9].value_counts()
-            if len(_vcd9):
-                _dom_dist9 = _vcd9.index[0]
-        trip_sort9_keys[trip_num] = (-(trip_max_distances[trip_num]),)  # ระยะทางไกลก่อน (ไม่ใช้อักษร)
-    
-    # เรียงทริปตาม ระยะทางไกลก่อน (ไม่ใช้ภาค/จังหวัด/อำเภอ)
-    sorted_trips = sorted(trip_max_distances.keys(), key=lambda x: trip_sort9_keys.get(x, (0,)))
+                _dom_prov9 = str(_vc9.index[0])
+        _trip_dom_prov9[trip_num] = _dom_prov9
+
+    # สร้าง province → max distance (ระยะไกลสุดของทริปใดก็ได้ในจังหวัดนั้น)
+    _prov_max9: dict = {}
+    for trip_num, _dp in _trip_dom_prov9.items():
+        _d = trip_max_distances.get(trip_num, 0)
+        if _dp not in _prov_max9 or _d > _prov_max9[_dp]:
+            _prov_max9[_dp] = _d
+
+    # sort key: (-province_max_dist, -trip_max_dist) → จังหวัดไกลสุดก่อน แล้วระยะทริปไกลสุดก่อน
+    trip_sort9_keys = {
+        trip_num: (-_prov_max9.get(_trip_dom_prov9.get(trip_num, ''), 0), -trip_max_distances[trip_num])
+        for trip_num in trip_max_distances
+    }
+
+    # เรียงทริปตามจังหวัด (ไกลสุดก่อน) → ระยะทาง (ไกลสุดก่อน)
+    sorted_trips = sorted(trip_max_distances.keys(), key=lambda x: trip_sort9_keys.get(x, (0, 0)))
     
     # สร้าง mapping ใหม่
     trip_renumber = {old_trip: new_trip for new_trip, old_trip in enumerate(sorted_trips, 1)}
@@ -7710,22 +7714,40 @@ hr { border: none !important; border-top: 1.5px solid #d1fae5 !important; margin
                             # ── 4. distance from result_df directly (ไม่ต้อง MASTER_DATA loop) ──
                             _dist_src_col = '_distance_from_dc' if '_distance_from_dc' in _rd.columns else None
 
-                            # ── 5. sort keys ──
+                            # ── 5. sort keys: จังหวัด (ไกลสุดก่อน) → ระยะทริป (ไกลสุดก่อน) ──
                             trip_no_map = {}
                             vehicle_counts = {'4W': 0, 'JB': 0, '6W': 0}
-                            trip_sort_keys = {}
-                            for _tnum, _tg in _rd.groupby('Trip', sort=False):
-                                if _tnum == 0: continue
-                                if _dist_src_col:
-                                    _pmx = float(_tg[_dist_src_col].max() or 0)
+                            _prov_col_rd = '_province' if '_province' in _rd.columns else ('Province' if 'Province' in _rd.columns else None)
+
+                            # pass 1: หา dominant province + max distance ของแต่ละทริป
+                            _trip_pmx: dict = {}
+                            _trip_prov: dict = {}
+                            for _tnum2, _tg2 in _rd.groupby('Trip', sort=False):
+                                if _tnum2 == 0: continue
+                                _pmx2 = float(_tg2[_dist_src_col].max() or 0) if _dist_src_col else 0.0
+                                _trip_pmx[_tnum2] = _pmx2
+                                if _prov_col_rd:
+                                    _vc2 = _tg2[_prov_col_rd].value_counts()
+                                    _trip_prov[_tnum2] = str(_vc2.index[0]) if len(_vc2) else ''
                                 else:
-                                    _pmx = 0.0
-                                # เรียงตามระยะทางไกลก่อน (ไม่ใช้ภาค/จังหวัด/อำเภอ)
-                                trip_sort_keys[_tnum] = (-_pmx,)
+                                    _trip_prov[_tnum2] = ''
+
+                            # pass 2: province → max dist ของทุกทริปในจังหวัดนั้น
+                            _prov_maxd: dict = {}
+                            for _tn2, _dp2 in _trip_prov.items():
+                                _d2 = _trip_pmx.get(_tn2, 0)
+                                if _dp2 not in _prov_maxd or _d2 > _prov_maxd[_dp2]:
+                                    _prov_maxd[_dp2] = _d2
+
+                            # pass 3: sort key = (-province_max_dist, -trip_max_dist)
+                            trip_sort_keys = {
+                                _tn3: (-_prov_maxd.get(_trip_prov.get(_tn3, ''), 0), -_trip_pmx.get(_tn3, 0))
+                                for _tn3 in _trip_pmx
+                            }
 
                             sorted_trips = sorted(
                                 [t for t in result_df['Trip'].unique() if t != 0],
-                                key=lambda t: trip_sort_keys.get(t, (0,))
+                                key=lambda t: trip_sort_keys.get(t, (0, 0))
                             )
 
                             trip_vehicle_map = {}   # _tnum → '4W'/'JB'/'6W'
