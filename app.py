@@ -858,6 +858,56 @@ ROUTE_GROUPS = {
 
 LOGISTICS_ZONES = {
     # ============ ภาคเหนือ - สาย 1/11/101 ============
+    # --- เชียงราย (sub-zones) ---
+    'ZONE_CRI1_เชียงราย_เมือง': {
+        'provinces': ['เชียงราย'],
+        'districts': ['เมืองเชียงราย', 'แม่ลาว', 'เวียงชัย', 'เวียงเชียงรุ้ง'],
+        'highway': '1',
+        'priority': 4,
+        'distance_from_dc_km': 730,
+        'description': 'เชียงรายในเมือง สาย 1'
+    },
+    'ZONE_CRI2_เชียงราย_เหนือ': {
+        'provinces': ['เชียงราย'],
+        'districts': ['แม่สาย', 'แม่จัน', 'เชียงแสน', 'เชียงของ', 'เทิง', 'ขุนตาล'],
+        'highway': '1',
+        'priority': 3,
+        'distance_from_dc_km': 760,
+        'description': 'เชียงรายเหนือ ชายแดนพม่า-ลาว'
+    },
+    'ZONE_CRI3_เชียงราย_ใต้': {
+        'provinces': ['เชียงราย'],
+        'districts': ['พาน', 'แม่สรวย', 'เวียงป่าเป้า', 'ป่าแดด', 'พญาเม็งราย'],
+        'highway': '1',
+        'priority': 5,
+        'distance_from_dc_km': 720,
+        'description': 'เชียงรายใต้'
+    },
+    # --- เชียงใหม่ (sub-zones) ---
+    'ZONE_CNX1_เชียงใหม่_เมือง': {
+        'provinces': ['เชียงใหม่'],
+        'districts': ['เมืองเชียงใหม่', 'สารภี', 'หางดง', 'สันป่าตอง', 'จอมทอง', 'ดอยหล่อ', 'แม่วาง'],
+        'highway': '11',
+        'priority': 8,
+        'distance_from_dc_km': 650,
+        'description': 'เชียงใหม่ในเมือง+ทิศใต้'
+    },
+    'ZONE_CNX2_เชียงใหม่_รอบเมือง': {
+        'provinces': ['เชียงใหม่'],
+        'districts': ['สันทราย', 'สันกำแพง', 'ดอยสะเก็ด', 'แม่ริม', 'แม่แตง', 'สะเมิง'],
+        'highway': '11',
+        'priority': 7,
+        'distance_from_dc_km': 660,
+        'description': 'เชียงใหม่รอบเมือง ทิศตะวันออก-เหนือ'
+    },
+    'ZONE_CNX3_เชียงใหม่_เหนือ': {
+        'provinces': ['เชียงใหม่'],
+        'districts': ['ฝาง', 'เชียงดาว', 'แม่อาย', 'พร้าว', 'ไชยปราการ', 'เวียงแหง'],
+        'highway': '107',
+        'priority': 6,
+        'distance_from_dc_km': 700,
+        'description': 'เชียงใหม่เหนือ ฝาง-เชียงดาว'
+    },
     'ZONE_A_พะเยา': {
         'provinces': ['พะเยา'],
         'districts': ['เมืองพะเยา', 'แม่ใจ', 'เชียงคำ', 'เชียงม่วน', 'ดอกคำใต้', 'ปง', 'จุน', 'ภูซาง', 'ภูกามยาว'],
@@ -951,6 +1001,47 @@ LOGISTICS_ZONES = {
         'description': 'ประตูเหนือ สาย 1/32'
     },
     # ============ ภาคอีสาน - สาย 2/24 (เพิ่มโซนย่อย) ============
+    # --- โคราช (sub-zones ใหม่ละเอียด) ---
+    'ZONE_KRM1_โคราช_เมือง': {
+        'provinces': ['นครราชสีมา'],
+        'districts': ['เมืองนครราชสีมา', 'ปักธงชัย'],
+        'highway': '2',
+        'priority': 35,
+        'distance_from_dc_km': 250,
+        'description': 'โคราชในเมือง ประตูอีสาน'
+    },
+    'ZONE_KRM2_โคราช_ตะวันตก': {
+        'provinces': ['นครราชสีมา'],
+        'districts': ['สีคิ้ว', 'สูงเนิน', 'ด่านขุนทด', 'เทพารักษ์'],
+        'highway': '2',
+        'priority': 34,
+        'distance_from_dc_km': 270,
+        'description': 'โคราชตะวันตก สาย 2'
+    },
+    'ZONE_KRM3_โคราช_ใต้': {
+        'provinces': ['นครราชสีมา'],
+        'districts': ['ปากช่อง', 'วังน้ำเขียว', 'เฉลิมพระเกียรติ'],
+        'highway': '2/304',
+        'priority': 33,
+        'distance_from_dc_km': 280,
+        'description': 'โคราชใต้ ปากช่อง-เขาใหญ่'
+    },
+    'ZONE_KRM4_โคราช_ตะวันออก': {
+        'provinces': ['นครราชสีมา'],
+        'districts': ['โชคชัย', 'ครบุรี', 'โนนแดง', 'แก้งสนามนาง'],
+        'highway': '304',
+        'priority': 36,
+        'distance_from_dc_km': 260,
+        'description': 'โคราชตะวันออก'
+    },
+    'ZONE_KRM5_โคราช_เหนือ': {
+        'provinces': ['นครราชสีมา'],
+        'districts': ['โนนสูง', 'พิมาย', 'บัวใหญ่', 'ประทาย', 'ชุมพวง', 'ห้วยแถลง', 'บ้านเหลื่อม'],
+        'highway': '2',
+        'priority': 37,
+        'distance_from_dc_km': 255,
+        'description': 'โคราชเหนือ สาย 2 มิตรภาพ'
+    },
     'ZONE_H1_โคราช_เมือง': {
         'provinces': ['นครราชสีมา'],
         'districts': ['เมืองนครราชสีมา', 'ปักธงชัย'],
@@ -982,6 +1073,31 @@ LOGISTICS_ZONES = {
         'priority': 12,
         'distance_from_dc_km': 290,
         'description': 'โคราชใต้-เส้น304'
+    },
+    # --- ขอนแก่น (sub-zones ใหม่ละเอียด) ---
+    'ZONE_KKN1_ขอนแก่น_เมือง': {
+        'provinces': ['ขอนแก่น'],
+        'districts': ['เมืองขอนแก่น', 'พระยืน', 'ซำสูง'],
+        'highway': '2',
+        'priority': 28,
+        'distance_from_dc_km': 380,
+        'description': 'ขอนแก่นในเมือง Hub อีสานกลาง'
+    },
+    'ZONE_KKN2_ขอนแก่น_รอบนอกเหนือ': {
+        'provinces': ['ขอนแก่น'],
+        'districts': ['น้ำพอง', 'อุบลรัตน์', 'หนองเรือ', 'ชุมแพ', 'ภูผาม่าน', 'ภูเวียง'],
+        'highway': '2',
+        'priority': 27,
+        'distance_from_dc_km': 400,
+        'description': 'ขอนแก่นรอบนอกเหนือ ชุมแพ-น้ำพอง'
+    },
+    'ZONE_KKN3_ขอนแก่น_ใต้': {
+        'provinces': ['ขอนแก่น'],
+        'districts': ['บ้านไผ่', 'บ้านฝาง', 'ชนบท', 'พล', 'แวงใหญ่', 'แวงน้อย', 'มัญจาคีรี', 'เปือยน้อย', 'กระนวน', 'หนองสองห้อง', 'โนนศิลา'],
+        'highway': '2',
+        'priority': 29,
+        'distance_from_dc_km': 420,
+        'description': 'ขอนแก่นใต้ บ้านไผ่-พล'
     },
     'ZONE_I1_ขอนแก่น_เมือง': {
         'provinces': ['ขอนแก่น'],
@@ -1031,6 +1147,57 @@ LOGISTICS_ZONES = {
         'distance_from_dc_km': 520,
         'description': 'กาฬสินธุ์'
     },
+    # --- อุดรธานี (sub-zones) ---
+    'ZONE_UDR1_อุดร_เมือง': {
+        'provinces': ['อุดรธานี'],
+        'districts': ['เมืองอุดรธานี', 'กุดจับ', 'หนองวัวซอ'],
+        'highway': '2',
+        'priority': 22,
+        'distance_from_dc_km': 470,
+        'description': 'อุดรธานีในเมือง'
+    },
+    'ZONE_UDR2_อุดร_รอบนอก': {
+        'provinces': ['อุดรธานี'],
+        'districts': ['กุมภวาปี', 'หนองหาน', 'เพ็ญ', 'บ้านดุง', 'บ้านผือ', 'วังสามหมอ', 'กู่แก้ว', 'ไชยวาน', 'ประจักษ์ศิลปาคม'],
+        'highway': '2',
+        'priority': 21,
+        'distance_from_dc_km': 490,
+        'description': 'อุดรธานีรอบนอก กุมภวาปี-หนองหาน'
+    },
+    # --- บุรีรัมย์ (sub-zones) ---
+    'ZONE_BRM1_บุรีรัมย์_เมือง': {
+        'provinces': ['บุรีรัมย์'],
+        'districts': ['เมืองบุรีรัมย์', 'ลำปลายมาศ', 'หนองหงส์', 'บ้านด่าน'],
+        'highway': '24',
+        'priority': 25,
+        'distance_from_dc_km': 370,
+        'description': 'บุรีรัมย์ในเมือง'
+    },
+    'ZONE_BRM2_บุรีรัมย์_รอบนอก': {
+        'provinces': ['บุรีรัมย์'],
+        'districts': ['นางรอง', 'ประโคนชัย', 'หนองกี่', 'กระสัง', 'บ้านกรวด', 'ละหานทราย', 'สตึก', 'คูเมือง', 'พุทไธสง', 'เฉลิมพระเกียรติ', 'โนนดินแดง'],
+        'highway': '24',
+        'priority': 24,
+        'distance_from_dc_km': 390,
+        'description': 'บุรีรัมย์รอบนอก นางรอง-ประโคนชัย'
+    },
+    # --- อุบลราชธานี (sub-zones) ---
+    'ZONE_UBL1_อุบล_เมือง': {
+        'provinces': ['อุบลราชธานี'],
+        'districts': ['เมืองอุบลราชธานี', 'วารินชำราบ', 'สว่างวีระวงศ์', 'เขื่องใน'],
+        'highway': '24',
+        'priority': 23,
+        'distance_from_dc_km': 500,
+        'description': 'อุบลราชธานีในเมือง'
+    },
+    'ZONE_UBL2_อุบล_รอบนอก': {
+        'provinces': ['อุบลราชธานี'],
+        'districts': ['ตระการพืชผล', 'เดชอุดม', 'พิบูลมังสาหาร', 'บุณฑริก', 'น้ำยืน', 'ศรีเมืองใหม่', 'ม่วงสามสิบ', 'น้ำขุ่น'],
+        'highway': '24',
+        'priority': 22,
+        'distance_from_dc_km': 520,
+        'description': 'อุบลราชธานีรอบนอก ตระการ-เดชอุดม'
+    },
     'ZONE_J_อุดร': {
         'provinces': ['อุดรธานี', 'หนองคาย', 'หนองบัวลำภู', 'เลย', 'สกลนคร', 'นครพนม', 'บึงกาฬ'],
         'highway': '2',
@@ -1046,6 +1213,73 @@ LOGISTICS_ZONES = {
         'description': 'อีสานใต้ สาย 24'
     },
     # ============ ภาคตะวันออก - สาย 3 ============
+    # --- ฉะเชิงเทรา (sub-zones) ---
+    'ZONE_CCT1_ฉะเชิงเทรา_เมือง': {
+        'provinces': ['ฉะเชิงเทรา'],
+        'districts': ['เมืองฉะเชิงเทรา', 'บางน้ำเปรี้ยว', 'บ้านโพธิ์'],
+        'highway': '304',
+        'priority': 70,
+        'distance_from_dc_km': 70,
+        'description': 'ฉะเชิงเทราในเมือง สาย 304'
+    },
+    'ZONE_CCT2_ฉะเชิงเทรา_ตะวันออก': {
+        'provinces': ['ฉะเชิงเทรา'],
+        'districts': ['บางปะกง', 'พนมสารคาม', 'บางคล้า', 'แปลงยาว'],
+        'highway': '304/331',
+        'priority': 69,
+        'distance_from_dc_km': 80,
+        'description': 'ฉะเชิงเทราตะวันออก สาย 331'
+    },
+    # --- ชลบุรี (sub-zones) ---
+    'ZONE_CBI1_ชลบุรี_เหนือ': {
+        'provinces': ['ชลบุรี'],
+        'districts': ['บ้านบึง', 'พนัสนิคม', 'บ่อทอง', 'หนองใหญ่', 'เกาะจันทร์'],
+        'highway': '304/331',
+        'priority': 67,
+        'distance_from_dc_km': 90,
+        'description': 'ชลบุรีเหนือในแผ่นดิน'
+    },
+    'ZONE_CBI2_ชลบุรี_เมือง': {
+        'provinces': ['ชลบุรี'],
+        'districts': ['เมืองชลบุรี', 'พานทอง'],
+        'highway': '3',
+        'priority': 66,
+        'distance_from_dc_km': 110,
+        'description': 'ชลบุรีในเมือง สาย 3'
+    },
+    'ZONE_CBI3_ชลบุรี_ศรีราชา': {
+        'provinces': ['ชลบุรี'],
+        'districts': ['ศรีราชา'],
+        'highway': '3',
+        'priority': 65,
+        'distance_from_dc_km': 120,
+        'description': 'ศรีราชา EEC สาย 3'
+    },
+    'ZONE_CBI4_ชลบุรี_พัทยา': {
+        'provinces': ['ชลบุรี'],
+        'districts': ['บางละมุง', 'สัตหีบ'],
+        'highway': '3',
+        'priority': 64,
+        'distance_from_dc_km': 130,
+        'description': 'พัทยา-สัตหีบ ชายฝั่ง'
+    },
+    # --- ระยอง (sub-zones) ---
+    'ZONE_RYG1_ระยอง_เมือง': {
+        'provinces': ['ระยอง'],
+        'districts': ['เมืองระยอง', 'บ้านฉาง', 'นิคมพัฒนา', 'ปลวกแดง', 'บ้านค่าย'],
+        'highway': '3',
+        'priority': 63,
+        'distance_from_dc_km': 140,
+        'description': 'ระยองในเมือง+นิคมอุตสาหกรรม'
+    },
+    'ZONE_RYG2_ระยอง_ตะวันออก': {
+        'provinces': ['ระยอง'],
+        'districts': ['แกลง', 'วังจันทร์', 'เขาชะเมา'],
+        'highway': '36',
+        'priority': 62,
+        'distance_from_dc_km': 160,
+        'description': 'ระยองตะวันออก แกลง-วังจันทร์'
+    },
     'ZONE_L_ชลบุรีระยอง': {
         'provinces': ['ชลบุรี', 'ระยอง'],
         # เฉพาะชลบุรีชายฝั่ง (เมือง/ศรีราชา/บ้านบึง/พัทยา/สัตหีบ) + ระยอง ทางสาย 3 (Bang Na-Trat)
@@ -1127,6 +1361,132 @@ LOGISTICS_ZONES = {
         'description': 'ใต้ฝั่งอันดามัน สาย 401/402'
     },
     # ============ ปริมณฑล (แบ่งโซนละเอียด) ============
+    # --- พระนครศรีอยุธยา (sub-zones) ---
+    'ZONE_AYA1_อยุธยา_ใกล้DC': {
+        'provinces': ['พระนครศรีอยุธยา'],
+        'districts': ['วังน้อย', 'บางปะอิน', 'อุทัย', 'บางบาล', 'นครหลวง'],
+        'highway': '1/32',
+        'priority': 88,
+        'distance_from_dc_km': 30,
+        'description': 'อยุธยาใกล้ DC วังน้อย-บางปะอิน'
+    },
+    'ZONE_AYA2_อยุธยา_เมือง': {
+        'provinces': ['พระนครศรีอยุธยา'],
+        'districts': ['พระนครศรีอยุธยา', 'บางไทร', 'บางซ้าย', 'ผักไห่', 'บางปะหัน', 'ท่าเรือ', 'ภาชี'],
+        'highway': '1/32',
+        'priority': 87,
+        'distance_from_dc_km': 45,
+        'description': 'อยุธยาในเมือง-รอบนอก'
+    },
+    # --- ปทุมธานี (sub-zones) ---
+    'ZONE_PTM1_ปทุมธานี_คลองหลวง': {
+        'provinces': ['ปทุมธานี'],
+        'districts': ['คลองหลวง'],
+        'highway': '1/305',
+        'priority': 82,
+        'distance_from_dc_km': 50,
+        'description': 'ปทุมธานี คลองหลวง ม.เกษตร-รังสิต'
+    },
+    'ZONE_PTM2_ปทุมธานี_ลำลูกกา': {
+        'provinces': ['ปทุมธานี'],
+        'districts': ['ลำลูกกา', 'ธัญบุรี'],
+        'highway': '1/305',
+        'priority': 82,
+        'distance_from_dc_km': 55,
+        'description': 'ปทุมธานี ลำลูกกา-ธัญบุรี'
+    },
+    'ZONE_PTM3_ปทุมธานี_เมือง': {
+        'provinces': ['ปทุมธานี'],
+        'districts': ['เมืองปทุมธานี', 'สามโคก', 'ลาดหลุมแก้ว'],
+        'highway': '1/306',
+        'priority': 83,
+        'distance_from_dc_km': 45,
+        'description': 'ปทุมธานี เมือง-สามโคก-ลาดหลุมแก้ว'
+    },
+    # --- นนทบุรี (sub-zones) ---
+    'ZONE_NBI1_นนทบุรี_บางบัวทอง': {
+        'provinces': ['นนทบุรี'],
+        'districts': ['บางบัวทอง', 'บางใหญ่', 'ไทรน้อย'],
+        'highway': '9/346',
+        'priority': 84,
+        'distance_from_dc_km': 60,
+        'description': 'นนทบุรี บางบัวทอง-บางใหญ่-ไทรน้อย'
+    },
+    'ZONE_NBI2_นนทบุรี_ปากเกร็ด': {
+        'provinces': ['นนทบุรี'],
+        'districts': ['ปากเกร็ด', 'บางกรวย'],
+        'highway': '9/302',
+        'priority': 85,
+        'distance_from_dc_km': 65,
+        'description': 'นนทบุรี ปากเกร็ด-บางกรวย'
+    },
+    'ZONE_NBI3_นนทบุรี_เมือง': {
+        'provinces': ['นนทบุรี'],
+        'districts': ['เมืองนนทบุรี'],
+        'highway': '9/302',
+        'priority': 85,
+        'distance_from_dc_km': 65,
+        'description': 'นนทบุรี เมือง'
+    },
+    # --- สมุทรปราการ (sub-zones ฝั่งตะวันตก/เมือง) ---
+    'ZONE_SPK1_สมุทรปราการ_เมือง': {
+        'provinces': ['สมุทรปราการ'],
+        'districts': ['เมืองสมุทรปราการ', 'พระประแดง', 'พระสมุทรเจดีย์'],
+        'highway': '3/34',
+        'priority': 86,
+        'distance_from_dc_km': 60,
+        'description': 'สมุทรปราการ เมือง-พระประแดง'
+    },
+    'ZONE_SPK2_สมุทรปราการ_บางพลี': {
+        'provinces': ['สมุทรปราการ'],
+        'districts': ['บางพลี'],
+        'highway': '3',
+        'priority': 87,
+        'distance_from_dc_km': 55,
+        'description': 'สมุทรปราการ บางพลี'
+    },
+    # --- นครปฐม (sub-zones) ---
+    'ZONE_NPT1_นครปฐม_เมือง': {
+        'provinces': ['นครปฐม'],
+        'districts': ['เมืองนครปฐม', 'พุทธมณฑล'],
+        'highway': '4/35',
+        'priority': 75,
+        'distance_from_dc_km': 80,
+        'description': 'นครปฐมในเมือง-พุทธมณฑล'
+    },
+    'ZONE_NPT2_นครปฐม_สามพราน': {
+        'provinces': ['นครปฐม'],
+        'districts': ['สามพราน', 'นครชัยศรี'],
+        'highway': '4',
+        'priority': 75,
+        'distance_from_dc_km': 75,
+        'description': 'นครปฐม สามพราน-นครชัยศรี'
+    },
+    'ZONE_NPT3_นครปฐม_กำแพงแสน': {
+        'provinces': ['นครปฐม'],
+        'districts': ['กำแพงแสน', 'ดอนตูม', 'บางเลน'],
+        'highway': '4',
+        'priority': 74,
+        'distance_from_dc_km': 90,
+        'description': 'นครปฐม กำแพงแสน-บางเลน'
+    },
+    # --- สมุทรสาคร (sub-zones) ---
+    'ZONE_SSK1_สมุทรสาคร_เมือง': {
+        'provinces': ['สมุทรสาคร'],
+        'districts': ['เมืองสมุทรสาคร'],
+        'highway': '35',
+        'priority': 76,
+        'distance_from_dc_km': 75,
+        'description': 'สมุทรสาคร มหาชัย'
+    },
+    'ZONE_SSK2_สมุทรสาคร_กระทุ่มแบน': {
+        'provinces': ['สมุทรสาคร'],
+        'districts': ['กระทุ่มแบน', 'บ้านแพ้ว'],
+        'highway': '35',
+        'priority': 76,
+        'distance_from_dc_km': 80,
+        'description': 'สมุทรสาคร กระทุ่มแบน-บ้านแพ้ว'
+    },
     # ── BKK sub-zones (แยกย่อยตามทิศ เขตใกล้กันอยู่โซนเดียวกัน) ──────────
     'ZONE_BKK_เหนือ': {
         'provinces': ['กรุงเทพมหานคร'],
