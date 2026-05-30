@@ -1164,22 +1164,46 @@ LOGISTICS_ZONES = {
         'distance_from_dc_km': 490,
         'description': 'อุดรธานีรอบนอก กุมภวาปี-หนองหาน'
     },
-    # --- บุรีรัมย์ (sub-zones) ---
+    # --- บุรีรัมย์ (5 sub-zones ตามภูมิศาสตร์จริง) ---
     'ZONE_BRM1_บุรีรัมย์_เมือง': {
         'provinces': ['บุรีรัมย์'],
-        'districts': ['เมืองบุรีรัมย์', 'ลำปลายมาศ', 'หนองหงส์', 'บ้านด่าน'],
+        'districts': ['เมืองบุรีรัมย์'],
+        'highway': '24',
+        'priority': 26,
+        'distance_from_dc_km': 360,
+        'description': 'บุรีรัมย์ใจกลางเมือง'
+    },
+    'ZONE_BRM2_บุรีรัมย์_เหนือ': {
+        'provinces': ['บุรีรัมย์'],
+        'districts': ['ลำปลายมาศ', 'คูเมือง', 'หนองหงส์', 'ชำนิ', 'บ้านด่าน'],
         'highway': '24',
         'priority': 25,
         'distance_from_dc_km': 370,
-        'description': 'บุรีรัมย์ในเมือง'
+        'description': 'บุรีรัมย์เหนือ ลำปลายมาศ-คูเมือง'
     },
-    'ZONE_BRM2_บุรีรัมย์_รอบนอก': {
+    'ZONE_BRM3_บุรีรัมย์_ตะวันออก': {
         'provinces': ['บุรีรัมย์'],
-        'districts': ['นางรอง', 'ประโคนชัย', 'หนองกี่', 'กระสัง', 'บ้านกรวด', 'ละหานทราย', 'สตึก', 'คูเมือง', 'พุทไธสง', 'เฉลิมพระเกียรติ', 'โนนดินแดง'],
-        'highway': '24',
+        'districts': ['นางรอง', 'หนองกี่', 'ละหานทราย', 'ปะคำ', 'โนนดินแดง', 'เฉลิมพระเกียรติ'],
+        'highway': '24/348',
         'priority': 24,
+        'distance_from_dc_km': 400,
+        'description': 'บุรีรัมย์ตะวันออก นางรอง-หนองกี่'
+    },
+    'ZONE_BRM4_บุรีรัมย์_ใต้': {
+        'provinces': ['บุรีรัมย์'],
+        'districts': ['ประโคนชัย', 'บ้านกรวด', 'กระสัง', 'พลับพลาชัย'],
+        'highway': '24/219',
+        'priority': 23,
         'distance_from_dc_km': 390,
-        'description': 'บุรีรัมย์รอบนอก นางรอง-ประโคนชัย'
+        'description': 'บุรีรัมย์ใต้ ประโคนชัย-บ้านกรวด ชายแดนกัมพูชา'
+    },
+    'ZONE_BRM5_บุรีรัมย์_ตะวันตก': {
+        'provinces': ['บุรีรัมย์'],
+        'districts': ['สตึก', 'พุทไธสง', 'บ้านใหม่ไชยพจน์', 'แคนดง', 'นาโพธิ์', 'พลับพลาชัย'],
+        'highway': '226',
+        'priority': 25,
+        'distance_from_dc_km': 380,
+        'description': 'บุรีรัมย์ตะวันตก สตึก-พุทไธสง ฝั่งแม่น้ำมูล'
     },
     # --- อุบลราชธานี (sub-zones) ---
     'ZONE_UBL1_อุบล_เมือง': {
@@ -5087,7 +5111,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 # 🚫 Distance guard (ตำบลเดียวกัน priority=1: ไม่มี limit)
                 _cand_prio_zone = int(candidate_row.get('_priority', 4))
                 if not _is_same_loc and _cand_prio_zone != 1:  # ไม่ใช่ตำบลเดียวกัน → ตรวจ distance
-                    if candidate_dist > _ZONE_CAP_KM:
+                    if candidate_dist > _PROV_CAP_KM:
                         continue
 
                 # 🚫 Zone/province/region axis check
