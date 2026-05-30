@@ -4751,7 +4751,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 # 🚫 Distance guard (ตำบลเดียวกัน priority=1: ไม่มี limit)
                 _cand_prio_zone = int(candidate_row.get('_priority', 4))
                 if not _is_same_loc and _cand_prio_zone != 1:  # ไม่ใช่ตำบลเดียวกัน → ตรวจ distance
-                    if candidate_dist > _CHAIN_KM:
+                    if candidate_dist > _ZONE_CAP_KM:
                         continue
 
                 # 🚫 Zone/province/region axis check
