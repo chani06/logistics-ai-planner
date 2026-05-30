@@ -489,13 +489,21 @@ def precompute_all():
 
 def build_branch_groups(branch_data, max_km=0.5):
     """
-    สร้าง branch_groups.json:
-    กลุ่มสาขาที่อยู่ในที่เดียวกัน = ≤500m + ตำบล/อำเภอ/จังหวัดเดียวกัน
-    ใช้ Union-Find เพื่อรองรับ transitive grouping
-    """
-    print(f"\n🏘️  สร้าง branch_groups (≤{max_km*1000:.0f}m + ตำบล/อำเภอ/จังหวัดเดียวกัน)...")
+    สร้าง branch_groups.json ตามหลักการขนส่งจริง:
 
-    # รวบรวมสาขาที่มีพิกัด
+    Step 1 — จัดกลุ่มตาม ตำบล (subdistrict) เป็นหลัก
+             สาขาในตำบลเดียวกัน → กลุ่มเดียวกันเสมอ
+
+    Step 2 — ตำบลที่มีสาขาเดียว (Singleton) → รวมกับตำบลอื่น
+             ในอำเภอเดียวกันที่ใกล้ที่สุด (haversine centroid)
+
+    Step 3 — กลุ่มที่มี ≥2 สาขา → ได้ Group ID
+    """
+    import math
+    from collections import defaultdict as _dd
+
+    print(f"\n🏘️  สร้าง branch_groups (ตำบล-based logistics grouping)...")
+
     branches = []
     for code, b in branch_data.items():
         try:
@@ -503,20 +511,36 @@ def build_branch_groups(branch_data, max_km=0.5):
             lon = float(b.get('ลอง', 0) or 0)
             if lat and lon:
                 branches.append({
-                    'code': str(code).strip().upper(),
-                    'lat': lat, 'lon': lon,
-                    'subdistrict': str(b.get('ตำบล', '') or '').strip(),
-                    'district':    str(b.get('อำเภอ', '') or '').strip(),
-                    'province':    str(b.get('จังหวัด', '') or '').strip(),
+                    'code':        str(code).strip().upper(),
+                    'lat':         lat,
+                    'lon':         lon,
+                    'subdistrict': str(b.get('ตำบล',   '') or '').strip(),
+                    'district':    str(b.get('อำเภอ',  '') or '').strip(),
+                    'province':    str(b.get('จังหวัด','') or '').strip(),
                 })
         except Exception:
             continue
 
-    n = len(branches)
-    print(f"   {n} สาขาที่มีพิกัด")
+    print(f"   {len(branches)} สาขาที่มีพิกัด")
+
+    # ── Step 1: จัดกลุ่มตามตำบล ──
+    # key = (province, district, subdistrict)  — ถ้าใดว่างใช้ระดับถัดขึ้น
+    def sub_key(b):
+        p = b['province']
+        d = b['district']
+        s = b['subdistrict']
+        if s:
+            return (p, d, s)
+        if d:
+            return (p, d, '__no_sub__')
+        return (p, '__no_dist__', '__no_sub__')
+
+    sub_groups = _dd(list)  # sub_key → [branch_idx]
+    for i, b in enumerate(branches):
+        sub_groups[sub_key(b)].append(i)
 
     # Union-Find
-    parent = list(range(n))
+    parent = list(range(len(branches)))
     def find(x):
         while parent[x] != x:
             parent[x] = parent[parent[x]]
@@ -527,65 +551,100 @@ def build_branch_groups(branch_data, max_km=0.5):
         if px != py:
             parent[px] = py
 
-    # จับคู่สาขาที่อยู่ในกลุ่มเดียวกัน
-    # กรองด้วย ตำบล/อำเภอ/จังหวัดก่อน แล้วใช้ระยะทางถนน OSRM จริง (ไม่ใช้เส้นตรง)
-    pairs = 0
-    osrm_hit = 0
-    osrm_miss = 0
+    # รวมทุก branch ในตำบลเดียวกัน
+    for idxs in sub_groups.values():
+        for k in range(1, len(idxs)):
+            union(idxs[0], idxs[k])
 
-    def _ne(a, b_): return a and b_ and a != b_
+    # ── Step 2: Singleton merging — ตำบลที่มีสาขาเดียว ──
+    # คำนวณ centroid ของแต่ละ sub_key
+    def centroid(idxs):
+        lats = [branches[i]['lat'] for i in idxs]
+        lons = [branches[i]['lon'] for i in idxs]
+        return sum(lats)/len(lats), sum(lons)/len(lons)
 
-    for i in range(n):
-        bi = branches[i]
-        for j in range(i + 1, n):
-            bj = branches[j]
-            # ต้องตำบล/อำเภอ/จังหวัดเดียวกัน (ถ้ามีค่า)
-            if _ne(bi['province'],    bj['province']):    continue
-            if _ne(bi['district'],    bj['district']):    continue
-            if _ne(bi['subdistrict'], bj['subdistrict']): continue
-            # ใช้ระยะทางถนนจาก OSRM (cache หรือ live, ไม่ใช้เส้นตรง)
-            road_d, is_road = get_road_distance(bi['lat'], bi['lon'], bj['lat'], bj['lon'])
-            if road_d is None:
-                osrm_miss += 1
-                continue   # ข้ามคู่นี้ถ้า OSRM ล้มเหลว
-            if is_road:
-                osrm_hit += 1
-            else:
-                osrm_miss += 1
-            if road_d <= max_km:
-                union(i, j)
-                pairs += 1
+    # จัดกลุ่มตาม (province, district) เพื่อหา singleton ในอำเภอเดียวกัน
+    dist_subs = _dd(list)  # (province, district) → [sub_key]
+    for sk, idxs in sub_groups.items():
+        p, d, _ = sk
+        dist_subs[(p, d)].append(sk)
 
-    print(f"   OSRM hit: {osrm_hit:,}  OSRM live (cache miss): {osrm_miss:,}")
+    merged = 0
+    for (p, d), sks in dist_subs.items():
+        if len(sks) < 2:
+            continue   # อำเภอนี้มีแค่ตำบลเดียว ไม่มีอะไรให้รวม
+        singletons = [sk for sk in sks if len(sub_groups[sk]) == 1]
+        non_singletons = [sk for sk in sks if len(sub_groups[sk]) > 1]
 
-    # รวบรวมกลุ่ม (เฉพาะกลุ่มที่มี ≥2 สาขา)
-    from collections import defaultdict as _dd
+        if not singletons:
+            continue
+
+        # คำนวณ centroid ของทุก sub_key ในอำเภอนี้
+        centroids = {sk: centroid(sub_groups[sk]) for sk in sks}
+
+        for sk_s in singletons:
+            clat, clon = centroids[sk_s]
+            # หา sub_key ที่ใกล้ที่สุดที่ไม่ใช่ตัวเอง
+            best_sk = None
+            best_d  = float('inf')
+            for sk_t in sks:
+                if sk_t == sk_s:
+                    continue
+                tlat, tlon = centroids[sk_t]
+                d_hav = haversine(clat, clon, tlat, tlon)
+                if d_hav < best_d:
+                    best_d  = d_hav
+                    best_sk = sk_t
+            if best_sk is not None:
+                union(sub_groups[sk_s][0], sub_groups[best_sk][0])
+                merged += 1
+
+    print(f"   Singleton merges: {merged}")
+
+    # ── Step 3: สร้าง Group ID ──
     groups_raw = _dd(list)
     for i, b in enumerate(branches):
         groups_raw[find(i)].append(b['code'])
 
     groups = {}
-    gnum = 1
+    b2g    = {}
+    gnum   = 1
     for root, codes in sorted(groups_raw.items()):
         if len(codes) >= 2:
             gid = f"G{gnum:04d}"
             groups[gid] = sorted(codes)
+            for c in codes:
+                b2g[c] = gid
             gnum += 1
 
-    result = {'groups': groups}
+    result = {'groups': groups, 'branch_to_group': b2g}
     with open('branch_groups.json', 'w', encoding='utf-8') as f:
         import json as _json
         _json.dump(result, f, ensure_ascii=False, indent=2)
 
     total_in_groups = sum(len(v) for v in groups.values())
-    print(f"   ✅ {len(groups)} กลุ่ม, {total_in_groups} สาขา ({pairs} คู่ที่จับได้)")
+    avg = total_in_groups / len(groups) if groups else 0
+    print(f"   ✅ {len(groups)} กลุ่ม, {total_in_groups} สาขา (เฉลี่ย {avg:.1f} สาขา/กลุ่ม)")
     print(f"   💾 บันทึก branch_groups.json")
     return groups
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--groups-only', action='store_true',
+                        help='rebuild branch_groups.json เท่านั้น (ไม่ precompute ทั้งหมด)')
+    args = parser.parse_args()
+
     try:
-        stats = precompute_all()
+        if args.groups_only:
+            print("🏘️  Rebuild branch_groups.json only...")
+            with open('branch_data.json', 'r', encoding='utf-8') as f:
+                bd = json.load(f)
+            build_branch_groups(bd, max_km=0.5)
+            print("✅ เสร็จ")
+        else:
+            stats = precompute_all()
     except Exception as e:
         print(f"\n❌ เกิดข้อผิดพลาด: {e}")
         import traceback
