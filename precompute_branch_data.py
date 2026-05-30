@@ -487,18 +487,25 @@ def precompute_all():
     print(f"💾 distance_cache.json: {len(OSRM_CACHE):,} รายการ")
     return stats
 
+def _base_code(code: str) -> str:
+    """ดึง base code: ZS001 → S001, S001 → S001"""
+    c = code.strip().upper()
+    return c[1:] if c.startswith('Z') and len(c) > 1 else c
+
+
 def build_branch_groups(branch_data, max_km=0.5):
     """
-    สร้าง branch_groups.json ตามหลักการขนส่งจริง:
+    สร้าง branch_groups.json — กลุ่มสาขาที่อยู่ตำแหน่งเดียวกัน/ใกล้กันมาก
 
-    กฎ: สาขาในตำบลเดียวกัน → กลุ่มเดียวกันเสมอ ไม่มีข้อยกเว้น
-        สาขาเดี่ยว (Singleton ตำบลที่มีสาขาเดียว) → ไม่มีกลุ่ม
-        กลุ่มที่มี ≥2 สาขา → ได้ Group ID
+    กฎ:
+      1. สาขาที่มี base code เดียวกัน (S001 + ZS001) → กลุ่มเดียวกันเสมอ
+         (ต่าง BU แต่ที่เดียวกัน ต้องไปด้วยกัน)
+      2. สาขาที่อยู่ใกล้กัน ≤ max_km (haversine) → กลุ่มเดียวกัน
+      3. กลุ่มที่มี ≥2 สาขา → ได้ Group ID
     """
-    import math
     from collections import defaultdict as _dd
 
-    print(f"\n🏘️  สร้าง branch_groups (ตำบล-based logistics grouping)...")
+    print(f"\n🏘️  สร้าง branch_groups (proximity ≤{max_km*1000:.0f}m + same-base-code)...")
 
     branches = []
     for code, b in branch_data.items():
@@ -507,36 +514,19 @@ def build_branch_groups(branch_data, max_km=0.5):
             lon = float(b.get('ลอง', 0) or 0)
             if lat and lon:
                 branches.append({
-                    'code':        str(code).strip().upper(),
-                    'lat':         lat,
-                    'lon':         lon,
-                    'subdistrict': str(b.get('ตำบล',   '') or '').strip(),
-                    'district':    str(b.get('อำเภอ',  '') or '').strip(),
-                    'province':    str(b.get('จังหวัด','') or '').strip(),
+                    'code':      str(code).strip().upper(),
+                    'base_code': _base_code(str(code)),
+                    'lat':       lat,
+                    'lon':       lon,
                 })
         except Exception:
             continue
 
-    print(f"   {len(branches)} สาขาที่มีพิกัด")
-
-    # ── Step 1: จัดกลุ่มตามตำบล ──
-    # key = (province, district, subdistrict)  — ถ้าใดว่างใช้ระดับถัดขึ้น
-    def sub_key(b):
-        p = b['province']
-        d = b['district']
-        s = b['subdistrict']
-        if s:
-            return (p, d, s)
-        if d:
-            return (p, d, '__no_sub__')
-        return (p, '__no_dist__', '__no_sub__')
-
-    sub_groups = _dd(list)  # sub_key → [branch_idx]
-    for i, b in enumerate(branches):
-        sub_groups[sub_key(b)].append(i)
+    n = len(branches)
+    print(f"   {n} สาขาที่มีพิกัด")
 
     # Union-Find
-    parent = list(range(len(branches)))
+    parent = list(range(n))
     def find(x):
         while parent[x] != x:
             parent[x] = parent[parent[x]]
@@ -547,14 +537,31 @@ def build_branch_groups(branch_data, max_km=0.5):
         if px != py:
             parent[px] = py
 
-    # รวมทุก branch ในตำบลเดียวกัน
-    for idxs in sub_groups.values():
-        for k in range(1, len(idxs)):
-            union(idxs[0], idxs[k])
+    # ── Step 1: same base code → กลุ่มเดียวกัน ──
+    base_idx: dict = _dd(list)
+    for i, b in enumerate(branches):
+        base_idx[b['base_code']].append(i)
+    same_base = 0
+    for idxs in base_idx.values():
+        if len(idxs) >= 2:
+            for k in range(1, len(idxs)):
+                union(idxs[0], idxs[k])
+            same_base += 1
+    print(f"   Same-base-code groups: {same_base}")
 
-    # ── Step 2: Singleton merging — ตำบลที่มีสาขาเดียว ──
-    # ── Step 2: สร้าง Group ID — เฉพาะตำบลที่มี ≥2 สาขา ──
-    # สาขาเดี่ยว (Singleton) ไม่มีกลุ่ม → ปล่อยให้ greedy จัด zone ตามปกติ
+    # ── Step 2: proximity ≤ max_km (haversine) ──
+    pairs = 0
+    for i in range(n):
+        bi = branches[i]
+        for j in range(i + 1, n):
+            bj = branches[j]
+            if abs(bi['lat'] - bj['lat']) > 0.01:  # ~1.1km lat bound
+                continue
+            if haversine(bi['lat'], bi['lon'], bj['lat'], bj['lon']) <= max_km:
+                union(i, j)
+                pairs += 1
+    print(f"   Proximity pairs (≤{max_km*1000:.0f}m): {pairs}")
+
     groups_raw = _dd(list)
     for i, b in enumerate(branches):
         groups_raw[find(i)].append(b['code'])
