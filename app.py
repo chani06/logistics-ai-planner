@@ -1931,6 +1931,882 @@ LOGISTICS_ZONES = {
         'distance_from_dc_km': 470,
         'description': 'ชุมพร สาย 4 (ประตูใต้)'
     },
+    # ============ พระนครศรีอยุธยา (sub-zones เพิ่มเติม) ============
+    'ZONE_AYA3_อยุธยา_เหนือ': {
+        'provinces': ['พระนครศรีอยุธยา'],
+        'districts': ['บางปะหัน', 'ภาชี', 'ท่าเรือ'],
+        'highway': '1',
+        'priority': 87,
+        'distance_from_dc_km': 55,
+        'description': 'อยุธยาเหนือ'
+    },
+    # ============ สระบุรี (sub-zones) ============
+    'ZONE_SRB1_สระบุรี_ใต้': {
+        'provinces': ['สระบุรี'],
+        'districts': ['หนองแค', 'บ้านหมอ', 'เสาไห้'],
+        'highway': '1',
+        'priority': 80,
+        'distance_from_dc_km': 60,
+        'description': 'สระบุรีใต้'
+    },
+    'ZONE_SRB2_สระบุรี_เมือง': {
+        'provinces': ['สระบุรี'],
+        'districts': ['เมืองสระบุรี', 'เฉลิมพระเกียรติ', 'วิหารแดง', 'พระพุทธบาท'],
+        'highway': '1',
+        'priority': 79,
+        'distance_from_dc_km': 75,
+        'description': 'สระบุรีเมือง'
+    },
+    'ZONE_SRB3_สระบุรี_เหนือ': {
+        'provinces': ['สระบุรี'],
+        'districts': ['แก่งคอย', 'มวกเหล็ก', 'วังม่วง'],
+        'highway': '1',
+        'priority': 78,
+        'distance_from_dc_km': 90,
+        'description': 'สระบุรีเหนือ'
+    },
+    # ============ ลพบุรี (sub-zones) ============
+    'ZONE_LRI1_ลพบุรี_เมือง': {
+        'provinces': ['ลพบุรี'],
+        'districts': ['เมืองลพบุรี', 'ท่าวุ้ง', 'บ้านหมี่', 'โคกสำโรง'],
+        'highway': '1',
+        'priority': 77,
+        'distance_from_dc_km': 80,
+        'description': 'ลพบุรีเมือง'
+    },
+    'ZONE_LRI2_ลพบุรี_ใต้': {
+        'provinces': ['ลพบุรี'],
+        'districts': ['พัฒนานิคม', 'หนองม่วง', 'สระโบสถ์'],
+        'highway': '1',
+        'priority': 76,
+        'distance_from_dc_km': 90,
+        'description': 'ลพบุรีใต้'
+    },
+    'ZONE_LRI3_ลพบุรี_เหนือ': {
+        'provinces': ['ลพบุรี'],
+        'districts': ['ชัยบาดาล', 'ลำสนธิ', 'ท่าหลวง'],
+        'highway': '1',
+        'priority': 75,
+        'distance_from_dc_km': 110,
+        'description': 'ลพบุรีเหนือ'
+    },
+    # ============ ชัยนาท (sub-zones) ============
+    'ZONE_CNT1_ชัยนาท_เมือง': {
+        'provinces': ['ชัยนาท'],
+        'districts': ['เมืองชัยนาท', 'มโนรมย์', 'สรรพยา'],
+        'highway': '1',
+        'priority': 78,
+        'distance_from_dc_km': 85,
+        'description': 'ชัยนาทเมือง'
+    },
+    'ZONE_CNT2_ชัยนาท_เหนือ': {
+        'provinces': ['ชัยนาท'],
+        'districts': ['สรรคบุรี', 'หันคา', 'วัดสิงห์', 'เนินขาม'],
+        'highway': '1',
+        'priority': 77,
+        'distance_from_dc_km': 95,
+        'description': 'ชัยนาทเหนือ'
+    },
+    # ============ สิงห์บุรี ============
+    'ZONE_SBR1_สิงห์บุรี': {
+        'provinces': ['สิงห์บุรี'],
+        'districts': ['เมืองสิงห์บุรี', 'อินทร์บุรี', 'พรหมบุรี', 'บางระจัน', 'ท่าช้าง', 'ค่ายบางระจัน'],
+        'highway': '1',
+        'priority': 79,
+        'distance_from_dc_km': 90,
+        'description': 'สิงห์บุรีทุกอำเภอ'
+    },
+    # ============ อ่างทอง ============
+    'ZONE_ATG1_อ่างทอง': {
+        'provinces': ['อ่างทอง'],
+        'districts': ['เมืองอ่างทอง', 'วิเศษชัยชาญ', 'ไชโย', 'ป่าโมก', 'โพธิ์ทอง', 'สามโก้'],
+        'highway': '1',
+        'priority': 80,
+        'distance_from_dc_km': 80,
+        'description': 'อ่างทองทุกอำเภอ'
+    },
+    # ============ นครนายก ============
+    'ZONE_NNK1_นครนายก': {
+        'provinces': ['นครนายก'],
+        'districts': ['เมืองนครนายก', 'บ้านนา', 'องครักษ์', 'ปากพลี'],
+        'highway': '33',
+        'priority': 72,
+        'distance_from_dc_km': 85,
+        'description': 'นครนายกทุกอำเภอ'
+    },
+    # ============ ปราจีนบุรี (sub-zones) ============
+    'ZONE_PRB1_ปราจีนบุรี_เมือง': {
+        'provinces': ['ปราจีนบุรี'],
+        'districts': ['เมืองปราจีนบุรี', 'บ้านสร้าง', 'ศรีมโหสถ'],
+        'highway': '33',
+        'priority': 71,
+        'distance_from_dc_km': 90,
+        'description': 'ปราจีนบุรีเมือง'
+    },
+    'ZONE_PRB2_ปราจีนบุรี_ตะวันออก': {
+        'provinces': ['ปราจีนบุรี'],
+        'districts': ['กบินทร์บุรี', 'ศรีมหาโพธิ', 'ประจันตคาม', 'นาดี'],
+        'highway': '33',
+        'priority': 70,
+        'distance_from_dc_km': 110,
+        'description': 'ปราจีนบุรีตะวันออก'
+    },
+    # ============ สระแก้ว (sub-zones) ============
+    'ZONE_SKW1_สระแก้ว_เมือง': {
+        'provinces': ['สระแก้ว'],
+        'districts': ['เมืองสระแก้ว', 'วังน้ำเย็น', 'เขาฉกรรจ์', 'วังสมบูรณ์'],
+        'highway': '33',
+        'priority': 68,
+        'distance_from_dc_km': 130,
+        'description': 'สระแก้วเมือง'
+    },
+    'ZONE_SKW2_สระแก้ว_ตะวันออก': {
+        'provinces': ['สระแก้ว'],
+        'districts': ['วัฒนานคร', 'อรัญประเทศ'],
+        'highway': '33',
+        'priority': 67,
+        'distance_from_dc_km': 150,
+        'description': 'สระแก้วตะวันออก ชายแดน'
+    },
+    # ============ ราชบุรี (sub-zones) ============
+    'ZONE_RBR1_ราชบุรี_เมือง': {
+        'provinces': ['ราชบุรี'],
+        'districts': ['เมืองราชบุรี', 'ดำเนินสะดวก', 'บ้านคา'],
+        'highway': '4',
+        'priority': 73,
+        'distance_from_dc_km': 90,
+        'description': 'ราชบุรีเมือง'
+    },
+    'ZONE_RBR2_ราชบุรี_เหนือ': {
+        'provinces': ['ราชบุรี'],
+        'districts': ['บ้านโป่ง', 'โพธาราม', 'สวนผึ้ง', 'จอมบึง'],
+        'highway': '4',
+        'priority': 72,
+        'distance_from_dc_km': 100,
+        'description': 'ราชบุรีเหนือ'
+    },
+    'ZONE_RBR3_ราชบุรี_ใต้': {
+        'provinces': ['ราชบุรี'],
+        'districts': ['ปากท่อ', 'บางแพ'],
+        'highway': '4',
+        'priority': 71,
+        'distance_from_dc_km': 110,
+        'description': 'ราชบุรีใต้'
+    },
+    # ============ สุพรรณบุรี (sub-zones) ============
+    'ZONE_SPB1_สุพรรณบุรี_เมือง': {
+        'provinces': ['สุพรรณบุรี'],
+        'districts': ['เมืองสุพรรณบุรี', 'บางปลาม้า', 'ศรีประจันต์', 'ดอนเจดีย์'],
+        'highway': '340',
+        'priority': 74,
+        'distance_from_dc_km': 100,
+        'description': 'สุพรรณบุรีเมือง'
+    },
+    'ZONE_SPB2_สุพรรณบุรี_ใต้': {
+        'provinces': ['สุพรรณบุรี'],
+        'districts': ['สองพี่น้อง', 'สามชุก', 'อู่ทอง', 'เดิมบางนางบวช'],
+        'highway': '340',
+        'priority': 73,
+        'distance_from_dc_km': 115,
+        'description': 'สุพรรณบุรีใต้'
+    },
+    'ZONE_SPB3_สุพรรณบุรี_เหนือ': {
+        'provinces': ['สุพรรณบุรี'],
+        'districts': ['ด่านช้าง', 'หนองหญ้าไซ'],
+        'highway': '340',
+        'priority': 72,
+        'distance_from_dc_km': 130,
+        'description': 'สุพรรณบุรีเหนือ'
+    },
+    # ============ กาญจนบุรี (sub-zones) ============
+    'ZONE_KBR1_กาญจนบุรี_ใต้': {
+        'provinces': ['กาญจนบุรี'],
+        'districts': ['เมืองกาญจนบุรี', 'ท่าม่วง', 'พนมทวน'],
+        'highway': '323',
+        'priority': 69,
+        'distance_from_dc_km': 120,
+        'description': 'กาญจนบุรีใต้'
+    },
+    'ZONE_KBR2_กาญจนบุรี_ตะวันออก': {
+        'provinces': ['กาญจนบุรี'],
+        'districts': ['ท่ามะกา', 'บ่อพลอย', 'เลาขวัญ'],
+        'highway': '323',
+        'priority': 68,
+        'distance_from_dc_km': 130,
+        'description': 'กาญจนบุรีตะวันออก'
+    },
+    'ZONE_KBR3_กาญจนบุรี_เหนือ': {
+        'provinces': ['กาญจนบุรี'],
+        'districts': ['ไทรโยค', 'สังขละบุรี'],
+        'highway': '323',
+        'priority': 67,
+        'distance_from_dc_km': 160,
+        'description': 'กาญจนบุรีเหนือ ชายแดน'
+    },
+    # ============ สมุทรสงคราม ============
+    'ZONE_SSG1_สมุทรสงคราม': {
+        'provinces': ['สมุทรสงคราม'],
+        'districts': ['เมืองสมุทรสงคราม', 'อัมพวา', 'บางคนที'],
+        'highway': '35',
+        'priority': 77,
+        'distance_from_dc_km': 85,
+        'description': 'สมุทรสงครามทุกอำเภอ'
+    },
+    # ============ เพชรบุรี (sub-zones) ============
+    'ZONE_PBI1_เพชรบุรี_เมือง': {
+        'provinces': ['เพชรบุรี'],
+        'districts': ['เมืองเพชรบุรี', 'เขาย้อย', 'บ้านลาด', 'บ้านแหลม'],
+        'highway': '4',
+        'priority': 66,
+        'distance_from_dc_km': 140,
+        'description': 'เพชรบุรีเมือง'
+    },
+    'ZONE_PBI2_เพชรบุรี_ชายฝั่ง': {
+        'provinces': ['เพชรบุรี'],
+        'districts': ['ชะอำ', 'ท่ายาง', 'แก่งกระจาน'],
+        'highway': '4',
+        'priority': 65,
+        'distance_from_dc_km': 155,
+        'description': 'เพชรบุรีชายฝั่ง'
+    },
+    # ============ อุทัยธานี ============
+    'ZONE_UTN1_อุทัยธานี': {
+        'provinces': ['อุทัยธานี'],
+        'districts': ['เมืองอุทัยธานี', 'หนองฉาง', 'ทัพทัน', 'ลานสัก', 'บ้านไร่', 'สว่างอารมณ์', 'หนองขาหย่าง'],
+        'highway': '333',
+        'priority': 55,
+        'distance_from_dc_km': 180,
+        'description': 'อุทัยธานีทุกอำเภอ'
+    },
+    # ============ นครสวรรค์ (sub-zones) ============
+    'ZONE_NSW1_นครสวรรค์_เมือง': {
+        'provinces': ['นครสวรรค์'],
+        'districts': ['เมืองนครสวรรค์', 'โกรกพระ', 'พยุหะคีรี', 'เก้าเลี้ยว'],
+        'highway': '1',
+        'priority': 50,
+        'distance_from_dc_km': 230,
+        'description': 'นครสวรรค์เมือง'
+    },
+    'ZONE_NSW2_นครสวรรค์_ตะวันออก': {
+        'provinces': ['นครสวรรค์'],
+        'districts': ['ตาคลี', 'ตากฟ้า', 'ไพศาลี', 'หนองบัว'],
+        'highway': '1',
+        'priority': 49,
+        'distance_from_dc_km': 250,
+        'description': 'นครสวรรค์ตะวันออก'
+    },
+    'ZONE_NSW3_นครสวรรค์_เหนือ': {
+        'provinces': ['นครสวรรค์'],
+        'districts': ['บรรพตพิสัย', 'ลาดยาว', 'ชุมแสง', 'ชุมตาบง', 'แม่วงก์', 'แม่เปิน'],
+        'highway': '1',
+        'priority': 48,
+        'distance_from_dc_km': 260,
+        'description': 'นครสวรรค์เหนือ'
+    },
+    # ============ กำแพงเพชร (sub-zones) ============
+    'ZONE_KPT1_กำแพงเพชร_เมือง': {
+        'provinces': ['กำแพงเพชร'],
+        'districts': ['เมืองกำแพงเพชร', 'ลานกระบือ', 'พรานกระต่าย', 'ไทรงาม'],
+        'highway': '1',
+        'priority': 40,
+        'distance_from_dc_km': 290,
+        'description': 'กำแพงเพชรเมือง'
+    },
+    'ZONE_KPT2_กำแพงเพชร_ตะวันตก': {
+        'provinces': ['กำแพงเพชร'],
+        'districts': ['คลองขลุง', 'ขาณุวรลักษบุรี', 'บึงสามัคคี', 'คลองลาน'],
+        'highway': '1',
+        'priority': 39,
+        'distance_from_dc_km': 310,
+        'description': 'กำแพงเพชรตะวันตก'
+    },
+    # ============ ตาก (sub-zones) ============
+    'ZONE_TAK1_ตาก_เมือง': {
+        'provinces': ['ตาก'],
+        'districts': ['เมืองตาก', 'บ้านตาก', 'สามเงา'],
+        'highway': '1',
+        'priority': 38,
+        'distance_from_dc_km': 330,
+        'description': 'ตากเมือง'
+    },
+    'ZONE_TAK2_ตาก_แม่สอด': {
+        'provinces': ['ตาก'],
+        'districts': ['แม่สอด', 'แม่ระมาด', 'พบพระ'],
+        'highway': '105',
+        'priority': 37,
+        'distance_from_dc_km': 380,
+        'description': 'ตากแม่สอด ชายแดนพม่า'
+    },
+    # ============ สุโขทัย (sub-zones) ============
+    'ZONE_STT1_สุโขทัย_ใต้': {
+        'provinces': ['สุโขทัย'],
+        'districts': ['เมืองสุโขทัย', 'กงไกรลาศ', 'ศรีสำโรง', 'บ้านด่านลานหอย', 'คีรีมาศ'],
+        'highway': '101',
+        'priority': 41,
+        'distance_from_dc_km': 380,
+        'description': 'สุโขทัยใต้'
+    },
+    'ZONE_STT2_สุโขทัย_เหนือ': {
+        'provinces': ['สุโขทัย'],
+        'districts': ['สวรรคโลก', 'ศรีสัชนาลัย', 'ทุ่งเสลี่ยม', 'ศรีนคร'],
+        'highway': '101',
+        'priority': 40,
+        'distance_from_dc_km': 400,
+        'description': 'สุโขทัยเหนือ'
+    },
+    # ============ ลำพูน (sub-zones) ============
+    'ZONE_LPN1_ลำพูน_เมือง': {
+        'provinces': ['ลำพูน'],
+        'districts': ['เมืองลำพูน', 'ป่าซาง', 'บ้านธิ', 'เวียงหนองล่อง'],
+        'highway': '11',
+        'priority': 12,
+        'distance_from_dc_km': 640,
+        'description': 'ลำพูนเมือง'
+    },
+    'ZONE_LPN2_ลำพูน_ใต้': {
+        'provinces': ['ลำพูน'],
+        'districts': ['ลี้', 'บ้านโฮ่ง', 'ทุ่งหัวช้าง'],
+        'highway': '106',
+        'priority': 11,
+        'distance_from_dc_km': 680,
+        'description': 'ลำพูนใต้'
+    },
+    # ============ ลำปาง (sub-zones) ============
+    'ZONE_LPG1_ลำปาง_เมือง': {
+        'provinces': ['ลำปาง'],
+        'districts': ['เมืองลำปาง', 'ห้างฉัตร', 'เกาะคา', 'แม่ทะ'],
+        'highway': '11',
+        'priority': 13,
+        'distance_from_dc_km': 580,
+        'description': 'ลำปางเมือง'
+    },
+    'ZONE_LPG2_ลำปาง_เหนือ': {
+        'provinces': ['ลำปาง'],
+        'districts': ['งาว', 'แจ้ห่ม', 'วังเหนือ'],
+        'highway': '11',
+        'priority': 12,
+        'distance_from_dc_km': 620,
+        'description': 'ลำปางเหนือ'
+    },
+    'ZONE_LPG3_ลำปาง_ใต้': {
+        'provinces': ['ลำปาง'],
+        'districts': ['เถิน', 'สบปราบ', 'แม่พริก'],
+        'highway': '11',
+        'priority': 11,
+        'distance_from_dc_km': 600,
+        'description': 'ลำปางใต้'
+    },
+    # ============ แพร่ (sub-zones) ============
+    'ZONE_PRE1_แพร่_เมือง': {
+        'provinces': ['แพร่'],
+        'districts': ['เมืองแพร่', 'สูงเม่น', 'ร้องกวาง'],
+        'highway': '11',
+        'priority': 14,
+        'distance_from_dc_km': 540,
+        'description': 'แพร่เมือง'
+    },
+    'ZONE_PRE2_แพร่_เหนือ': {
+        'provinces': ['แพร่'],
+        'districts': ['สอง', 'เด่นชัย', 'วังชิ้น', 'ลอง', 'หนองม่วงไข่'],
+        'highway': '11',
+        'priority': 13,
+        'distance_from_dc_km': 560,
+        'description': 'แพร่เหนือ'
+    },
+    # ============ น่าน ============
+    'ZONE_NAN1_น่าน': {
+        'provinces': ['น่าน'],
+        'districts': ['เมืองน่าน', 'เวียงสา', 'ท่าวังผา', 'ภูเพียง', 'สันติสุข', 'เชียงกลาง'],
+        'highway': '101',
+        'priority': 15,
+        'distance_from_dc_km': 620,
+        'description': 'น่านทุกอำเภอ'
+    },
+    # ============ พะเยา (sub-zones) ============
+    'ZONE_PYO1_พะเยา_เมือง': {
+        'provinces': ['พะเยา'],
+        'districts': ['เมืองพะเยา', 'แม่ใจ', 'ดอกคำใต้', 'ภูกามยาว'],
+        'highway': '1',
+        'priority': 16,
+        'distance_from_dc_km': 680,
+        'description': 'พะเยาเมือง'
+    },
+    'ZONE_PYO2_พะเยา_เหนือ': {
+        'provinces': ['พะเยา'],
+        'districts': ['เชียงคำ', 'ภูซาง', 'เชียงม่วน', 'ปง', 'จุน'],
+        'highway': '1',
+        'priority': 15,
+        'distance_from_dc_km': 720,
+        'description': 'พะเยาเหนือ'
+    },
+    # ============ ชัยภูมิ (sub-zones) ============
+    'ZONE_CPM1_ชัยภูมิ_เมือง': {
+        'provinces': ['ชัยภูมิ'],
+        'districts': ['เมืองชัยภูมิ', 'บ้านเขว้า', 'คอนสวรรค์'],
+        'highway': '2',
+        'priority': 32,
+        'distance_from_dc_km': 270,
+        'description': 'ชัยภูมิเมือง'
+    },
+    'ZONE_CPM2_ชัยภูมิ_เหนือ': {
+        'provinces': ['ชัยภูมิ'],
+        'districts': ['ภูเขียว', 'แก้งคร้อ', 'หนองบัวแดง', 'เกษตรสมบูรณ์', 'บ้านแท่น', 'ภักดีชุมพล'],
+        'highway': '2',
+        'priority': 31,
+        'distance_from_dc_km': 290,
+        'description': 'ชัยภูมิเหนือ'
+    },
+    'ZONE_CPM3_ชัยภูมิ_ใต้': {
+        'provinces': ['ชัยภูมิ'],
+        'districts': ['จัตุรัส', 'บำเหน็จณรงค์', 'เทพสถิต'],
+        'highway': '2',
+        'priority': 30,
+        'distance_from_dc_km': 300,
+        'description': 'ชัยภูมิใต้'
+    },
+    # ============ สุรินทร์ (sub-zones) ============
+    'ZONE_SRN1_สุรินทร์_เมือง': {
+        'provinces': ['สุรินทร์'],
+        'districts': ['เมืองสุรินทร์', 'ศีขรภูมิ', 'สำโรงทาบ'],
+        'highway': '226',
+        'priority': 26,
+        'distance_from_dc_km': 400,
+        'description': 'สุรินทร์เมือง'
+    },
+    'ZONE_SRN2_สุรินทร์_ใต้': {
+        'provinces': ['สุรินทร์'],
+        'districts': ['ปราสาท', 'สังขะ', 'กาบเชิง'],
+        'highway': '226',
+        'priority': 25,
+        'distance_from_dc_km': 420,
+        'description': 'สุรินทร์ใต้'
+    },
+    'ZONE_SRN3_สุรินทร์_เหนือ': {
+        'provinces': ['สุรินทร์'],
+        'districts': ['ท่าตูม', 'ชุมพลบุรี', 'รัตนบุรี', 'สนม', 'จอมพระ', 'ลำดวน'],
+        'highway': '226',
+        'priority': 24,
+        'distance_from_dc_km': 410,
+        'description': 'สุรินทร์เหนือ'
+    },
+    # ============ มหาสารคาม (sub-zones) ============
+    'ZONE_MSK1_มหาสารคาม_เมือง': {
+        'provinces': ['มหาสารคาม'],
+        'districts': ['เมืองมหาสารคาม', 'กันทรวิชัย', 'โกสุมพิสัย'],
+        'highway': '2',
+        'priority': 30,
+        'distance_from_dc_km': 440,
+        'description': 'มหาสารคามเมือง'
+    },
+    'ZONE_MSK2_มหาสารคาม_ใต้': {
+        'provinces': ['มหาสารคาม'],
+        'districts': ['พยัคฆภูมิพิสัย', 'วาปีปทุม', 'นาดูน', 'นาเชือก', 'ยางสีสุราช'],
+        'highway': '2',
+        'priority': 29,
+        'distance_from_dc_km': 460,
+        'description': 'มหาสารคามใต้'
+    },
+    'ZONE_MSK3_มหาสารคาม_เหนือ': {
+        'provinces': ['มหาสารคาม'],
+        'districts': ['เชียงยืน', 'บรบือ', 'แกดำ', 'กุดรัง'],
+        'highway': '2',
+        'priority': 29,
+        'distance_from_dc_km': 450,
+        'description': 'มหาสารคามเหนือ'
+    },
+    # ============ ร้อยเอ็ด (sub-zones) ============
+    'ZONE_ROI1_ร้อยเอ็ด_เมือง': {
+        'provinces': ['ร้อยเอ็ด'],
+        'districts': ['เมืองร้อยเอ็ด', 'ธวัชบุรี', 'จังหาร', 'จตุรพักตรพิมาน'],
+        'highway': '23',
+        'priority': 28,
+        'distance_from_dc_km': 490,
+        'description': 'ร้อยเอ็ดเมือง'
+    },
+    'ZONE_ROI2_ร้อยเอ็ด_ตะวันตก': {
+        'provinces': ['ร้อยเอ็ด'],
+        'districts': ['พนมไพร', 'เกษตรวิสัย', 'ปทุมรัตต์', 'โพนทอง'],
+        'highway': '23',
+        'priority': 27,
+        'distance_from_dc_km': 510,
+        'description': 'ร้อยเอ็ดตะวันตก'
+    },
+    'ZONE_ROI3_ร้อยเอ็ด_ตะวันออก': {
+        'provinces': ['ร้อยเอ็ด'],
+        'districts': ['สุวรรณภูมิ', 'เสลภูมิ', 'อาจสามารถ', 'โพธิ์ชัย', 'ทุ่งเขาหลวง'],
+        'highway': '23',
+        'priority': 26,
+        'distance_from_dc_km': 520,
+        'description': 'ร้อยเอ็ดตะวันออก'
+    },
+    # ============ ยโสธร (sub-zones) ============
+    'ZONE_YST1_ยโสธร_เมือง': {
+        'provinces': ['ยโสธร'],
+        'districts': ['เมืองยโสธร', 'คำเขื่อนแก้ว', 'มหาชนะชัย', 'ค้อวัง'],
+        'highway': '23',
+        'priority': 24,
+        'distance_from_dc_km': 510,
+        'description': 'ยโสธรเมือง'
+    },
+    'ZONE_YST2_ยโสธร_เหนือ': {
+        'provinces': ['ยโสธร'],
+        'districts': ['เลิงนกทา', 'กุดชุม', 'ไทยเจริญ', 'ป่าติ้ว'],
+        'highway': '23',
+        'priority': 23,
+        'distance_from_dc_km': 530,
+        'description': 'ยโสธรเหนือ'
+    },
+    # ============ ศรีสะเกษ (sub-zones) ============
+    'ZONE_SSK1_ศรีสะเกษ_เมือง': {
+        'provinces': ['ศรีสะเกษ'],
+        'districts': ['เมืองศรีสะเกษ', 'กันทรารมย์', 'ยางชุมน้อย', 'ราษีไศล', 'โนนคูณ'],
+        'highway': '226',
+        'priority': 24,
+        'distance_from_dc_km': 480,
+        'description': 'ศรีสะเกษเมือง'
+    },
+    'ZONE_SSK2_ศรีสะเกษ_ใต้': {
+        'provinces': ['ศรีสะเกษ'],
+        'districts': ['ขุขันธ์', 'ปรางค์กู่', 'ไพรบึง', 'ภูสิงห์'],
+        'highway': '226',
+        'priority': 23,
+        'distance_from_dc_km': 500,
+        'description': 'ศรีสะเกษใต้'
+    },
+    'ZONE_SSK3_ศรีสะเกษ_เหนือ': {
+        'provinces': ['ศรีสะเกษ'],
+        'districts': ['กันทรลักษ์', 'ขุนหาญ', 'อุทุมพรพิสัย', 'ห้วยทับทัน', 'ศรีรัตนะ'],
+        'highway': '226',
+        'priority': 22,
+        'distance_from_dc_km': 510,
+        'description': 'ศรีสะเกษเหนือ'
+    },
+    # ============ สกลนคร (sub-zones) ============
+    'ZONE_SNK1_สกลนคร_เมือง': {
+        'provinces': ['สกลนคร'],
+        'districts': ['เมืองสกลนคร', 'โพนนาแก้ว', 'กุสุมาลย์', 'โคกศรีสุพรรณ'],
+        'highway': '22',
+        'priority': 20,
+        'distance_from_dc_km': 550,
+        'description': 'สกลนครเมือง'
+    },
+    'ZONE_SNK2_สกลนคร_รอบนอก': {
+        'provinces': ['สกลนคร'],
+        'districts': ['สว่างแดนดิน', 'วานรนิวาส', 'พรรณานิคม', 'วาริชภูมิ', 'บ้านม่วง', 'คำตากล้า'],
+        'highway': '22',
+        'priority': 19,
+        'distance_from_dc_km': 580,
+        'description': 'สกลนครรอบนอก'
+    },
+    # ============ อำนาจเจริญ ============
+    'ZONE_AJN1_อำนาจเจริญ': {
+        'provinces': ['อำนาจเจริญ'],
+        'districts': ['เมืองอำนาจเจริญ', 'หัวตะพาน', 'ชานุมาน', 'พนา', 'เสนางคนิคม', 'ลืออำนาจ'],
+        'highway': '212',
+        'priority': 22,
+        'distance_from_dc_km': 520,
+        'description': 'อำนาจเจริญทุกอำเภอ'
+    },
+    # ============ มุกดาหาร ============
+    'ZONE_MKH1_มุกดาหาร': {
+        'provinces': ['มุกดาหาร'],
+        'districts': ['เมืองมุกดาหาร', 'คำชะอี', 'ดงหลวง', 'หนองสูง', 'หว้านใหญ่', 'ดอนตาล'],
+        'highway': '212',
+        'priority': 20,
+        'distance_from_dc_km': 540,
+        'description': 'มุกดาหารทุกอำเภอ'
+    },
+    # ============ นครพนม ============
+    'ZONE_NPN1_นครพนม': {
+        'provinces': ['นครพนม'],
+        'districts': ['เมืองนครพนม', 'ธาตุพนม', 'ท่าอุเทน', 'ปลาปาก', 'นาแก', 'ศรีสงคราม', 'นาหว้า', 'วังยาง', 'บ้านแพง', 'นาทม'],
+        'highway': '22',
+        'priority': 19,
+        'distance_from_dc_km': 570,
+        'description': 'นครพนมทุกอำเภอ'
+    },
+    # ============ บึงกาฬ (sub-zones) ============
+    'ZONE_BKN1_บึงกาฬ_เมือง': {
+        'provinces': ['บึงกาฬ'],
+        'districts': ['เมืองบึงกาฬ', 'ปากคาด', 'พรเจริญ', 'บุ่งคล้า'],
+        'highway': '212',
+        'priority': 18,
+        'distance_from_dc_km': 590,
+        'description': 'บึงกาฬเมือง'
+    },
+    'ZONE_BKN2_บึงกาฬ_ตะวันออก': {
+        'provinces': ['บึงกาฬ'],
+        'districts': ['เซกา', 'บึงโขงหลง', 'โซ่พิสัย', 'ศรีวิไล'],
+        'highway': '212',
+        'priority': 17,
+        'distance_from_dc_km': 610,
+        'description': 'บึงกาฬตะวันออก'
+    },
+    # ============ หนองคาย ============
+    'ZONE_NKI1_หนองคาย': {
+        'provinces': ['หนองคาย'],
+        'districts': ['เมืองหนองคาย', 'ศรีเชียงใหม่', 'ท่าบ่อ', 'โพนพิสัย', 'สังคม', 'เฝ้าไร่', 'โพธิ์ตาก', 'รัตนวาปี'],
+        'highway': '2',
+        'priority': 18,
+        'distance_from_dc_km': 600,
+        'description': 'หนองคายทุกอำเภอ'
+    },
+    # ============ หนองบัวลำภู ============
+    'ZONE_NBL1_หนองบัวลำภู': {
+        'provinces': ['หนองบัวลำภู'],
+        'districts': ['เมืองหนองบัวลำภู', 'โนนสัง', 'ศรีบุญเรือง', 'นากลาง', 'สุวรรณคูหา', 'นาวัง'],
+        'highway': '210',
+        'priority': 22,
+        'distance_from_dc_km': 490,
+        'description': 'หนองบัวลำภูทุกอำเภอ'
+    },
+    # ============ เลย ============
+    'ZONE_LEI1_เลย': {
+        'provinces': ['เลย'],
+        'districts': ['เมืองเลย', 'นาด้วง', 'ท่าลี่', 'เชียงคาน', 'ปากชม', 'ด่านซ้าย', 'วังสะพุง', 'ภูกระดึง', 'ภูเรือ', 'ภูหลวง'],
+        'highway': '21',
+        'priority': 21,
+        'distance_from_dc_km': 520,
+        'description': 'เลยทุกอำเภอ'
+    },
+    # ============ กาฬสินธุ์ (sub-zones) ============
+    'ZONE_KSN1_กาฬสินธุ์_ใต้': {
+        'provinces': ['กาฬสินธุ์'],
+        'districts': ['เมืองกาฬสินธุ์', 'กมลาไสย', 'ร่องคำ', 'ฆ้องชัย', 'ยางตลาด'],
+        'highway': '12',
+        'priority': 27,
+        'distance_from_dc_km': 510,
+        'description': 'กาฬสินธุ์ใต้'
+    },
+    'ZONE_KSN2_กาฬสินธุ์_เหนือ': {
+        'provinces': ['กาฬสินธุ์'],
+        'districts': ['สมเด็จ', 'สหัสขันธ์', 'คำม่วง', 'กุฉินารายณ์', 'เขาวง', 'นาคู', 'สามชัย'],
+        'highway': '12',
+        'priority': 26,
+        'distance_from_dc_km': 530,
+        'description': 'กาฬสินธุ์เหนือ'
+    },
+    'ZONE_KSN3_กาฬสินธุ์_ตะวันตก': {
+        'provinces': ['กาฬสินธุ์'],
+        'districts': ['ท่าคันโท', 'ห้วยเม็ก', 'ห้วยผึ้ง', 'นามน', 'ดอนจาน'],
+        'highway': '12',
+        'priority': 25,
+        'distance_from_dc_km': 520,
+        'description': 'กาฬสินธุ์ตะวันตก'
+    },
+    # ============ จันทบุรี (sub-zones) ============
+    'ZONE_CTB1_จันทบุรี_เมือง': {
+        'provinces': ['จันทบุรี'],
+        'districts': ['เมืองจันทบุรี', 'ท่าใหม่', 'มะขาม', 'แหลมสิงห์', 'นายายอาม'],
+        'highway': '3',
+        'priority': 55,
+        'distance_from_dc_km': 280,
+        'description': 'จันทบุรีเมือง'
+    },
+    'ZONE_CTB2_จันทบุรี_ตะวันออก': {
+        'provinces': ['จันทบุรี'],
+        'districts': ['สอยดาว', 'ขลุง', 'โป่งน้ำร้อน', 'เขาคิชฌกูฏ'],
+        'highway': '317',
+        'priority': 54,
+        'distance_from_dc_km': 310,
+        'description': 'จันทบุรีตะวันออก'
+    },
+    # ============ ตราด ============
+    'ZONE_TRT1_ตราด': {
+        'provinces': ['ตราด'],
+        'districts': ['เมืองตราด', 'คลองใหญ่', 'เขาสมิง', 'บ่อไร่', 'แหลมงอบ'],
+        'highway': '3',
+        'priority': 53,
+        'distance_from_dc_km': 350,
+        'description': 'ตราดทุกอำเภอ'
+    },
+    # ============ ประจวบคีรีขันธ์ (sub-zones) ============
+    'ZONE_PKK1_ประจวบ_เหนือ': {
+        'provinces': ['ประจวบคีรีขันธ์'],
+        'districts': ['หัวหิน', 'ปราณบุรี', 'สามร้อยยอด', 'กุยบุรี'],
+        'highway': '4',
+        'priority': 63,
+        'distance_from_dc_km': 200,
+        'description': 'ประจวบเหนือ หัวหิน'
+    },
+    'ZONE_PKK2_ประจวบ_เมือง': {
+        'provinces': ['ประจวบคีรีขันธ์'],
+        'districts': ['เมืองประจวบคีรีขันธ์'],
+        'highway': '4',
+        'priority': 62,
+        'distance_from_dc_km': 230,
+        'description': 'ประจวบเมือง'
+    },
+    'ZONE_PKK3_ประจวบ_ใต้': {
+        'provinces': ['ประจวบคีรีขันธ์'],
+        'districts': ['ทับสะแก', 'บางสะพานน้อย', 'บางสะพาน'],
+        'highway': '4',
+        'priority': 61,
+        'distance_from_dc_km': 260,
+        'description': 'ประจวบใต้'
+    },
+    # ============ สุราษฎร์ธานี (sub-zones) ============
+    'ZONE_STN1_สุราษฎร์_เมือง': {
+        'provinces': ['สุราษฎร์ธานี'],
+        'districts': ['เมืองสุราษฎร์ธานี', 'พุนพิน', 'กาญจนดิษฐ์'],
+        'highway': '4',
+        'priority': 56,
+        'distance_from_dc_km': 500,
+        'description': 'สุราษฎร์ธานีเมือง'
+    },
+    'ZONE_STN2_สุราษฎร์_เหนือ': {
+        'provinces': ['สุราษฎร์ธานี'],
+        'districts': ['ไชยา', 'ท่าชนะ', 'ท่าฉาง', 'คีรีรัฐนิคม'],
+        'highway': '4',
+        'priority': 55,
+        'distance_from_dc_km': 480,
+        'description': 'สุราษฎร์ธานีเหนือ'
+    },
+    'ZONE_STN3_สุราษฎร์_ใต้': {
+        'provinces': ['สุราษฎร์ธานี'],
+        'districts': ['เวียงสระ', 'บ้านนาสาร', 'บ้านนาเดิม', 'เคียนซา', 'บ้านตาขุน'],
+        'highway': '4',
+        'priority': 54,
+        'distance_from_dc_km': 520,
+        'description': 'สุราษฎร์ธานีใต้'
+    },
+    'ZONE_STN4_เกาะสมุย': {
+        'provinces': ['สุราษฎร์ธานี'],
+        'districts': ['เกาะสมุย', 'เกาะพงัน'],
+        'highway': '4',
+        'priority': 53,
+        'distance_from_dc_km': 550,
+        'description': 'เกาะสมุย เกาะพงัน'
+    },
+    # ============ นครศรีธรรมราช (sub-zones) ============
+    'ZONE_NRT1_นครศรีฯ_เมือง': {
+        'provinces': ['นครศรีธรรมราช'],
+        'districts': ['เมืองนครศรีธรรมราช', 'พรหมคีรี', 'ท่าศาลา', 'นบพิตำ'],
+        'highway': '4',
+        'priority': 52,
+        'distance_from_dc_km': 560,
+        'description': 'นครศรีธรรมราชเมือง'
+    },
+    'ZONE_NRT2_นครศรีฯ_เหนือ': {
+        'provinces': ['นครศรีธรรมราช'],
+        'districts': ['ทุ่งสง', 'ฉวาง', 'พิปูน', 'ช้างกลาง', 'นาบอน'],
+        'highway': '4',
+        'priority': 51,
+        'distance_from_dc_km': 580,
+        'description': 'นครศรีธรรมราชเหนือ'
+    },
+    'ZONE_NRT3_นครศรีฯ_ใต้': {
+        'provinces': ['นครศรีธรรมราช'],
+        'districts': ['ชะอวด', 'ร่อนพิบูลย์', 'หัวไทร', 'เฉลิมพระเกียรติ', 'จุฬาภรณ์', 'บางขัน'],
+        'highway': '4',
+        'priority': 50,
+        'distance_from_dc_km': 600,
+        'description': 'นครศรีธรรมราชใต้'
+    },
+    # ============ สงขลา (sub-zones) ============
+    'ZONE_SKL1_สงขลา_หาดใหญ่': {
+        'provinces': ['สงขลา'],
+        'districts': ['หาดใหญ่', 'สะเดา', 'คลองหอยโข่ง', 'นาหม่อม', 'บางกล่ำ'],
+        'highway': '4',
+        'priority': 47,
+        'distance_from_dc_km': 680,
+        'description': 'สงขลาหาดใหญ่'
+    },
+    'ZONE_SKL2_สงขลา_เมือง': {
+        'provinces': ['สงขลา'],
+        'districts': ['เมืองสงขลา', 'สิงหนคร', 'ควนเนียง'],
+        'highway': '4',
+        'priority': 46,
+        'distance_from_dc_km': 700,
+        'description': 'สงขลาเมือง'
+    },
+    'ZONE_SKL3_สงขลา_เหนือ': {
+        'provinces': ['สงขลา'],
+        'districts': ['ระโนด', 'สทิงพระ', 'กระแสสินธุ์', 'รัตภูมิ', 'นาทวี', 'เทพา', 'จะนะ'],
+        'highway': '4',
+        'priority': 45,
+        'distance_from_dc_km': 660,
+        'description': 'สงขลาเหนือ'
+    },
+    # ============ พัทลุง (sub-zones) ============
+    'ZONE_PTL1_พัทลุง_เมือง': {
+        'provinces': ['พัทลุง'],
+        'districts': ['เมืองพัทลุง', 'ควนขนุน', 'เขาชัยสน', 'บางแก้ว', 'ศรีนครินทร์'],
+        'highway': '4',
+        'priority': 48,
+        'distance_from_dc_km': 640,
+        'description': 'พัทลุงเมือง'
+    },
+    'ZONE_PTL2_พัทลุง_รอบนอก': {
+        'provinces': ['พัทลุง'],
+        'districts': ['ป่าบอน', 'ตะโหมด', 'ป่าพะยอม', 'ปากพะยูน', 'กงหรา'],
+        'highway': '4',
+        'priority': 47,
+        'distance_from_dc_km': 660,
+        'description': 'พัทลุงรอบนอก'
+    },
+    # ============ กระบี่ (sub-zones) ============
+    'ZONE_KBI1_กระบี่_เมือง': {
+        'provinces': ['กระบี่'],
+        'districts': ['เมืองกระบี่', 'อ่าวลึก', 'ปลายพระยา'],
+        'highway': '4',
+        'priority': 44,
+        'distance_from_dc_km': 750,
+        'description': 'กระบี่เมือง'
+    },
+    'ZONE_KBI2_กระบี่_เกาะ': {
+        'provinces': ['กระบี่'],
+        'districts': ['เกาะลันตา', 'คลองท่อม', 'ลำทับ'],
+        'highway': '4',
+        'priority': 43,
+        'distance_from_dc_km': 780,
+        'description': 'กระบี่เกาะลันตา'
+    },
+    # ============ ตรัง ============
+    'ZONE_TRG1_ตรัง': {
+        'provinces': ['ตรัง'],
+        'districts': ['เมืองตรัง', 'กันตัง', 'ปะเหลียน', 'ห้วยยอด', 'วังวิเศษ', 'รัษฎา', 'สิเกา', 'ย่านตาขาว', 'นาโยง', 'หาดสำราญ'],
+        'highway': '4',
+        'priority': 46,
+        'distance_from_dc_km': 720,
+        'description': 'ตรังทุกอำเภอ'
+    },
+    # ============ พังงา ============
+    'ZONE_PNG1_พังงา': {
+        'provinces': ['พังงา'],
+        'districts': ['เมืองพังงา', 'ตะกั่วทุ่ง', 'ตะกั่วป่า', 'คุระบุรี', 'กะปง', 'ทับปุด', 'ท้ายเหมือง'],
+        'highway': '4',
+        'priority': 44,
+        'distance_from_dc_km': 730,
+        'description': 'พังงาทุกอำเภอ'
+    },
+    # ============ ภูเก็ต ============
+    'ZONE_PKT1_ภูเก็ต': {
+        'provinces': ['ภูเก็ต'],
+        'districts': ['เมืองภูเก็ต', 'ถลาง', 'กะทู้'],
+        'highway': '402',
+        'priority': 43,
+        'distance_from_dc_km': 850,
+        'description': 'ภูเก็ตทุกอำเภอ'
+    },
+    # ============ ระนอง ============
+    'ZONE_RNG1_ระนอง': {
+        'provinces': ['ระนอง'],
+        'districts': ['เมืองระนอง', 'กระบุรี', 'สุขสำราญ', 'ละอุ่น', 'กะเปอร์'],
+        'highway': '4',
+        'priority': 42,
+        'distance_from_dc_km': 700,
+        'description': 'ระนองทุกอำเภอ'
+    },
+    # ============ สตูล ============
+    'ZONE_STL1_สตูล': {
+        'provinces': ['สตูล'],
+        'districts': ['เมืองสตูล', 'ควนโดน', 'ควนกาหลง', 'ท่าแพ', 'ละงู', 'ทุ่งหว้า', 'มะนัง'],
+        'highway': '4',
+        'priority': 44,
+        'distance_from_dc_km': 800,
+        'description': 'สตูลทุกอำเภอ'
+    },
 }
 
 # ==========================================
