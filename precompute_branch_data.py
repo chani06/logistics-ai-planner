@@ -491,13 +491,9 @@ def build_branch_groups(branch_data, max_km=0.5):
     """
     สร้าง branch_groups.json ตามหลักการขนส่งจริง:
 
-    Step 1 — จัดกลุ่มตาม ตำบล (subdistrict) เป็นหลัก
-             สาขาในตำบลเดียวกัน → กลุ่มเดียวกันเสมอ
-
-    Step 2 — ตำบลที่มีสาขาเดียว (Singleton) → รวมกับตำบลอื่น
-             ในอำเภอเดียวกันที่ใกล้ที่สุด (haversine centroid)
-
-    Step 3 — กลุ่มที่มี ≥2 สาขา → ได้ Group ID
+    กฎ: สาขาในตำบลเดียวกัน → กลุ่มเดียวกันเสมอ ไม่มีข้อยกเว้น
+        สาขาเดี่ยว (Singleton ตำบลที่มีสาขาเดียว) → ไม่มีกลุ่ม
+        กลุ่มที่มี ≥2 สาขา → ได้ Group ID
     """
     import math
     from collections import defaultdict as _dd
@@ -557,51 +553,8 @@ def build_branch_groups(branch_data, max_km=0.5):
             union(idxs[0], idxs[k])
 
     # ── Step 2: Singleton merging — ตำบลที่มีสาขาเดียว ──
-    # คำนวณ centroid ของแต่ละ sub_key
-    def centroid(idxs):
-        lats = [branches[i]['lat'] for i in idxs]
-        lons = [branches[i]['lon'] for i in idxs]
-        return sum(lats)/len(lats), sum(lons)/len(lons)
-
-    # จัดกลุ่มตาม (province, district) เพื่อหา singleton ในอำเภอเดียวกัน
-    dist_subs = _dd(list)  # (province, district) → [sub_key]
-    for sk, idxs in sub_groups.items():
-        p, d, _ = sk
-        dist_subs[(p, d)].append(sk)
-
-    merged = 0
-    for (p, d), sks in dist_subs.items():
-        if len(sks) < 2:
-            continue   # อำเภอนี้มีแค่ตำบลเดียว ไม่มีอะไรให้รวม
-        singletons = [sk for sk in sks if len(sub_groups[sk]) == 1]
-        non_singletons = [sk for sk in sks if len(sub_groups[sk]) > 1]
-
-        if not singletons:
-            continue
-
-        # คำนวณ centroid ของทุก sub_key ในอำเภอนี้
-        centroids = {sk: centroid(sub_groups[sk]) for sk in sks}
-
-        for sk_s in singletons:
-            clat, clon = centroids[sk_s]
-            # หา sub_key ที่ใกล้ที่สุดที่ไม่ใช่ตัวเอง
-            best_sk = None
-            best_d  = float('inf')
-            for sk_t in sks:
-                if sk_t == sk_s:
-                    continue
-                tlat, tlon = centroids[sk_t]
-                d_hav = haversine(clat, clon, tlat, tlon)
-                if d_hav < best_d:
-                    best_d  = d_hav
-                    best_sk = sk_t
-            if best_sk is not None:
-                union(sub_groups[sk_s][0], sub_groups[best_sk][0])
-                merged += 1
-
-    print(f"   Singleton merges: {merged}")
-
-    # ── Step 3: สร้าง Group ID ──
+    # ── Step 2: สร้าง Group ID — เฉพาะตำบลที่มี ≥2 สาขา ──
+    # สาขาเดี่ยว (Singleton) ไม่มีกลุ่ม → ปล่อยให้ greedy จัด zone ตามปกติ
     groups_raw = _dd(list)
     for i, b in enumerate(branches):
         groups_raw[find(i)].append(b['code'])
