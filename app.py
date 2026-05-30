@@ -4465,12 +4465,11 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
             filter_level = ""
 
             # ─────────────────────────────────────────────────────────────────
-            # 🗺️ Zone-Exhaustion Candidate Selection (แทน epidemic)
+            # 🗺️ ไล่จากตำบล → อำเภอ → จังหวัด ไม่กระโดดไกล
             #
-            # หลักการขนส่งจริง:
-            #   Level 1: ตำบลเดียวกัน  → ดึงเข้าก่อน ไม่มี distance cap
-            #   Level 2: อำเภอเดียวกัน → ดึงถ้าอยู่ใน _DIST_CAP_KM จาก centroid
-            #   Level 3: logistics_zone/จังหวัดเดียวกัน → ดึงถ้าอยู่ใน _ZONE_CAP_KM
+            #   Level 1: ตำบลเดียวกัน (ไม่มี distance cap)
+            #   Level 2: อำเภอเดียวกัน ≤ _DIST_CAP_KM จากสาขาใดในทริป
+            #   Level 3: จังหวัดเดียวกัน ≤ _PROV_CAP_KM จากสาขาใดในทริป
             #   ปิดทริปถ้าไม่มี candidate ผ่านทั้ง 3 ระดับ
             # ─────────────────────────────────────────────────────────────────
             _is_bkk_metro = (
@@ -4478,13 +4477,13 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 str(trip_logistics_zone or '').startswith('ZONE_NEARBY_') or
                 trip_original_province == 'กรุงเทพมหานคร'
             )
-            _DIST_CAP_KM = 15 if _is_bkk_metro else 30   # อำเภอเดียวกัน: BKK 15km, ต่างจังหวัด 30km
-            _ZONE_CAP_KM = 20 if _is_bkk_metro else 50   # โซนเดียวกัน: BKK 20km, ต่างจังหวัด 50km
+            _DIST_CAP_KM = 15 if _is_bkk_metro else 30   # อำเภอ: BKK 15km, ต่างจังหวัด 30km
+            _PROV_CAP_KM = 20 if _is_bkk_metro else 40   # จังหวัด: BKK 20km, ต่างจังหวัด 40km
 
             same_zone_df = None
             filter_level  = ""
 
-            # คำนวณ centroid ของทริปปัจจุบัน
+            # คำนวณพิกัดทริปปัจจุบัน
             _trip_coords_reach = []
             for _tc in trip_codes:
                 _tr = df[df['Code'] == _tc]
@@ -4494,13 +4493,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                     if _tlat > 0 and _tlon > 0:
                         _trip_coords_reach.append((_tlat, _tlon))
 
-            _c_lats = [lt for lt, _ in _trip_coords_reach]
-            _c_lons = [ln for _, ln in _trip_coords_reach]
-            _centroid_lat = sum(_c_lats) / len(_c_lats) if _c_lats else 0.0
-            _centroid_lon = sum(_c_lons) / len(_c_lons) if _c_lons else 0.0
-
             def _min_dist_to_trip(rlat, rlon):
-                """ระยะทางใกล้สุดจากพิกัดที่ให้มาถึงสาขาใดก็ได้ในทริป"""
                 if not _trip_coords_reach or rlat <= 0 or rlon <= 0:
                     return 999.0
                 return min(haversine_distance(rlat, rlon, tlat, tlon, use_osrm_cache=False)
@@ -4520,7 +4513,6 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
             if same_zone_df is None and trip_districts:
                 _l2 = remaining_df[remaining_df['_district'].isin(trip_districts)].copy()
                 if not _l2.empty:
-                    # กรองระยะ
                     _l2['_d2trip'] = _l2.apply(
                         lambda r: _min_dist_to_trip(float(r.get('_lat',0) or 0),
                                                     float(r.get('_lon',0) or 0)), axis=1)
@@ -4529,41 +4521,24 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                         same_zone_df = _l2
                         filter_level = f"same-district({_DIST_CAP_KM}km)"
 
-            # ── Level 3: logistics_zone/จังหวัดเดียวกัน ≤ _ZONE_CAP_KM ──
-            if same_zone_df is None:
+            # ── Level 3: จังหวัดเดียวกัน ≤ _PROV_CAP_KM ──
+            if same_zone_df is None and trip_original_province:
                 _BKK = 'กรุงเทพมหานคร'
-                def _zone3_filter(r):
-                    _rp = str(r.get('_province','') or '')
-                    _rz = str(r.get('_logistics_zone','') or '')
-                    _rr = get_region_name(_rp) if _rp else ''
-                    # BKK isolation
-                    if (_rp == _BKK) != (trip_original_province == _BKK):
-                        return False
-                    # ภาคต้องตรง
-                    if (trip_original_region and trip_original_region not in ('','ไม่ระบุ') and
-                            _rr and _rr not in ('','ไม่ระบุ') and _rr != trip_original_region):
-                        return False
-                    # zone ย่อย: ต้องตรงกัน
-                    if zone_is_specific(trip_logistics_zone) or zone_is_specific(_rz):
-                        return _rz == trip_logistics_zone
-                    # ไม่มี specific zone → จังหวัดเดียวกัน หรือ paired
-                    if trip_original_province and _rp:
-                        return (_rp == trip_original_province or
-                                _provinces_are_paired(_rp, trip_original_province))
-                    return True
-
-                _l3 = remaining_df[remaining_df.apply(_zone3_filter, axis=1)].copy()
+                _l3 = remaining_df[
+                    (remaining_df['_province'] == trip_original_province) &
+                    ~((remaining_df['_province'] == _BKK) ^ (trip_original_province == _BKK))
+                ].copy()
                 if not _l3.empty:
                     _l3['_d2trip'] = _l3.apply(
                         lambda r: _min_dist_to_trip(float(r.get('_lat',0) or 0),
                                                     float(r.get('_lon',0) or 0)), axis=1)
-                    _l3 = _l3[_l3['_d2trip'] <= _ZONE_CAP_KM]
+                    _l3 = _l3[_l3['_d2trip'] <= _PROV_CAP_KM]
                     if not _l3.empty:
                         same_zone_df = _l3
-                        filter_level = f"same-zone({_ZONE_CAP_KM}km)"
+                        filter_level = f"same-province({_PROV_CAP_KM}km)"
 
             if same_zone_df is None:
-                safe_print(f"      🛑 Zone หมด #{trip_counter}: ไม่มี candidate ในโซน/อำเภอ/ตำบลเดิม ({len(trip_codes)} สาขา) → ปิดทริป")
+                safe_print(f"      🛑 หมดพื้นที่ #{trip_counter}: ไม่มี candidate ในตำบล/อำเภอ/จังหวัดเดิม ({len(trip_codes)} สาขา) → ปิดทริป")
                 break
 
             # ─── กรองภาค (ล็อคถ้าไม่รู้ภาค) ────────────────────────────────
