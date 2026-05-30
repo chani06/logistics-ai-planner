@@ -5482,7 +5482,9 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 _ep_is_same_area = (
                     (_last_trip_subdistricts and _ep_sub_pre and _ep_sub_pre in _last_trip_subdistricts) or
                     (_last_trip_districts    and _ep_dis_pre and _ep_dis_pre in _last_trip_districts) or
-                    (_last_trip_logistics_zone and _ep_zone_pre and _ep_zone_pre == _last_trip_logistics_zone)
+                    (_last_trip_logistics_zone and str(_last_trip_logistics_zone).strip() and
+                     _ep_zone_pre and str(_ep_zone_pre).strip() and
+                     _ep_zone_pre == _last_trip_logistics_zone)
                 )
                 if not _ep_is_same_area and _epd > _EPIDEMIC_NEXT_KM:
                     continue
@@ -5762,7 +5764,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
 
             # ── Level 1: logistics_zone เดียวกัน (โซนย่อยตามแผนที่จริง) ──
             # ไม่มี distance cap — ทุกสาขาในโซนเดียวกันต้องจัดให้หมดก่อนข้ามโซน
-            if trip_logistics_zone:
+            if trip_logistics_zone and str(trip_logistics_zone).strip():
                 _l1 = remaining_df[
                     remaining_df['_logistics_zone'] == trip_logistics_zone
                 ].copy()
@@ -6192,9 +6194,13 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 # 🎯 อัพเดตตำบล/อำเภอของทริป (เพิ่มสาขาใหม่)
                 cand_subdistrict = candidate_row.get('_subdistrict', '')
                 cand_district = candidate_row.get('_district', '')
-                if cand_subdistrict:
+                cand_zone_check = str(candidate_row.get('_logistics_zone', '') or '')
+                # Only expand trip area if same logistics_zone (prevent district drift)
+                _same_zone_cand = (not trip_logistics_zone or not cand_zone_check or
+                                   cand_zone_check == trip_logistics_zone)
+                if cand_subdistrict and _same_zone_cand:
                     trip_subdistricts.add(cand_subdistrict)
-                if cand_district:
+                if cand_district and _same_zone_cand:
                     trip_districts.add(cand_district)
                 
                 # 🔒 ล็อคภาค: ถ้า trip_original_region ยังไม่รู้ → ล็อคจาก candidate แรกที่รู้จักภาค
@@ -6630,12 +6636,12 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                         if _tw <= _lim2['max_w']*_ts['buf'] and _tc <= _lim2['max_c']*_ts['buf']:
                             _vok = _v; break
                     if not _vok: continue
-                    # priority: 0=ตำบลเดียวกัน, 1=อำเภอ, 2=zone, 3=จังหวัด, 4=อื่น
-                    if _usub  and _usub  in _ts.get('subdists', set()): _zprio = 0
-                    elif _udist and _udist in _ts.get('dists',    set()): _zprio = 1
-                    elif _uzone and _uzone in _ts.get('zones',    set()): _zprio = 2
-                    elif _uprov and _uprov == _ts['prov']:                _zprio = 3
-                    else:                                                  _zprio = 4
+                    # priority: 0=zone เดียวกัน (สูงสุด), 1=ตำบล, 2=อำเภอ, 3=จังหวัด, 4=อื่น
+                    if _uzone and _ts.get('zones') and _uzone in _ts['zones']:   _zprio = 0
+                    elif _usub  and _usub  in _ts.get('subdists', set()):         _zprio = 1
+                    elif _udist and _udist in _ts.get('dists',    set()):         _zprio = 2
+                    elif _uprov and _uprov == _ts['prov']:                        _zprio = 3
+                    else:                                                          _zprio = 4
                     _gap = _ts['max_w'] - _tw
                     if (_zprio, _gap) < (_best_zprio, _best_gap):
                         _best_zprio = _zprio; _best_gap = _gap; _best_t = _ft
@@ -8556,6 +8562,14 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 if _mt == _target_t:
                     continue
                 _fl_i = _fl_code_idx.get(_mu)
+                # Zone compatibility check before moving
+                _mu_zone = str(df.at[_fl_i, '_logistics_zone'] if _fl_i is not None else '').strip()
+                _tgt_rows = df[df['Trip'] == _target_t]
+                _tgt_zones = set(_tgt_rows['_logistics_zone'].dropna().astype(str).str.strip().unique()) if not _tgt_rows.empty else set()
+                _tgt_zones.discard('')
+                if _mu_zone and _tgt_zones and _mu_zone not in _tgt_zones:
+                    safe_print(f"   ⚠️ FINAL LOCK skip: {_mu} zone {_mu_zone} ≠ target trip {_target_t} zones {_tgt_zones}")
+                    continue
                 if _fl_i is not None:
                     df.at[_fl_i, 'Trip'] = _target_t
                 else:
