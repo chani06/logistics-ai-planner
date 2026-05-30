@@ -4465,11 +4465,12 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
             filter_level = ""
 
             # ─────────────────────────────────────────────────────────────────
-            # 🗺️ ไล่จากตำบล → อำเภอ → จังหวัด ไม่กระโดดไกล
+            # 🗺️ Zone-Exhaustion ตามแผนที่จริง (LOGISTICS_ZONES sub-zone)
             #
-            #   Level 1: ตำบลเดียวกัน (ไม่มี distance cap)
-            #   Level 2: อำเภอเดียวกัน ≤ _DIST_CAP_KM จากสาขาใดในทริป
-            #   Level 3: จังหวัดเดียวกัน ≤ _PROV_CAP_KM จากสาขาใดในทริป
+            #   Level 1: logistics_zone เดียวกัน (โซนย่อยตามแผนที่) — ไม่มี distance cap
+            #            ภายใน zone เรียง: ตำบลเดียวกัน → อำเภอเดียวกัน → ทั้งโซน
+            #   Level 2: อำเภอเดียวกัน ≤ _DIST_CAP_KM (กรณีไม่มี specific zone)
+            #   Level 3: จังหวัดเดียวกัน ≤ _PROV_CAP_KM
             #   ปิดทริปถ้าไม่มี candidate ผ่านทั้ง 3 ระดับ
             # ─────────────────────────────────────────────────────────────────
             _is_bkk_metro = (
@@ -4477,8 +4478,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 str(trip_logistics_zone or '').startswith('ZONE_NEARBY_') or
                 trip_original_province == 'กรุงเทพมหานคร'
             )
-            _DIST_CAP_KM = 15 if _is_bkk_metro else 30   # อำเภอ: BKK 15km, ต่างจังหวัด 30km
-            _PROV_CAP_KM = 20 if _is_bkk_metro else 40   # จังหวัด: BKK 20km, ต่างจังหวัด 40km
+            _DIST_CAP_KM = 15 if _is_bkk_metro else 30
+            _PROV_CAP_KM = 20 if _is_bkk_metro else 40
 
             same_zone_df = None
             filter_level  = ""
@@ -4499,15 +4500,15 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 return min(haversine_distance(rlat, rlon, tlat, tlon, use_osrm_cache=False)
                            for tlat, tlon in _trip_coords_reach)
 
-            # ── Level 1: ตำบลเดียวกัน (ไม่มี distance cap) ──
-            if trip_subdistricts:
+            # ── Level 1: logistics_zone เดียวกัน (โซนย่อยตามแผนที่จริง) ──
+            # ไม่มี distance cap — ทุกสาขาในโซนเดียวกันต้องจัดให้หมดก่อนข้ามโซน
+            if trip_logistics_zone:
                 _l1 = remaining_df[
-                    remaining_df['_subdistrict'].isin(trip_subdistricts) &
-                    (remaining_df['_district'].isin(trip_districts) if trip_districts else True)
+                    remaining_df['_logistics_zone'] == trip_logistics_zone
                 ].copy()
                 if not _l1.empty:
                     same_zone_df = _l1
-                    filter_level = "same-subdistrict"
+                    filter_level = f"same-zone[{trip_logistics_zone}]"
 
             # ── Level 2: อำเภอเดียวกัน ≤ _DIST_CAP_KM ──
             if same_zone_df is None and trip_districts:
@@ -4538,7 +4539,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                         filter_level = f"same-province({_PROV_CAP_KM}km)"
 
             if same_zone_df is None:
-                safe_print(f"      🛑 หมดพื้นที่ #{trip_counter}: ไม่มี candidate ในตำบล/อำเภอ/จังหวัดเดิม ({len(trip_codes)} สาขา) → ปิดทริป")
+                safe_print(f"      🛑 หมดโซน #{trip_counter}: [{trip_logistics_zone}] ({len(trip_codes)} สาขา) → ปิดทริป")
                 break
 
             # ─── กรองภาค (ล็อคถ้าไม่รู้ภาค) ────────────────────────────────
