@@ -1,6 +1,7 @@
 [server]
 enableStaticServing = true
 port = 8501
+address = "0.0.0.0"
 
 [browser]
 gatherUsageStats = false
@@ -10,7 +11,8 @@ magicEnabled = false
 
 [theme]
 base = "light"
-backgroundColor = "#f0f4f8"
+backgroundColor = "#f1f4f9"
 secondaryBackgroundColor = "#ffffff"
-textColor = "#0f172a"
+textColor = "#1a2332"
 primaryColor = "#059669"
+font = "sans serif"

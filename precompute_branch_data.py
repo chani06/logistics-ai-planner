@@ -500,7 +500,7 @@ def build_branch_groups(branch_data, max_km=0.5):
     กฎ:
       1. สาขาที่มี base code เดียวกัน (S001 + ZS001) → กลุ่มเดียวกันเสมอ
          (ต่าง BU แต่ที่เดียวกัน ต้องไปด้วยกัน)
-      2. สาขาที่อยู่ใกล้กัน ≤ max_km (haversine) → กลุ่มเดียวกัน
+      2. สาขาที่อยู่ใกล้กัน ≤ max_km (road distance จาก OSRM) → กลุ่มเดียวกัน
       3. กลุ่มที่มี ≥2 สาขา → ได้ Group ID
     """
     from collections import defaultdict as _dd
@@ -518,6 +518,7 @@ def build_branch_groups(branch_data, max_km=0.5):
                     'base_code': _base_code(str(code)),
                     'lat':       lat,
                     'lon':       lon,
+                    'province':  str(b.get('จังหวัด', '') or '').strip(),
                 })
         except Exception:
             continue
@@ -537,45 +538,173 @@ def build_branch_groups(branch_data, max_km=0.5):
         if px != py:
             parent[px] = py
 
-    # ── Step 1: same base code → กลุ่มเดียวกัน ──
+    # ── Step 1: same base code + จังหวัดเดียวกัน + ระยะทาง ≤ 5km → กลุ่มเดียวกัน ──
+    # (ก่อนหน้าไม่เช็คจังหวัด/ระยะทาง ทำให้สาขา ZS787 พิกัดผิดลาก S787 มารวม)
     base_idx: dict = _dd(list)
     for i, b in enumerate(branches):
         base_idx[b['base_code']].append(i)
     same_base = 0
+    same_base_skip = 0
+    MAX_BASE_KM = 10.0  # ไม่ควรเกิน 10km (ข้อผิดพลาด GPS หรือพิกัดผิด)
     for idxs in base_idx.values():
-        if len(idxs) >= 2:
-            for k in range(1, len(idxs)):
-                union(idxs[0], idxs[k])
-            same_base += 1
-    print(f"   Same-base-code groups: {same_base}")
+        if len(idxs) < 2:
+            continue
+        for a in range(len(idxs)):
+            ba = branches[idxs[a]]
+            for b_idx in range(a + 1, len(idxs)):
+                bb = branches[idxs[b_idx]]
+                d = haversine(ba['lat'], ba['lon'], bb['lat'], bb['lon'])
+                # ห่าง ≤ 200m → union เสมอ (GPS drift ชายแดนจังหวัด, data entry ผิด)
+                if d <= 0.2:
+                    union(idxs[a], idxs[b_idx])
+                    same_base += 1
+                    continue
+                # ห่าง > 200m: ต้องจังหวัดเดียวกัน + ≤ MAX_BASE_KM
+                if ba['province'] and bb['province'] and ba['province'] != bb['province']:
+                    same_base_skip += 1
+                    continue
+                if d > MAX_BASE_KM:
+                    same_base_skip += 1
+                    continue
+                union(idxs[a], idxs[b_idx])
+        same_base += 1
+    print(f"   Same-base-code groups: {same_base} (ข้ามเพราะต่างจังหวัด/ไกลเกิน: {same_base_skip})")
 
-    # ── Step 2: proximity ≤ max_km (haversine) ──
+    # ── Step 2: proximity ≤ max_km (road distance จาก OSRM cache) ──
+    # pre-filter ด้วย haversine ก่อน (เร็ว) เพื่อไม่เรียก OSRM คู่ที่ไกลเกิน
     pairs = 0
+    hav_cutoff = max_km * 1.5  # เผื่อถนนอ้อม
     for i in range(n):
         bi = branches[i]
         for j in range(i + 1, n):
             bj = branches[j]
-            if abs(bi['lat'] - bj['lat']) > 0.01:  # ~1.1km lat bound
+            if abs(bi['lat'] - bj['lat']) > 0.015:  # ~1.7km lat bound
                 continue
-            if haversine(bi['lat'], bi['lon'], bj['lat'], bj['lon']) <= max_km:
+            hav = haversine(bi['lat'], bi['lon'], bj['lat'], bj['lon'])
+            if hav > hav_cutoff:
+                continue
+            # ≤200m → union เสมอ (GPS drift ชายแดน, data entry ผิด)
+            if hav <= 0.2:
                 union(i, j)
                 pairs += 1
-    print(f"   Proximity pairs (≤{max_km*1000:.0f}m): {pairs}")
+                continue
+            # >200m → ต้องจังหวัดเดียวกัน
+            if bi['province'] and bj['province'] and bi['province'] != bj['province']:
+                continue
+            road_dist, is_road = get_road_distance(bi['lat'], bi['lon'], bj['lat'], bj['lon'])
+            # sanity check: road >> haversine * 5 → cache อาจ corrupt → ใช้ fallback
+            if road_dist is None or (is_road and road_dist > hav * 5 and hav < max_km):
+                road_dist = hav * 1.2
+            if road_dist <= max_km:
+                union(i, j)
+                pairs += 1
+    print(f"   Proximity pairs ≤{max_km*1000:.0f}m (road distance): {pairs}")
 
     groups_raw = _dd(list)
     for i, b in enumerate(branches):
         groups_raw[find(i)].append(b['code'])
 
+    # ── Post-process: ตัดสาขาที่ห่างจาก centroid > MAX_GROUP_KM ออกจากกลุ่ม ──
+    MAX_GROUP_KM = 10.0
+    coord_map = {b['code']: (b['lat'], b['lon']) for b in branches}
+    split_count = 0
+    cleaned_groups = {}
+    for root, codes in groups_raw.items():
+        if len(codes) < 2:
+            cleaned_groups[root] = codes
+            continue
+        # คำนวณ centroid
+        lats = [coord_map[c][0] for c in codes if c in coord_map]
+        lons = [coord_map[c][1] for c in codes if c in coord_map]
+        if not lats:
+            cleaned_groups[root] = codes
+            continue
+        clat = sum(lats) / len(lats)
+        clon = sum(lons) / len(lons)
+        # แยกสาขาที่ไกลเกิน 10km ออก (ไม่รวมกลุ่ม)
+        kept, dropped = [], []
+        for c in codes:
+            if c not in coord_map:
+                kept.append(c)
+                continue
+            d = haversine(clat, clon, coord_map[c][0], coord_map[c][1])
+            if d <= MAX_GROUP_KM:
+                kept.append(c)
+            else:
+                dropped.append(c)
+                split_count += 1
+        cleaned_groups[root] = kept
+        if dropped:
+            print(f"   ✂️  ตัดออก (>{MAX_GROUP_KM}km จาก centroid): {dropped}")
+    if split_count:
+        print(f"   ตัดทั้งหมด {split_count} สาขาออกจากกลุ่ม (ห่างเกิน {MAX_GROUP_KM}km)")
+
     groups = {}
     b2g    = {}
     gnum   = 1
-    for root, codes in sorted(groups_raw.items()):
+    for root, codes in sorted(cleaned_groups.items()):
         if len(codes) >= 2:
             gid = f"G{gnum:04d}"
             groups[gid] = sorted(codes)
             for c in codes:
                 b2g[c] = gid
             gnum += 1
+
+    # ── Step 3: merge orphan branches ที่ยังไม่มีกลุ่ม โดยใช้ NEARBY precomputed ──
+    # สาขาที่ไม่ถูก group ใน Step 1-2 (เพราะ road distance ใน cache ต่างจาก NEARBY เล็กน้อย)
+    # → ถ้า NEARBY บอกว่าห่าง ≤500m และจังหวัดเดียวกัน → รวมกลุ่มได้
+    try:
+        with open('branch_clusters.json', 'r', encoding='utf-8') as _f:
+            import json as _json2
+            _nearby_data = _json2.load(_f).get('nearby_branches', {})
+        prov_map = {str(code).strip().upper(): str(b.get('จังหวัด', '') or '').strip()
+                    for code, b in branch_data.items()}
+        orphan_merged = 0
+        # pass A: orphan เป็น key ใน NEARBY
+        for code_raw, nearby_list in _nearby_data.items():
+            code = str(code_raw).strip().upper()
+            if b2g.get(code):
+                continue
+            code_prov = prov_map.get(code, '')
+            for nb in nearby_list:
+                nb_code = str(nb['code']).strip().upper()
+                if nb.get('distance', 999) > 0.5:
+                    break
+                nb_gid = b2g.get(nb_code)
+                if not nb_gid:
+                    continue
+                nb_prov = prov_map.get(nb_code, '')
+                if code_prov and nb_prov and code_prov != nb_prov:
+                    continue
+                groups[nb_gid].append(code)
+                groups[nb_gid] = sorted(set(groups[nb_gid]))
+                b2g[code] = nb_gid
+                orphan_merged += 1
+                break
+        # pass B: orphan เป็น neighbor ใน NEARBY (reverse lookup)
+        for src_raw, nearby_list in _nearby_data.items():
+            src = str(src_raw).strip().upper()
+            src_gid = b2g.get(src)
+            if not src_gid:
+                continue
+            src_prov = prov_map.get(src, '')
+            for nb in nearby_list:
+                nb_code = str(nb['code']).strip().upper()
+                if nb.get('distance', 999) > 0.5:
+                    break
+                if b2g.get(nb_code):
+                    continue  # มีกลุ่มแล้ว
+                nb_prov = prov_map.get(nb_code, '')
+                if src_prov and nb_prov and src_prov != nb_prov:
+                    continue
+                groups[src_gid].append(nb_code)
+                groups[src_gid] = sorted(set(groups[src_gid]))
+                b2g[nb_code] = src_gid
+                orphan_merged += 1
+        if orphan_merged:
+            print(f"   Step 3 orphan merge: +{orphan_merged} สาขาเข้ากลุ่มที่มีอยู่")
+    except Exception as _e:
+        print(f"   ⚠️  Step 3 skip: {_e}")
 
     result = {'groups': groups, 'branch_to_group': b2g}
     with open('branch_groups.json', 'w', encoding='utf-8') as f:
