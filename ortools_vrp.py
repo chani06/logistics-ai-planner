@@ -356,15 +356,25 @@ class TripOptimizer:
         result_df = self.df.copy()
         result_df['Trip'] = 0
         result_df['Vehicle'] = ''
-        
-        for trip_num, (t, trip_data) in enumerate(trips.items(), 1):
+
+        # Sort trips by centroid distance from DC descending (farthest = trip 1, no crossings)
+        def trip_centroid_dist(item):
+            t, trip_data = item
+            dists = [self.branches[i]['distance_from_dc'] for i in trip_data['branches']
+                     if self.branches[i]['distance_from_dc'] > 0]
+            return sum(dists) / len(dists) if dists else 0
+
+        sorted_trips = sorted(trips.items(), key=trip_centroid_dist, reverse=True)
+
+        for trip_num, (t, trip_data) in enumerate(sorted_trips, 1):
             for branch_idx in trip_data['branches']:
                 df_idx = self.branches[branch_idx]['idx']
                 result_df.loc[df_idx, 'Trip'] = trip_num
                 result_df.loc[df_idx, 'Vehicle'] = trip_data['vehicle']
         
-        # Calculate summary
-        summary = self._calculate_summary(result_df, trips)
+        # Calculate summary (use sorted order so trip numbers match)
+        sorted_trips_dict = {trip_num: trip_data for trip_num, (t, trip_data) in enumerate(sorted_trips, 1)}
+        summary = self._calculate_summary(result_df, sorted_trips_dict)
         
         return result_df, summary
     
@@ -379,9 +389,9 @@ class TripOptimizer:
                 province_col = col
                 break
         
-        for trip_num, (t, trip_data) in enumerate(trips.items(), 1):
+        for trip_num, trip_data in trips.items():
             trip_df = result_df[result_df['Trip'] == trip_num]
-            
+
             total_weight = trip_df['Weight'].sum()
             total_cube = trip_df['Cube'].sum()
             total_drops = len(trip_df)
