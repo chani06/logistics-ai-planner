@@ -222,6 +222,10 @@ def _do_merge(info: dict, sid: int, tid2: int, df: pd.DataFrame) -> bool:
         for ri in all_rows:
             df.at[ri, 'Trip']  = sid
             df.at[ri, 'Truck'] = new_tk
+        # อัป centroid และ fill หลัง merge
+        total = len(all_rows)
+        s['lat'] = (s['lat']*len(s['rows']) + t2['lat']*len(t2['rows'])) / total
+        s['lon'] = (s['lon']*len(s['rows']) + t2['lon']*len(t2['rows'])) / total
         s['w'] = cw; s['c'] = cc; s['truck'] = new_tk
         s['strict'] = new_strict
         s['fill'] = max(cw/lim['max_w'], cc/lim['max_c'])
@@ -272,11 +276,11 @@ def _consolidate_one_level(
             s_pref  = s.get(prefer_key, '') if prefer_key else None
             s_prov  = s.get('scope_p', '')
 
-            def _dist_ok(v):
-                d = _hav(s['lat'], s['lon'], v['lat'], v['lon'])
-                if is_zone_level and v.get('scope_p','') != s_prov:
-                    return d <= _DIST_CROSS_PROV   # cross-province: 20km max
-                return d <= max_dist
+            def _dist_ok(v, _s=s, _sp=s_prov, _md=max_dist, _izl=is_zone_level):
+                d = _hav(_s['lat'], _s['lon'], v['lat'], v['lon'])
+                if _izl and v.get('scope_p','') != _sp:
+                    return d <= _DIST_CROSS_PROV
+                return d <= _md
 
             candidates = sorted(
                 [(k, v) for k, v in info.items()
@@ -555,7 +559,8 @@ def solve_vrp_by_province(
 
     zones = sorted(vdf['_gz'].unique(),
                    key=lambda z: (prov_dist.get(_prov_of_zone(z), 0),
-                                  _ctr(vdf[vdf['_gz'] == z])))
+                                  _ctr(vdf[vdf['_gz'] == z])),
+                   reverse=True)   # ไกลก่อน (province ไกลสุด → zone ไกลสุดในนั้น)
 
     # ── Sequential fill แยกตาม zone (ป้องกันทริปข้ามโซน) ────────────────────
     trip_counter = 1
@@ -565,7 +570,8 @@ def solve_vrp_by_province(
         z_mask = has_coord & (df['_gz'] == zone)
         z_df   = df[z_mask]
         dists  = sorted(z_df['_gd'].unique(),
-                        key=lambda d: _ctr(z_df[z_df['_gd']==d]))
+                        key=lambda d: _ctr(z_df[z_df['_gd']==d]),
+                        reverse=True)   # ไกลก่อน
         zone_ordered: List[int] = []
 
         for dist in dists:
@@ -573,7 +579,8 @@ def solve_vrp_by_province(
             d_df   = df[d_mask]
             if d_df.empty: continue
             subds = sorted(d_df['_gs'].unique(),
-                           key=lambda s: _ctr(d_df[d_df['_gs']==s]))
+                           key=lambda s: _ctr(d_df[d_df['_gs']==s]),
+                           reverse=True)   # ไกลก่อน
             for subd in subds:
                 s_mask = d_mask & (df['_gs'] == subd)
                 s_rows = df[s_mask].index.tolist()
