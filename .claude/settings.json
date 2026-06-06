@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import streamlit; print\\(streamlit.__version__\\)\")",
+      "Bash(python -c \"import xlsxwriter; import io; buf=io.BytesIO\\(\\); wb=xlsxwriter.Workbook\\(buf,{'in_memory':True,'constant_memory':True}\\); ws=wb.add_worksheet\\('test'\\); ws.write\\(0,0,'hello'\\); wb.close\\(\\); print\\('xlsxwriter OK, size:', len\\(buf.getvalue\\(\\)\\)\\)\")",
+      "Bash(python -c \"import xlsxwriter; print\\('version:', xlsxwriter.__version__\\)\")",
+      "Bash(python -c \"import inspect; import streamlit as st; sig = inspect.signature\\(st.download_button\\); print\\(list\\(sig.parameters.keys\\(\\)\\)\\)\")",
+      "Bash(python -c \"import streamlit; import os; print\\(os.path.dirname\\(streamlit.__file__\\)\\)\")",
+      "Bash(git checkout *)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('c:/Users/chani/app/app.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8501/healthz)",
+      "Bash(ipconfig)",
+      "Bash(findstr /i \"IPv4\")",
+      "PowerShell(\\(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notmatch 'Loopback' -and $_.IPAddress -notmatch '^169' } | Select-Object -First 1\\).IPAddress)",
+      "PowerShell(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notmatch 'Loopback' -and $_.IPAddress -notmatch '^169' } | Select-Object InterfaceAlias, IPAddress)",
+      "Bash(awk -F: '$2 >= 7975 && $2 <= 8700')"
+    ]
+  }
+}

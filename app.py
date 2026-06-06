@@ -5957,6 +5957,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
             for _rn in trip_data['_region_name'].dropna().unique():
                 if _rn and _rn != 'ไม่ระบุ':
                     _regions.add(_rn)
+        _sd_col65 = next((c for c in ['Subdistrict', '_subdistrict', 'ตำบล'] if c in trip_data.columns), None)
+        _subds65 = set(trip_data[_sd_col65].dropna().unique()) if _sd_col65 else set()
         return {
             'weight': total_w,
             'cube': total_c,
@@ -5974,6 +5976,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
             'logistics_zones': _zones,
             'highways': _hws,
             'regions': _regions,
+            'subdistricts': _subds65,
         }
     
     def can_add_branch_to_trip(branch_row, trip_capacity):
@@ -6399,6 +6402,11 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                     _prov_overlap = _pa_cs & _pb_cs
                     if not _prov_overlap:
                         continue  # คนละจังหวัด → ห้าม consolidate
+                # 📐 Subdistrict strict — ห้าม consolidate ข้ามตำบลทุกกรณี
+                _sda_cs = _ca_cs.get('subdistricts', set())
+                _sdb_cs = _cb_cs.get('subdistricts', set())
+                if _sda_cs and _sdb_cs and not (_sda_cs & _sdb_cs):
+                    continue  # คนละตำบล → ห้าม consolidate
                 # Zone isolation by centroid distance: จังหวัดเดียวกัน ≤80km, คู่จังหวัด ≤120km
                 if not (_pa_cs & _pb_cs):  # คู่จังหวัด (ผ่าน PROVINCE_PAIR_GROUPS มาแล้ว)
                     _ca_lat_cs = float(_ca_cs.get('centroid_lat', 0) or 0)
@@ -7708,7 +7716,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
     # เงื่อนไข: จังหวัดเดียวกัน + ระยะ centroid ≤ 40km + รวมแล้วไม่เกิน capacity
     # ==========================================
     safe_print("\n🔗 Step 8.97: รวมทริปใกล้กันที่รถว่าง...")
-    _CONSOL_MAX_KM   = 40.0   # ระยะ centroid สูงสุดระหว่างทริปที่จะรวม
+    _CONSOL_MAX_KM   = 20.0   # ระยะ centroid สูงสุดระหว่างทริปที่จะรวม (ใกล้กันจริงๆ)
     _CONSOL_MIN_UTIL = 0.60   # รวมเฉพาะทริปที่ util < 60% (รถว่างเกิน 40%)
     _consol_merged   = 0
 
@@ -7729,12 +7737,16 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
         _c     = float(_td['Cube'].sum())
         _prov_vc = _td['_province'].dropna().value_counts()
         _prov  = str(_prov_vc.index[0]) if len(_prov_vc) else ''
+        _sd_col = next((c for c in ['Subdistrict', '_subdistrict', 'ตำบล'] if c in _td.columns), None)
+        _sd_vc  = _td[_sd_col].dropna().value_counts() if _sd_col else None
+        _subd   = str(_sd_vc.index[0]) if (_sd_vc is not None and len(_sd_vc)) else ''
         _lats  = _td['_lat'].dropna().to_numpy(dtype=float)
         _lons  = _td['_lon'].dropna().to_numpy(dtype=float)
         _valid = (_lats > 0) & (_lons > 0)
         _clat  = float(_lats[_valid].mean()) if _valid.any() else 0.0
         _clon  = float(_lons[_valid].mean()) if _valid.any() else 0.0
-        return {'w': _w, 'c': _c, 'prov': _prov, 'clat': _clat, 'clon': _clon,
+        return {'w': _w, 'c': _c, 'prov': _prov, 'subd': _subd,
+                'clat': _clat, 'clon': _clon,
                 'max_w': _mw, 'max_c': _mc, 'buf': _buf, 'allow': _allow,
                 'veh': _veh, 'is_pt': _is_pt, 'codes': _codes}
 
@@ -7762,13 +7774,16 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
             if not _ma['prov']:
                 continue
 
-            # หาทริปที่จะรวมด้วย: util < 60%, จังหวัดเดียวกัน, ใกล้ centroid ≤ 40km
+            # หาทริปที่จะรวมด้วย: util < 60%, ตำบลเดียวกัน เท่านั้น
             _best_tb = None
             _best_combined_util = 0.0
             for _tb, _mb in _trips_by_util:
                 if _tb == _ta or _tb in _merged_set_cs:
                     continue
                 if _mb['prov'] != _ma['prov']:
+                    continue
+                # บังคับ: ตำบลเดียวกัน — ไม่รวมข้ามตำบล
+                if _ma['subd'] and _mb['subd'] and _ma['subd'] != _mb['subd']:
                     continue
                 _util_b = max(_mb['w'] / _mb['max_w'], _mb['c'] / _mb['max_c']) if _mb['max_w'] > 0 else 1
                 if _util_b >= _CONSOL_MIN_UTIL:
@@ -7796,7 +7811,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 _fit_veh    = next((v for v in ['4W', 'JB', '6W']
                                     if v in _comb_allow and
                                     _comb_w <= _lims_comb[v]['max_w'] and
-                                    _comb_c <= _lims_comb[v]['max_c'] * _buf_comb), None)
+                                    _comb_c <= _lims_comb[v]['max_c']), None)
                 if not _fit_veh:
                     continue  # รวมแล้วเกิน capacity
 
@@ -7811,6 +7826,20 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
 
             # รวมทริป _best_tb เข้า _ta
             df.loc[df['Trip'] == _best_tb, 'Trip'] = _ta
+            # อัป Truck ของ _ta ให้ตรงกับ vehicle ที่จะใช้หลัง merge
+            _mb_merged = _meta_cs.get(_best_tb)
+            if _mb_merged:
+                _comb_w_up = _ma['w'] + _mb_merged['w']
+                _comb_c_up = _ma['c'] + _mb_merged['c']
+                _is_pt_up  = _ma['is_pt'] and _mb_merged['is_pt']
+                _lims_up   = PUNTHAI_LIMITS if _is_pt_up else LIMITS
+                _allow_up  = [v for v in ['4W', 'JB', '6W']
+                               if v in _ma['allow'] and v in _mb_merged['allow']]
+                _truck_up  = next((v for v in ['4W', 'JB', '6W']
+                                   if v in _allow_up and
+                                   _comb_w_up <= _lims_up[v]['max_w'] and
+                                   _comb_c_up <= _lims_up[v]['max_c']), '6W')
+                df.loc[df['Trip'] == _ta, 'Truck'] = _truck_up
             _merged_set_cs.add(_best_tb)
             _cs_changed = True
             _consol_merged += 1
@@ -7885,14 +7914,25 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
         if _dp and _dp not in _prov_region_ord9:
             _prov_region_ord9[_dp] = REGION_ORDER.get(get_region_name(str(_dp)), 99)
 
+    # district → avg dist (เรียงอำเภอตามระยะ ไม่ใช่ alphabetical)
+    _dist_avg_dist9: dict = {}
+    for _tn, _dd in _trip_dom_dist9.items():
+        if not _dd:
+            continue
+        _d = _trip_avg_dist9.get(_tn, 0)
+        if _dd not in _dist_avg_dist9:
+            _dist_avg_dist9[_dd] = _d
+        else:
+            _dist_avg_dist9[_dd] = (_dist_avg_dist9[_dd] + _d) / 2
+
     # sort key: ภาค → จังหวัด (ไกลก่อน) → อำเภอ (ไกลก่อน) → ตำบล (ไกลก่อน)
-    # เริ่มจากตำบลไกลสุด → ใกล้เข้ามาเรื่อยๆ ต่อเนื่องในแต่ละระดับ
+    # ทุกระดับเรียงตาม avg distance (ไม่ใช่ชื่อ) → ทริปต่อเนื่องกัน ไม่กระโดด
     trip_sort9_keys = {
         trip_num: (
             _prov_region_ord9.get(_trip_dom_prov9.get(trip_num, ''), 99),    # ภาค
             -_prov_avg_dist9.get(_trip_dom_prov9.get(trip_num, ''), 0),      # จังหวัด ไกลก่อน
             _trip_dom_prov9.get(trip_num, ''),                                # กลุ่มจังหวัดเดียวกัน
-            _trip_dom_dist9.get(trip_num, ''),                                # อำเภอ
+            -_dist_avg_dist9.get(_trip_dom_dist9.get(trip_num, ''), 0),      # อำเภอ ไกลก่อน (ระยะ)
             -_trip_avg_dist9[trip_num],                                       # ภายในอำเภอ: ไกลก่อน
             _trip_dom_subdist9.get(trip_num, ''),                             # ตำบล
         )

@@ -319,18 +319,9 @@ def _consolidate_one_level(
 
 def _consolidate_tiered(df: pd.DataFrame) -> pd.DataFrame:
     """
-    4 ระดับ: ตำบล → อำเภอ → จังหวัด → zone
-    แต่ละระดับรวมทริปใกล้ที่สุดก่อน prefer ระดับย่อยกว่าก่อนเสมอ
+    รวมเฉพาะในตำบลเดียวกัน (scope_s) — ไม่ข้ามตำบล ไม่กระโดด
     """
-    # เพิ่ม scope_p (province) ใน df info ผ่านการสร้างใน _build_trip_info
-    # Level 1: ตำบล (fill < 0.95, ≤ 20km) — aggressive
     df = _consolidate_one_level(df, 'scope_s', 0.95, _DIST_SUBD)
-    # Level 2: อำเภอ (fill < 0.80, ≤ 40km) prefer ตำบลเดียวกันก่อน
-    df = _consolidate_one_level(df, 'scope_d', 0.80, _DIST_DIST, prefer_key='scope_s')
-    # Level 3: จังหวัด (fill < 0.65, ≤ 60km) prefer อำเภอเดียวกันก่อน
-    df = _consolidate_one_level(df, 'scope_p', 0.65, _DIST_PROV, prefer_key='scope_d')
-    # Level 4: zone (fill < 0.50, ≤ 80km) prefer จังหวัดเดียวกันก่อน
-    df = _consolidate_one_level(df, 'scope_z', 0.50, _DIST_ZONE, prefer_key='scope_p')
     return df
 
 
