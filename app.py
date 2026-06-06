@@ -8657,6 +8657,126 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
         safe_print(f"   ✅ Step 8.96: รวม {_merged_spills}/{len(_spill_trip_ids)} spill trips สำเร็จ")
 
     # ==========================================
+    # Step 8.97: รวมทริปใกล้กันที่ยังว่างอยู่ (Consolidate nearby underutilized trips)
+    # เป้าหมาย: ลดรถว่างโดยรวมทริปเล็กๆ ใกล้กันเข้าด้วยกัน
+    # เงื่อนไข: จังหวัดเดียวกัน + ระยะ centroid ≤ 40km + รวมแล้วไม่เกิน capacity
+    # ==========================================
+    safe_print("\n🔗 Step 8.97: รวมทริปใกล้กันที่รถว่าง...")
+    _CONSOL_MAX_KM   = 40.0   # ระยะ centroid สูงสุดระหว่างทริปที่จะรวม
+    _CONSOL_MIN_UTIL = 0.60   # รวมเฉพาะทริปที่ util < 60% (รถว่างเกิน 40%)
+    _consol_merged   = 0
+
+    def _trip_meta_consol(trip_id):
+        """คืน metadata ของทริป: w, c, prov, centroid lat/lon, max_w, max_c, allow, is_pt, buf"""
+        _td = df[df['Trip'] == trip_id]
+        if _td.empty:
+            return None
+        _codes = _td['Code'].tolist()
+        _is_pt = all(branch_bu_cache.get(str(c).strip().upper(), False) for c in _codes)
+        _lims  = PUNTHAI_LIMITS if _is_pt else LIMITS
+        _buf   = punthai_buffer if _is_pt else maxmart_buffer
+        _allow = get_allowed_from_codes(_codes, ['4W', 'JB', '6W'])
+        _veh   = next((v for v in ['6W', 'JB', '4W'] if v in _allow), '6W')
+        _mw    = _lims[_veh]['max_w']
+        _mc    = _lims[_veh]['max_c']
+        _w     = float(_td['Weight'].sum())
+        _c     = float(_td['Cube'].sum())
+        _prov_vc = _td['_province'].dropna().value_counts()
+        _prov  = str(_prov_vc.index[0]) if len(_prov_vc) else ''
+        _lats  = _td['_lat'].dropna().to_numpy(dtype=float)
+        _lons  = _td['_lon'].dropna().to_numpy(dtype=float)
+        _valid = (_lats > 0) & (_lons > 0)
+        _clat  = float(_lats[_valid].mean()) if _valid.any() else 0.0
+        _clon  = float(_lons[_valid].mean()) if _valid.any() else 0.0
+        return {'w': _w, 'c': _c, 'prov': _prov, 'clat': _clat, 'clon': _clon,
+                'max_w': _mw, 'max_c': _mc, 'buf': _buf, 'allow': _allow,
+                'veh': _veh, 'is_pt': _is_pt, 'codes': _codes}
+
+    # วนซ้ำจนกว่าไม่มีการรวมอีก (chain merges)
+    for _cs_round in range(10):
+        _cs_changed = False
+        _all_trips_cs = sorted(df[df['Trip'] > 0]['Trip'].unique())
+        # สร้าง metadata ทุกทริปครั้งเดียว
+        _meta_cs = {t: _trip_meta_consol(t) for t in _all_trips_cs}
+        _meta_cs = {t: m for t, m in _meta_cs.items() if m}
+
+        # เรียงทริปตาม utilization น้อยสุดก่อน (รถว่างมากสุดก่อน)
+        _trips_by_util = sorted(
+            _meta_cs.items(),
+            key=lambda x: max(x[1]['w'] / x[1]['max_w'], x[1]['c'] / x[1]['max_c']) if x[1]['max_w'] > 0 else 1
+        )
+        _merged_set_cs: set = set()
+
+        for _ta, _ma in _trips_by_util:
+            if _ta in _merged_set_cs:
+                continue
+            _util_a = max(_ma['w'] / _ma['max_w'], _ma['c'] / _ma['max_c']) if _ma['max_w'] > 0 else 1
+            if _util_a >= _CONSOL_MIN_UTIL:
+                continue  # ทริปนี้เต็มพอแล้ว ข้ามไป
+            if not _ma['prov']:
+                continue
+
+            # หาทริปที่จะรวมด้วย: util < 60%, จังหวัดเดียวกัน, ใกล้ centroid ≤ 40km
+            _best_tb = None
+            _best_combined_util = 0.0
+            for _tb, _mb in _trips_by_util:
+                if _tb == _ta or _tb in _merged_set_cs:
+                    continue
+                if _mb['prov'] != _ma['prov']:
+                    continue
+                _util_b = max(_mb['w'] / _mb['max_w'], _mb['c'] / _mb['max_c']) if _mb['max_w'] > 0 else 1
+                if _util_b >= _CONSOL_MIN_UTIL:
+                    continue  # ทริป B ก็เต็มพอแล้ว
+
+                # ตรวจระยะ centroid
+                if _ma['clat'] > 0 and _mb['clat'] > 0:
+                    _dlat = radians(_ma['clat'] - _mb['clat'])
+                    _dlon = radians(_ma['clon'] - _mb['clon'])
+                    _a_cs = sin(_dlat/2)**2 + cos(radians(_mb['clat']))*cos(radians(_ma['clat']))*sin(_dlon/2)**2
+                    _d_cs = 2 * 6371 * atan2(sqrt(_a_cs), sqrt(1 - _a_cs))
+                    if _d_cs > _CONSOL_MAX_KM:
+                        continue
+
+                # ตรวจ capacity หลังรวม
+                _comb_w = _ma['w'] + _mb['w']
+                _comb_c = _ma['c'] + _mb['c']
+                _comb_allow = [v for v in ['4W', 'JB', '6W']
+                               if v in _ma['allow'] and v in _mb['allow']]
+                if not _comb_allow:
+                    continue
+                _is_pt_comb = _ma['is_pt'] and _mb['is_pt']
+                _lims_comb  = PUNTHAI_LIMITS if _is_pt_comb else LIMITS
+                _buf_comb   = punthai_buffer if _is_pt_comb else maxmart_buffer
+                _fit_veh    = next((v for v in ['4W', 'JB', '6W']
+                                    if v in _comb_allow and
+                                    _comb_w <= _lims_comb[v]['max_w'] and
+                                    _comb_c <= _lims_comb[v]['max_c'] * _buf_comb), None)
+                if not _fit_veh:
+                    continue  # รวมแล้วเกิน capacity
+
+                _u_comb = max(_comb_w / _lims_comb[_fit_veh]['max_w'],
+                              _comb_c / _lims_comb[_fit_veh]['max_c'])
+                if _u_comb > _best_combined_util:
+                    _best_combined_util = _u_comb
+                    _best_tb = _tb
+
+            if _best_tb is None:
+                continue
+
+            # รวมทริป _best_tb เข้า _ta
+            df.loc[df['Trip'] == _best_tb, 'Trip'] = _ta
+            _merged_set_cs.add(_best_tb)
+            _cs_changed = True
+            _consol_merged += 1
+            safe_print(f"   🔗 Consolidate: Trip {_best_tb} ({_meta_cs[_best_tb]['prov']}) → Trip {_ta} "
+                       f"(util {_best_combined_util*100:.0f}%)")
+
+        if not _cs_changed:
+            break
+
+    safe_print(f"   ✅ Step 8.97: รวม {_consol_merged} คู่ทริป (ลดรถว่าง)")
+
+    # ==========================================
     # Step 9: เรียงทริปใหม่ตามภาค → จังหวัด → ระยะทาง
     # ==========================================
     safe_print("\n📋 Step 9: เรียงทริปแบบ chain ต่อเนื่อง (average distance) → จังหวัด → ตำบล...")
