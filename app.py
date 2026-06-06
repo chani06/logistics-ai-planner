@@ -5481,146 +5481,66 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
 
         farthest_row = None
 
-        # 🦠 Epidemic inter-trip: เริ่มทริปถัดไปจาก frontier ของทริปล่าสุด (ภาคเดียวกัน)
-        # ถ้ามีสาขาใกล้ frontier ≤ _EPIDEMIC_NEXT_KM → ต่อเนื่อง (epidemic wave)
-        # ถ้าไม่มี → เริ่มโซนใหม่จาก pointer (zone jump)
-        if _last_trip_all_coords:
-            _ep_best = None
-            _ep_best_dist = 999.0
-            _ep_best_priority = 9  # 0=ตำบล, 1=อำเภอ, 2=จังหวัดเดียวกัน, 3=ภาคเดียวกัน, 4=nearest
+        # ══════════════════════════════════════════════════════════════════
+        # 🎯 ZONE-FIRST SEED SELECTION
+        # หลักการ: จบทริปแล้วต้องอยู่ในโซน/พื้นที่เดิมก่อนเสมอ ไม่กระโดด
+        # Priority: โซนเดิม → ตำบลเดิม → อำเภอเดิม → จังหวัดเดิม → ภาค → pointer
+        # ══════════════════════════════════════════════════════════════════
 
-            # ── vectorized distance: คำนวณ min-dist ทุก unassigned ด้วย numpy ──
-            _ep_lats_a = unassigned_df['_lat'].fillna(0).to_numpy(dtype=float)
-            _ep_lons_a = unassigned_df['_lon'].fillna(0).to_numpy(dtype=float)
-            _ep_valid_a = (_ep_lats_a > 0) & (_ep_lons_a > 0)
-            _ep_min_d_a = np.full(len(unassigned_df), 999.0)
-            for _lt, _ln in _last_trip_all_coords:
-                _d_arr = _hav_vec(_lt, _ln, _ep_lats_a, _ep_lons_a)
-                np.minimum(_ep_min_d_a, _d_arr, out=_ep_min_d_a)
-            _ep_min_d_a[~_ep_valid_a] = 999.0
+        def _pick_nearest_from(pool_df):
+            """เลือกสาขาที่ใกล้ frontier ของทริปล่าสุดที่สุด"""
+            if pool_df.empty:
+                return None
+            if _last_trip_all_coords:
+                _lats = pool_df['_lat'].fillna(0).to_numpy(dtype=float)
+                _lons = pool_df['_lon'].fillna(0).to_numpy(dtype=float)
+                _dists = np.full(len(pool_df), 999.0)
+                for _lt, _ln in _last_trip_all_coords:
+                    np.minimum(_dists, _hav_vec(_lt, _ln, _lats, _lons), out=_dists)
+                return pool_df.iloc[int(np.argmin(_dists))]
+            return pool_df.sort_values('_distance_from_dc', ascending=False).iloc[0]
 
-            for _ep_i, (_, _eprow) in enumerate(unassigned_df.iterrows()):
-                _epd = float(_ep_min_d_a[_ep_i])
-                # ตำบล/อำเภอเดียวกัน → ไม่มี distance cap (ดึงกลับมาจบก่อนไปโซนใหม่)
-                _ep_sub_pre  = str(_eprow.get('_subdistrict', '') or '')
-                _ep_dis_pre  = str(_eprow.get('_district', '') or '')
-                _ep_zone_pre = str(_eprow.get('_logistics_zone', '') or '')
-                _ep_is_same_area = (
-                    (_last_trip_subdistricts and _ep_sub_pre and _ep_sub_pre in _last_trip_subdistricts) or
-                    (_last_trip_districts    and _ep_dis_pre and _ep_dis_pre in _last_trip_districts) or
-                    (_last_trip_logistics_zone and str(_last_trip_logistics_zone).strip() and
-                     _ep_zone_pre and str(_ep_zone_pre).strip() and
-                     _ep_zone_pre == _last_trip_logistics_zone)
-                )
-                if not _ep_is_same_area and _epd > _EPIDEMIC_NEXT_KM:
-                    continue
-                # ❌ ห้ามข้ามจังหวัด: epidemic ต่อเฉพาะจังหวัดเดิม (hard rule)
-                _ep_prov_pre = str(_eprow.get('_province', '') or '')
-                if _last_trip_province and _ep_prov_pre and _ep_prov_pre != _last_trip_province:
-                    continue  # ต่างจังหวัด → ข้ามเสมอ
-                # ❌ ห้ามข้ามโซนย่อย: ถ้าทริปล่าสุดมี logistics_zone → epidemic ต่อเฉพาะโซนเดิม
-                if (_last_trip_logistics_zone and str(_last_trip_logistics_zone).strip()
-                        and _ep_zone_pre and str(_ep_zone_pre).strip()
-                        and _ep_zone_pre != _last_trip_logistics_zone
-                        and not _ep_is_same_area):
-                    continue  # ต่างโซน → ไม่ epidemic ข้าม, ให้ pointer ดูแล (LIFO order)
-                # ถ้ารู้ภาคของทริปล่าสุด → กรองเฉพาะภาคเดียวกัน
-                _ep_cand_region = get_region_name(str(_eprow.get('_province', '') or ''))
-                if (_last_trip_region and _last_trip_region not in ('', 'ไม่ระบุ') and
-                        _ep_cand_region and _ep_cand_region not in ('', 'ไม่ระบุ') and
-                        _ep_cand_region != _last_trip_region):
-                    continue  # ต่างภาค → ข้าม
-                # คำนวณ priority: ตำบล=0, อำเภอ=1, จังหวัด=2, ภาค=3, อื่น=4
-                _ep_sub  = str(_eprow.get('_subdistrict', '') or '')
-                _ep_dis  = str(_eprow.get('_district', '') or '')
-                _ep_prov = str(_eprow.get('_province', '') or '')
-                if _last_trip_subdistricts and _ep_sub and _ep_sub in _last_trip_subdistricts:
-                    _ep_prio = 0
-                elif _last_trip_districts and _ep_dis and _ep_dis in _last_trip_districts:
-                    _ep_prio = 1
-                elif _last_trip_province and _ep_prov and _ep_prov == _last_trip_province:
-                    _ep_prio = 2
-                elif _last_trip_region and _ep_cand_region and _ep_cand_region == _last_trip_region:
-                    _ep_prio = 3
-                else:
-                    _ep_prio = 4
-                # เลือก: priority ต่ำก่อน; priority เท่ากัน → ใกล้สุดก่อน
-                if (_ep_prio < _ep_best_priority or
-                        (_ep_prio == _ep_best_priority and _epd < _ep_best_dist)):
-                    _ep_best_priority = _ep_prio
-                    _ep_best_dist = _epd
-                    _ep_best = _eprow
-            # ถ้าพบ priority 0-2 (ตำบล/อำเภอ/จังหวัดเดิม) ใช้เลย
-            # ถ้าพบแต่ priority 3+ (ต่างจังหวัด) แต่ยังมีสาขาในตำบล/อำเภอ/จังหวัดเดิม → ไม่ข้ามจังหวัด
-            if _ep_best is not None and _ep_best_priority >= 3:
-                _leftover_area = unassigned_df[
-                    unassigned_df['_subdistrict'].isin(_last_trip_subdistricts) |
-                    unassigned_df['_district'].isin(_last_trip_districts)
-                ] if (_last_trip_subdistricts or _last_trip_districts) else unassigned_df.iloc[0:0]
-                _leftover_prov = (
-                    unassigned_df[unassigned_df['_province'] == _last_trip_province]
-                    if _last_trip_province else unassigned_df.iloc[0:0]
-                )
-                if not _leftover_area.empty or not _leftover_prov.empty:
-                    _ep_best = None  # หมดจังหวัดเดิมก่อนค่อยข้ามจังหวัด
-            if _ep_best is not None:
-                farthest_row = _ep_best
+        # ── Priority 1: โซนเดิม + จังหวัดเดิม ──
+        if farthest_row is None and _last_trip_logistics_zone and _last_trip_province:
+            _p1 = unassigned_df[
+                (unassigned_df['_logistics_zone'] == _last_trip_logistics_zone) &
+                (unassigned_df['_province'] == _last_trip_province)
+            ]
+            farthest_row = _pick_nearest_from(_p1)
+            if farthest_row is not None:
+                safe_print(f"  🎯 Seed P1 (same zone+province): {farthest_row['Code']} [{_last_trip_logistics_zone}]")
 
-        # 🏘️ Subdistrict-first: ถ้า epidemic เลือกสาขาต่างตำบล แต่ยังมีสาขาค้างในตำบลเดิม → ดึงตำบลเดิมก่อน
-        if farthest_row is not None and _last_trip_subdistricts:
-            _frow_sub = str(farthest_row.get('_subdistrict', '') or '')
-            if _frow_sub not in _last_trip_subdistricts:
-                _leftover_sub = unassigned_df[unassigned_df['_subdistrict'].isin(_last_trip_subdistricts)]
-                if not _leftover_sub.empty:
-                    if _last_trip_all_coords:
-                        _ls_lats = _leftover_sub['_lat'].fillna(0).to_numpy(dtype=float)
-                        _ls_lons = _leftover_sub['_lon'].fillna(0).to_numpy(dtype=float)
-                        _ls_dists = np.full(len(_leftover_sub), 999.0)
-                        for _lt, _ln in _last_trip_all_coords:
-                            np.minimum(_ls_dists, _hav_vec(_lt, _ln, _ls_lats, _ls_lons), out=_ls_dists)
-                        farthest_row = _leftover_sub.iloc[int(np.argmin(_ls_dists))]
-                    else:
-                        farthest_row = _leftover_sub.iloc[0]
-                    safe_print(f"  🏘️ Subdistrict-first: ยังมี {len(_leftover_sub)} สาขาในตำบล {_last_trip_subdistricts} → จัดก่อนข้ามโซน")
+        # ── Priority 2: ตำบลเดิม + จังหวัดเดิม ──
+        if farthest_row is None and _last_trip_subdistricts and _last_trip_province:
+            _p2 = unassigned_df[
+                (unassigned_df['_subdistrict'].isin(_last_trip_subdistricts)) &
+                (unassigned_df['_province'] == _last_trip_province)
+            ]
+            farthest_row = _pick_nearest_from(_p2)
+            if farthest_row is not None:
+                safe_print(f"  🎯 Seed P2 (same subdistrict): {farthest_row['Code']}")
 
-        # 🚫 ไม่หมดจังหวัด ไม่ข้าม: ก่อน pointer ตรวจว่ายังมีสาขาในตำบล/อำเภอ/จังหวัดเดิมหรือเปล่า
-        if farthest_row is None and (_last_trip_subdistricts or _last_trip_districts or _last_trip_province):
-            _zone_mask = (
-                unassigned_df['_subdistrict'].isin(_last_trip_subdistricts) |
-                unassigned_df['_district'].isin(_last_trip_districts)
-            )
-            if _last_trip_province:
-                _zone_mask = _zone_mask | (unassigned_df['_province'] == _last_trip_province)
-            # ป้องกัน data quality bug: กรองภาคเฉพาะสาขาที่ province ไม่ตรง
-            # (ไม่ตัดสาขาจังหวัดเดิมที่ region data ผิดหรือว่าง)
-            if _last_trip_region and _last_trip_region not in ('', 'ไม่ระบุ'):
-                if _last_trip_province:
-                    # รู้จังหวัด: ให้ผ่านถ้า province ตรง หรือ region ตรงแต่ province ว่าง
-                    _prov_exact = (unassigned_df['_province'] == _last_trip_province)
-                    _region_ok  = (unassigned_df['_region_name'].isin([_last_trip_region, '', 'ไม่ระบุ']) &
-                                   (unassigned_df['_province'] == ''))  # region fallback เฉพาะสาขาที่ province ว่างเท่านั้น
-                    _zone_mask  = _zone_mask & (_prov_exact | _region_ok)
-                else:
-                    # ไม่รู้จังหวัด: ใช้ region เป็นตัวกรองเลย
-                    _region_ok  = unassigned_df['_region_name'].isin([_last_trip_region, '', 'ไม่ระบุ'])
-                    _zone_mask  = _zone_mask & _region_ok
-            _area_lo = unassigned_df[_zone_mask] if (_last_trip_subdistricts or _last_trip_districts or _last_trip_province) else unassigned_df.iloc[0:0]
-            if not _area_lo.empty:
-                if _last_trip_all_coords:
-                    _al_lats = _area_lo['_lat'].fillna(0).to_numpy(dtype=float)
-                    _al_lons = _area_lo['_lon'].fillna(0).to_numpy(dtype=float)
-                    _al_valid = (_al_lats > 0) & (_al_lons > 0)
-                    _al_dists = np.full(len(_area_lo), 999.0)
-                    for _lt, _ln in _last_trip_all_coords:
-                        np.minimum(_al_dists, _hav_vec(_lt, _ln, _al_lats, _al_lons), out=_al_dists)
-                    _al_dists[~_al_valid] = 999.0
-                    farthest_row = _area_lo.iloc[int(np.argmin(_al_dists))]
-                else:
-                    farthest_row = _area_lo.iloc[0]
-                safe_print(f"  🔄 Zone-cleanup: ยังมี {len(_area_lo)} สาขาในจังหวัด '{_last_trip_province}' → จัดก่อนข้ามจังหวัด")
+        # ── Priority 3: อำเภอเดิม + จังหวัดเดิม ──
+        if farthest_row is None and _last_trip_districts and _last_trip_province:
+            _p3 = unassigned_df[
+                (unassigned_df['_district'].isin(_last_trip_districts)) &
+                (unassigned_df['_province'] == _last_trip_province)
+            ]
+            farthest_row = _pick_nearest_from(_p3)
+            if farthest_row is not None:
+                safe_print(f"  🎯 Seed P3 (same district): {farthest_row['Code']}")
 
+        # ── Priority 4: จังหวัดเดิม (ไกลสุดก่อน = เริ่มโซนใหม่ในจังหวัดเดิม) ──
+        if farthest_row is None and _last_trip_province:
+            _p4 = unassigned_df[unassigned_df['_province'] == _last_trip_province]
+            if not _p4.empty:
+                farthest_row = _p4.sort_values(
+                    ['_logistics_zone', '_distance_from_dc'], ascending=[True, False]
+                ).iloc[0]
+                safe_print(f"  🎯 Seed P4 (same province): {farthest_row['Code']} [{farthest_row.get('_logistics_zone','')}]")
+
+        # ── Priority 5: pointer list (region/province order) ──
         if farthest_row is None:
-            # ป้องกันข้ามจังหวัด/ภาค: ถ้ายังมีสาขาจังหวัดเดิมอยู่ → เลือกจากจังหวัดเดิมก่อน
             _has_same_province = (
                 _last_trip_province and
                 not unassigned_df[unassigned_df['_province'] == _last_trip_province].empty
@@ -5637,28 +5557,25 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                     if not _frows.empty:
                         _sc_prov   = str(_frows.iloc[0].get('_province', '') or '')
                         _sc_region = str(_frows.iloc[0].get('_region_name', '') or '')
-                        # ถ้ายังมีสาขาจังหวัดเดิม และสาขานี้เป็นจังหวัดอื่น → ข้าม
                         if _has_same_province and _sc_prov and _sc_prov != _last_trip_province:
                             continue
-                        # ถ้าหมดจังหวัดเดิมแล้ว แต่ยังมีสาขาภาคเดิม และสาขานี้เป็นภาคอื่น → ข้าม
-                        if not _has_same_province and _has_same_region and _sc_region and _sc_region not in ('', 'ไม่ระบุ') and _sc_region != _last_trip_region:
+                        if not _has_same_province and _has_same_region and _sc_region not in ('', 'ไม่ระบุ') and _sc_region != _last_trip_region:
                             continue
                         farthest_row = _frows.iloc[0]
                     break
+
+        # ── Fallback สุดท้าย ──
         if farthest_row is None:
-            # Fallback: จังหวัดเดิม → ภาคเดิม → ทั้งหมด
-            _same_prov_df = (
+            _fb_pool = (
                 unassigned_df[unassigned_df['_province'] == _last_trip_province]
-                if _last_trip_province else pd.DataFrame()
+                if _last_trip_province and not unassigned_df[unassigned_df['_province'] == _last_trip_province].empty
+                else unassigned_df[unassigned_df['_region_name'] == _last_trip_region]
+                if _last_trip_region and _last_trip_region not in ('', 'ไม่ระบุ') and
+                   not unassigned_df[unassigned_df['_region_name'] == _last_trip_region].empty
+                else unassigned_df
             )
-            _same_region_df = unassigned_df[
-                unassigned_df['_region_name'] == _last_trip_region
-            ] if _last_trip_region and _last_trip_region not in ('', 'ไม่ระบุ') else pd.DataFrame()
-            _fallback_pool = (_same_prov_df if not _same_prov_df.empty
-                              else _same_region_df if not _same_region_df.empty
-                              else unassigned_df)
-            farthest_row = _fallback_pool.sort_values(
-                ['_zone_priority', '_distance_from_dc'], ascending=[True, False]
+            farthest_row = _fb_pool.sort_values(
+                ['_zone_priority', '_logistics_zone', '_distance_from_dc'], ascending=[True, True, False]
             ).iloc[0]
         
         # เลือกสาขาแรก (ไกลสุด + ข้อจำกัดมากสุด)
@@ -6084,16 +6001,17 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 candidate_code = candidate_row['Code']
                 candidate_dist = candidate_row['_dist_to_trip']
 
-                # 🔗 Anti chain-hop: ระยะจากจุดเริ่มทริป (start branch) ต้องไม่เกิน 2x cap
-                # ป้องกันทริปค่อยๆ เลื่อนไกลจากต้นทางทีละ step
-                if start_lat > 0 and start_lon > 0:
+                # 🔗 Anti chain-hop: ระยะจากจุดเริ่มทริป — ยกเว้น same-zone (โซนเดียวกันไม่จำกัดระยะ)
+                _c_zone_chk = str(candidate_row.get('_logistics_zone', '') or '')
+                _is_same_zone_cand = (_c_zone_chk and trip_logistics_zone and _c_zone_chk == trip_logistics_zone)
+                if not _is_same_zone_cand and start_lat > 0 and start_lon > 0:
                     _c_lat = float(candidate_row.get('_lat', 0) or 0)
                     _c_lon = float(candidate_row.get('_lon', 0) or 0)
                     if _c_lat > 0 and _c_lon > 0:
                         _dist_from_start = haversine_distance(_c_lat, _c_lon, start_lat, start_lon, use_osrm_cache=False)
                         _chain_cap = _PROV_CAP_KM if not _is_bkk_metro else 20.0
                         if _dist_from_start > _chain_cap:
-                            continue  # chain-hop → ข้าม
+                            continue  # chain-hop → ข้าม (เฉพาะ non-same-zone)
 
                 # 🛣️ ROAD CORRIDOR CHECK (ตามถนนจริง ไม่ใช้มุมเส้นตรง)
                 # เงื่อนไข 1: highway ต้องมี overlap กับทริป (ใช้ถนนเส้นเดียวกัน)
@@ -6113,9 +6031,11 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 if _is_same_loc:
                     pass  # ข้ามการตรวจ distance/zone/region ทั้งหมด
 
-                # 🚫 Distance guard (ตำบลเดียวกัน priority=1: ไม่มี limit)
+                # 🚫 Distance guard — same-zone ไม่จำกัดระยะ, ตำบลเดียวกัน priority=1 ไม่จำกัด
                 _cand_prio_zone = safe_int_trip(candidate_row.get('_priority', 4), default=4)
-                if not _is_same_loc and _cand_prio_zone != 1:  # ไม่ใช่ตำบลเดียวกัน → ตรวจ distance
+                _c_zone_dg = str(candidate_row.get('_logistics_zone', '') or '')
+                _is_same_zone_dg = (_c_zone_dg and trip_logistics_zone and _c_zone_dg == trip_logistics_zone)
+                if not _is_same_loc and not _is_same_zone_dg and _cand_prio_zone != 1:
                     if candidate_dist > _PROV_CAP_KM:
                         continue
 
