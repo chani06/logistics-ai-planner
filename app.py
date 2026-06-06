@@ -8202,12 +8202,21 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 else:
                     _grp = [_sp_c]
                 if not _grp:
-                    continue
+                    _grp = [_sp_c]  # fallback: สาขานี้เป็น unit เดี่ยว (ป้องกันหาย)
                 _grp_w = sum(float(trip_data[trip_data['Code'].apply(lambda x: str(x).strip().upper()==str(g).strip().upper())]['Weight'].sum()) for g in _grp)
                 _grp_c = sum(float(trip_data[trip_data['Code'].apply(lambda x: str(x).strip().upper()==str(g).strip().upper())]['Cube'].sum())   for g in _grp)
                 _sp_units.append((_grp, _grp_w, _grp_c))
                 for g in _grp:
                     _sp_seen.add(str(g).strip().upper())
+
+            # safety: สาขาที่ไม่อยู่ใน units (edge case) → เพิ่มเป็น unit เดี่ยว
+            _all_in_units = {str(c).strip().upper() for _grp, _, _ in _sp_units for c in _grp}
+            for _, _sr in trip_data.iterrows():
+                _sc_chk = str(_sr['Code']).strip().upper()
+                if _sc_chk not in _all_in_units:
+                    _sr_w = float(_sr.get('Weight', 0) or 0)
+                    _sr_c = float(_sr.get('Cube', 0) or 0)
+                    _sp_units.append(([_sr['Code']], _sr_w, _sr_c))
 
             # แบ่ง: คันแรก = trip_num (เติมจนเต็ม), คันสอง = new trip
             _trip1_codes = []; _trip1_w = 0; _trip1_c = 0; _trip1_d = 0
@@ -8225,13 +8234,20 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
             if not _trip1_codes and _sp_units:
                 _grp0, _gw0, _gc0 = _sp_units[0]
                 _trip1_codes.extend(_grp0)
-                _trip2_codes = [c for c in _trip2_codes if str(c).strip().upper() not in {str(x).strip().upper() for x in _grp0}]
+                _trip1_upper0 = {str(c).strip().upper() for c in _grp0}
+                _trip2_codes = [c for c in _trip2_codes if str(c).strip().upper() not in _trip1_upper0]
 
-            # Assign คันแรก (ทริปเดิม)
+            # Assign คันแรก (ทริปเดิม) — ไม่แตะสาขาที่ไม่อยู่ใน trip_data
             _trip1_upper = {str(c).strip().upper() for c in _trip1_codes}
+            _trip2_upper = {str(c).strip().upper() for c in _trip2_codes}
             for _, _sp_row in trip_data.iterrows():
                 _sp_code = _sp_row['Code']
-                if str(_sp_code).strip().upper() not in _trip1_upper:
+                _sp_code_up = str(_sp_code).strip().upper()
+                if _sp_code_up not in _trip1_upper and _sp_code_up not in _trip2_upper:
+                    # ตกหล่น → ใส่คันสองเสมอ
+                    _trip2_codes.append(_sp_code)
+                    _trip2_upper.add(_sp_code_up)
+                if _sp_code_up not in _trip1_upper:
                     df.loc[df['Code'] == _sp_code, 'Trip'] = 0  # ชั่วคราว (จะ assign ทริปสอง)
 
             # Assign คันสอง (ทริปใหม่)
