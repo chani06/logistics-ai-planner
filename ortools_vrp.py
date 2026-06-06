@@ -540,8 +540,8 @@ def solve_vrp_by_province(
 
     zones = sorted(vdf['_gz'].unique(), key=lambda z: _ctr(vdf[vdf['_gz']==z]))
 
-    # ── Sequential fill: zone→district→subdistrict (flat pass เดียว) ─────────
-    all_ordered: List[int] = []
+    # ── Sequential fill แยกตาม zone (ป้องกันทริปข้ามโซน) ────────────────────
+    trip_counter = 1
     prev_lat, prev_lon = dc_lat, dc_lon
 
     for zone in zones:
@@ -549,6 +549,8 @@ def solve_vrp_by_province(
         z_df   = df[z_mask]
         dists  = sorted(z_df['_gd'].unique(),
                         key=lambda d: _ctr(z_df[z_df['_gd']==d]))
+        zone_ordered: List[int] = []
+
         for dist in dists:
             d_mask = z_mask & (df['_gd'] == dist)
             d_df   = df[d_mask]
@@ -560,17 +562,16 @@ def solve_vrp_by_province(
                 s_rows = df[s_mask].index.tolist()
                 if not s_rows: continue
                 ordered = _nn_order(s_rows, df, prev_lat, prev_lon)
-                all_ordered.extend(ordered)
+                zone_ordered.extend(ordered)
                 last = ordered[-1]
                 prev_lat = float(df.at[last, '_lat'])
                 prev_lon = float(df.at[last, '_lon'])
 
-    trip_counter = 1
-    if all_ordered:
-        tm, trm, trip_counter = _sequential_fill(all_ordered, df, trip_counter)
-        for ri, t in tm.items():
-            df.at[ri, 'Trip']  = t
-            df.at[ri, 'Truck'] = trm[ri]
+        if zone_ordered:
+            tm, trm, trip_counter = _sequential_fill(zone_ordered, df, trip_counter)
+            for ri, t in tm.items():
+                df.at[ri, 'Trip']  = t
+                df.at[ri, 'Truck'] = trm[ri]
 
     # ── Fix: ตำบลกระจายเกิน 2 ทริป → consolidate ──────────────────────────
     df, trip_counter = _fix_subd_spread(df, trip_counter, dc_lat, dc_lon)
