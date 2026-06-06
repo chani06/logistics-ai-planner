@@ -5471,8 +5471,198 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
     _last_trip_province: str = ''
     _last_trip_subdistricts: set = set()
     _last_trip_districts: set = set()
-    _last_trip_logistics_zone: str = ''   # 🆕 ติดตาม logistics zone ของทริปล่าสุด
-    _EPIDEMIC_NEXT_KM = 30   # ลดจาก 60→30km: ป้องกัน epidemic กระโดดไกล
+    _last_trip_logistics_zone: str = ''
+    _EPIDEMIC_NEXT_KM = 30
+
+    # ══════════════════════════════════════════════════════════════════════
+    # 🗺️ ZONE-BATCH PRE-PACKING
+    # จัดสาขาทีละ zone โดยไม่กระโดด — bin-first packing + nearest-neighbor
+    # เป้าหมาย: ทริปไม่กระจาย + รถเต็มพอดีทุกคัน
+    # ══════════════════════════════════════════════════════════════════════
+    safe_print("🗺️ ZONE-BATCH PRE-PACKING: จัดทีละ zone ไม่กระโดด...")
+
+    # Build atomic units ตาม branch_groups (group = 1 unit ห้ามแยก)
+    _zbp_seen_up: set = set()
+    _zbp_units: list = []   # each = {'codes', 'w', 'c', 'lat', 'lon', 'zone', 'prov', 'region_order', 'prov_max_dist', 'dist_from_dc', 'allow'}
+
+    _zbp_sorted_df = df.sort_values(
+        ['_region_order', '_prov_max_dist', '_province', '_logistics_zone', '_dist_max_dist', '_distance_from_dc'],
+        ascending=[True, False, True, True, False, False]
+    )
+
+    for _, _zr in _zbp_sorted_df.iterrows():
+        _zcu = str(_zr['Code']).strip().upper()
+        if _zcu in _zbp_seen_up:
+            continue
+        # ตรวจว่ายังอยู่ใน unassigned
+        if not any(str(u).strip().upper() == _zcu for u in unassigned):
+            continue
+
+        _gid_zb = BRANCH_TO_GROUP.get(_zcu)
+        if _gid_zb:
+            _grp_all_zb = [str(c).strip().upper() for c in BRANCH_GROUPS.get(_gid_zb, [])]
+            _grp_in_run = [c for c in _grp_all_zb
+                           if c not in _zbp_seen_up and
+                           any(str(u).strip().upper() == c for u in unassigned)]
+            if not _grp_in_run:
+                _grp_in_run = [_zcu]
+        else:
+            _grp_in_run = [_zcu]
+
+        # รวบรวม rows ของ unit
+        _unit_rows = df[df['Code'].apply(lambda x: str(x).strip().upper() in set(_grp_in_run))]
+        if _unit_rows.empty:
+            for _gc in _grp_in_run: _zbp_seen_up.add(_gc)
+            continue
+
+        _uw  = float(_unit_rows['Weight'].sum())
+        _uc  = float(_unit_rows['Cube'].sum())
+        _lats_u = _unit_rows['_lat'].fillna(0).to_numpy(dtype=float)
+        _lons_u = _unit_rows['_lon'].fillna(0).to_numpy(dtype=float)
+        _vld_u  = (_lats_u > 0) & (_lons_u > 0)
+        _clat_u = float(_lats_u[_vld_u].mean()) if _vld_u.any() else 0.0
+        _clon_u = float(_lons_u[_vld_u].mean()) if _vld_u.any() else 0.0
+        _zone_u = str(_zr.get('_logistics_zone', '') or '')
+        _prov_u = str(_zr.get('_province', '') or '')
+        _rord_u = float(_zr.get('_region_order', 99) or 99)
+        _pmx_u  = float(_zr.get('_prov_max_dist', 0) or 0)
+        _ddc_u  = float(_zr.get('_distance_from_dc', 0) or 0)
+        _allow_u = get_allowed_from_codes([r['Code'] for _, r in _unit_rows.iterrows()], ['4W','JB','6W'])
+        _actual_codes_u = _unit_rows['Code'].tolist()
+
+        _zbp_units.append({
+            'codes': _actual_codes_u, 'w': _uw, 'c': _uc,
+            'lat': _clat_u, 'lon': _clon_u,
+            'zone': _zone_u, 'prov': _prov_u,
+            'rord': _rord_u, 'pmx': _pmx_u, 'ddc': _ddc_u,
+            'allow': _allow_u,
+        })
+        for _gc in _grp_in_run:
+            _zbp_seen_up.add(_gc)
+
+    safe_print(f"   🗺️ รวม {len(_zbp_units)} units จาก {len(set(u['zone'] for u in _zbp_units))} zones")
+
+    # จัด units เป็น zone-groups แล้ว pack ทีละ zone
+    # key: (rord, -pmx, prov, zone)
+    from itertools import groupby as _gbk
+
+    def _zbp_zone_key(u):
+        return (u['rord'], -u['pmx'], u['prov'], u['zone'])
+
+    _zbp_units.sort(key=_zbp_zone_key)
+    _zbp_trip_assigned = 0
+
+    for _zkey, _zgroup_iter in _gbk(_zbp_units, key=_zbp_zone_key):
+        _zgroup = list(_zgroup_iter)
+        if not _zgroup:
+            continue
+        _zprov = _zkey[2]
+        _zzone = _zkey[3]
+
+        # เรียง units ภายใน zone ด้วย nearest-neighbor (เริ่มจากไกลสุดจาก DC)
+        _zrem = list(_zgroup)
+        _zrem.sort(key=lambda u: -u['ddc'])
+        _zordered: list = []
+        if _zrem:
+            _zordered.append(_zrem.pop(0))   # seed = ไกลสุด
+            while _zrem:
+                _zlast = _zordered[-1]
+                if _zlast['lat'] > 0:
+                    _zdists = []
+                    for _zu in _zrem:
+                        if _zu['lat'] > 0:
+                            _dp = radians(_zu['lat'] - _zlast['lat'])
+                            _dl = radians(_zu['lon'] - _zlast['lon'])
+                            _a2 = sin(_dp/2)**2 + cos(radians(_zlast['lat']))*cos(radians(_zu['lat']))*sin(_dl/2)**2
+                            _zdists.append(2*6371*atan2(sqrt(_a2), sqrt(1-_a2)))
+                        else:
+                            _zdists.append(999.0)
+                    _zbest_idx = int(np.argmin(_zdists))
+                    _zordered.append(_zrem.pop(_zbest_idx))
+                else:
+                    _zordered.append(_zrem.pop(0))
+
+        # Bin-first packing: เติมทริปปัจจุบันจนเกือบเต็ม แล้วเปิดทริปใหม่
+        _zbp_cur_trip: list = []    # actual codes
+        _zbp_cur_w    = 0.0
+        _zbp_cur_c    = 0.0
+        _zbp_cur_allow: list = ['4W','JB','6W']
+        _zbp_is_pt    = False
+
+        def _zbp_flush(cur_codes, cur_w, cur_c):
+            """บันทึกทริปปัจจุบันลง df"""
+            nonlocal trip_counter, _zbp_trip_assigned
+            if not cur_codes:
+                return
+            _zbp_lims = PUNTHAI_LIMITS if _zbp_is_pt else LIMITS
+            _zbp_buf  = punthai_buffer if _zbp_is_pt else maxmart_buffer
+            _fit = next((v for v in ['4W','JB','6W']
+                         if v in _zbp_cur_allow and
+                         cur_w <= _zbp_lims[v]['max_w'] and
+                         cur_c <= _zbp_lims[v]['max_c'] * _zbp_buf), '6W')
+            for _zc in cur_codes:
+                df.loc[df['Code'] == _zc, 'Trip'] = trip_counter
+                if _zc in unassigned: unassigned.remove(_zc)
+                else:
+                    for _u in list(unassigned):
+                        if str(_u).strip().upper() == str(_zc).strip().upper():
+                            unassigned.remove(_u); break
+            safe_print(f"   🗺️ Zone [{_zprov}/{_zzone}] Trip {trip_counter}: {len(cur_codes)} สาขา {cur_w:.0f}kg ({_fit})")
+            trip_counter += 1
+            _zbp_trip_assigned += len(cur_codes)
+
+        for _zu in _zordered:
+            # ตรวจว่า unit นี้ยังอยู่ใน unassigned
+            _zu_ups = [str(c).strip().upper() for c in _zu['codes']]
+            _still_unassigned = any(any(str(u).strip().upper() == zup for u in unassigned) for zup in _zu_ups)
+            if not _still_unassigned:
+                continue
+
+            _zu_allow = _zu['allow'] or ['4W','JB','6W']
+            _comb_allow = [v for v in _zbp_cur_allow if v in _zu_allow] if _zbp_cur_trip else _zu_allow
+            if not _comb_allow:
+                _comb_allow = _zu_allow   # fallback
+
+            _is_pt_u = all(branch_bu_cache.get(str(c).strip().upper(), False) for c in _zu['codes'])
+            _new_is_pt = _zbp_is_pt and _is_pt_u if _zbp_cur_trip else _is_pt_u
+            _lims_chk  = PUNTHAI_LIMITS if _new_is_pt else LIMITS
+            _buf_chk   = punthai_buffer if _new_is_pt else maxmart_buffer
+
+            _new_w = _zbp_cur_w + _zu['w']
+            _new_c = _zbp_cur_c + _zu['c']
+            _fits  = any(_new_w <= _lims_chk[v]['max_w'] and _new_c <= _lims_chk[v]['max_c'] * _buf_chk
+                         for v in _comb_allow)
+
+            if not _fits and _zbp_cur_trip:
+                # flush ทริปปัจจุบัน → เริ่มใหม่
+                _zbp_flush(_zbp_cur_trip, _zbp_cur_w, _zbp_cur_c)
+                _zbp_cur_trip  = []
+                _zbp_cur_w     = 0.0
+                _zbp_cur_c     = 0.0
+                _zbp_cur_allow = ['4W','JB','6W']
+                _zbp_is_pt     = False
+                _comb_allow    = _zu_allow
+                _new_is_pt     = _is_pt_u
+                _new_w         = _zu['w']
+                _new_c         = _zu['c']
+
+            _zbp_cur_trip.extend(_zu['codes'])
+            _zbp_cur_w     = _new_w
+            _zbp_cur_c     = _new_c
+            _zbp_cur_allow = _comb_allow
+            _zbp_is_pt     = _new_is_pt
+
+        # flush ที่เหลือใน zone
+        _zbp_flush(_zbp_cur_trip, _zbp_cur_w, _zbp_cur_c)
+        _zbp_cur_trip  = []
+        _zbp_cur_w     = 0.0
+        _zbp_cur_c     = 0.0
+        _zbp_cur_allow = ['4W','JB','6W']
+        _zbp_is_pt     = False
+
+    safe_print(f"🗺️ ZONE-BATCH: จัด {_zbp_trip_assigned} สาขา ({trip_counter-1} ทริป) — greedy รับที่เหลือ")
+
+    # ══════════════════════════════════════════════════════════════════════
 
     while unassigned:
         unassigned_df = df[df['Code'].isin(unassigned)]
