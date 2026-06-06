@@ -7885,16 +7885,16 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
         if _dp and _dp not in _prov_region_ord9:
             _prov_region_ord9[_dp] = REGION_ORDER.get(get_region_name(str(_dp)), 99)
 
-    # sort key: ภาค → จังหวัด (ใกล้ก่อน) → อำเภอ (ใกล้ก่อน) → ตำบล (ใกล้ก่อน)
-    # เรียงต่อเนื่องจากตำบล → อำเภอ → จังหวัด → ภาค
+    # sort key: ภาค → จังหวัด (ไกลก่อน) → อำเภอ (ไกลก่อน) → ตำบล (ไกลก่อน)
+    # เริ่มจากตำบลไกลสุด → ใกล้เข้ามาเรื่อยๆ ต่อเนื่องในแต่ละระดับ
     trip_sort9_keys = {
         trip_num: (
-            _prov_region_ord9.get(_trip_dom_prov9.get(trip_num, ''), 99),   # ภาค
-            _prov_avg_dist9.get(_trip_dom_prov9.get(trip_num, ''), 0),      # จังหวัด ใกล้ก่อน
-            _trip_dom_prov9.get(trip_num, ''),                               # กลุ่มจังหวัดเดียวกัน
-            _trip_dom_dist9.get(trip_num, ''),                               # อำเภอ
-            _trip_avg_dist9[trip_num],                                       # ภายในอำเภอ: ใกล้ก่อน
-            _trip_dom_subdist9.get(trip_num, ''),                            # ตำบล
+            _prov_region_ord9.get(_trip_dom_prov9.get(trip_num, ''), 99),    # ภาค
+            -_prov_avg_dist9.get(_trip_dom_prov9.get(trip_num, ''), 0),      # จังหวัด ไกลก่อน
+            _trip_dom_prov9.get(trip_num, ''),                                # กลุ่มจังหวัดเดียวกัน
+            _trip_dom_dist9.get(trip_num, ''),                                # อำเภอ
+            -_trip_avg_dist9[trip_num],                                       # ภายในอำเภอ: ไกลก่อน
+            _trip_dom_subdist9.get(trip_num, ''),                             # ตำบล
         )
         for trip_num in trip_max_distances
     }
