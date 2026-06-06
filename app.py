@@ -6017,14 +6017,17 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
             same_zone_df = same_zone_df.sort_values(sort_cols, ascending=sort_asc)
 
             # 🔍 Near-priority: ถ้า candidate ใกล้สุดใน same-zone ไกลกว่า threshold
-            # → ตรวจว่ามีสาขา province เดียวกันที่ใกล้กว่าไหม แล้วเพิ่มเข้ามาก่อน
+            # → ตรวจว่ามีสาขา zone+province เดียวกันที่ใกล้กว่าไหม (ห้ามข้ามโซน)
             _NEAR_PREFER_KM = 5.0  # ถ้ามีสาขาอื่นใกล้กว่า 5km → เอาก่อน same-zone ไกล
             try:
                 if not same_zone_df.empty and trip_original_province:
                     _sz_nearest_dist = float(same_zone_df.iloc[0]['_dist_to_trip'] or 999)
                     if _sz_nearest_dist > _NEAR_PREFER_KM:
+                        # ✅ กรองเฉพาะ zone เดียวกัน (ไม่ inject ต่างโซนเข้ามา)
                         _near_prov = remaining_df[
-                            remaining_df['_province'] == trip_original_province
+                            (remaining_df['_province'] == trip_original_province) &
+                            (remaining_df['_logistics_zone'] == trip_logistics_zone
+                             if trip_logistics_zone else True)
                         ].copy()
                         if not _near_prov.empty:
                             _near_prov['_dist_to_trip'] = _near_prov.apply(
@@ -6039,7 +6042,6 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                                     _near_prov.sort_values('_dist_to_trip'),
                                     same_zone_df
                                 ]).drop_duplicates(subset='Code').reset_index(drop=True)
-                                # fill NaN ในคอลัมน์ integer ที่อาจเกิดจาก concat
                                 for _ic in ['_area_rank', '_same_prov_rank']:
                                     if _ic in same_zone_df.columns:
                                         same_zone_df[_ic] = same_zone_df[_ic].fillna(3).astype(int)
@@ -6089,7 +6091,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                     _c_lon = float(candidate_row.get('_lon', 0) or 0)
                     if _c_lat > 0 and _c_lon > 0:
                         _dist_from_start = haversine_distance(_c_lat, _c_lon, start_lat, start_lon, use_osrm_cache=False)
-                        _chain_cap = (_PROV_CAP_KM * 2) if not _is_bkk_metro else 20.0
+                        _chain_cap = _PROV_CAP_KM if not _is_bkk_metro else 20.0
                         if _dist_from_start > _chain_cap:
                             continue  # chain-hop → ข้าม
 
@@ -6319,10 +6321,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 trip_allowed = test_allowed
                 trip_is_punthai = test_is_punthai
                 found_candidate = True
-                
+
                 if len(group_codes_valid) > 1:
                     safe_print(f"      🔗 เพิ่มกลุ่ม {len(group_codes_valid)} สาขา (จุดส่งเดียวกัน): {group_codes_valid}")
-                
+
                 # 🎯 อัพเดตตำบล/อำเภอ (เก็บไว้สำหรับ priority sorting เท่านั้น ไม่ใช้ filter หลัก)
                 cand_subdistrict = candidate_row.get('_subdistrict', '')
                 cand_district    = candidate_row.get('_district', '')
@@ -6330,7 +6332,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                     trip_subdistricts.add(cand_subdistrict)
                 if cand_district:
                     trip_districts.add(cand_district)
-                
+
                 # 🔒 ล็อคภาค: ถ้า trip_original_region ยังไม่รู้ → ล็อคจาก candidate แรกที่รู้จักภาค
                 if (not trip_original_region or trip_original_region == 'ไม่ระบุ'):
                     _cand_prov = candidate_row.get('_province', '')
@@ -6339,15 +6341,29 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                         if _new_region and _new_region != 'ไม่ระบุ':
                             trip_original_region = _new_region
                             safe_print(f"      🔒 ล็อคภาค #{trip_counter}: '{trip_original_region}' (จาก {_cand_prov})")
-                
+
+                # 🔄 Recalculate vehicle หลัง followers (ป้องกัน false overflow จาก group lock)
+                _re_allowed = get_allowed_from_codes(trip_codes, ['4W','JB','6W'])
+                _re_lims = PUNTHAI_LIMITS if trip_is_punthai else LIMITS
+                _re_buf  = punthai_buffer if trip_is_punthai else maxmart_buffer
+                _re_veh  = selected_vehicle
+                for _rv in ['4W','JB','6W']:
+                    if _rv not in (_re_allowed or []): continue
+                    _rl = _re_lims[_rv]
+                    if (trip_weight <= _rl['max_w'] and
+                            trip_cube <= _rl['max_c'] * _re_buf):
+                        _re_veh = _rv; break
+                max_w = _re_lims[_re_veh]['max_w']
+                max_c = _re_lims[_re_veh]['max_c'] * _re_buf
+
                 # เช็คว่าเต็มหรือยัง (>= 100% เท่านั้น ไม่ตัดก่อนเต็ม)
-                w_util = trip_weight / max_w
-                c_util = trip_cube / max_c
+                w_util = trip_weight / max_w if max_w > 0 else 1.0
+                c_util = trip_cube / max_c if max_c > 0 else 1.0
                 _qty_full = (max_qty_per_trip > 0 and trip_qty >= max_qty_per_trip)
                 if max(w_util, c_util) >= 1.0 or _qty_full:
                     safe_print(f"      ✅ Trip {trip_counter} เต็ม {max(w_util, c_util)*100:.1f}% qty={trip_qty}/{max_qty_per_trip} ({len(trip_codes)} สาขา)")
                     break  # เต็มแล้ว
-                
+
                 break  # หาสาขาเพิ่มได้กลุ่ม/สาขา → วนลูปใหม่หา centroid ใหม่
             
             if not found_candidate:
@@ -6385,10 +6401,18 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                             )
                         ]
                     if not _bf_rem.empty and _trip_coords_reach:
-                        # เลือกสาขาที่ maximize utilization (หนักสุดที่ยังพอดี)
-                        _bf_rem = _bf_rem.sort_values('Weight', ascending=False)
+                        # กรองระยะ: best-fit เฉพาะสาขาที่ใกล้ทริป ≤ _PROV_CAP_KM
+                        _bf_rem['_bf_dist'] = _bf_rem.apply(
+                            lambda r: min(haversine_distance(float(r.get('_lat',0) or 0), float(r.get('_lon',0) or 0), lt, ln, use_osrm_cache=False) for lt, ln in _trip_coords_reach if lt > 0)
+                            if float(r.get('_lat',0) or 0) > 0 else 999.0, axis=1)
+                        _bf_rem = _bf_rem[_bf_rem['_bf_dist'] <= _PROV_CAP_KM]
+                        # เรียง: ใกล้สุดก่อน
+                        _bf_rem = _bf_rem.sort_values('_bf_dist', ascending=True)
+                        # 🔄 วนยัดจนเต็ม (ไม่ break หลัง 1 สาขา)
                         for _, _bf_row in _bf_rem.iterrows():
                             _bf_code = _bf_row['Code']
+                            if _bf_code not in unassigned and not any(str(u).strip().upper()==str(_bf_code).strip().upper() for u in unassigned):
+                                continue  # ถูกเพิ่มไปแล้ว
                             _bf_w = float(_bf_row.get('Weight',0) or 0)
                             _bf_c = float(_bf_row.get('Cube',0) or 0)
                             if trip_weight + _bf_w > _bf_max_w: continue
@@ -6398,14 +6422,19 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                             trip_codes.append(_bf_code)
                             trip_weight += _bf_w; trip_cube += _bf_c
                             trip_qty += safe_qty(_bf_row.get('OriginalQty', 0))
+                            # อัปเดต coords reach
+                            _bf_lat_u = float(_bf_row.get('_lat', 0) or 0)
+                            _bf_lon_u = float(_bf_row.get('_lon', 0) or 0)
+                            if _bf_lat_u > 0 and _bf_lon_u > 0:
+                                _trip_coords_reach.append((_bf_lat_u, _bf_lon_u))
                             if _bf_code in unassigned: unassigned.discard(_bf_code)
                             else:
                                 for _u in list(unassigned):
                                     if str(_u).strip().upper()==str(_bf_code).strip().upper():
                                         unassigned.discard(_u); break
-                            safe_print(f"      🔋 Best-fit: +{_bf_code} ({_bf_w:.0f}kg) util={max(trip_weight/_bf_max_w,trip_cube/_bf_max_c)*100:.1f}%")
+                            safe_print(f"      🔋 Best-fit: +{_bf_code} ({_bf_w:.0f}kg/{_bf_row['_bf_dist']:.1f}km) util={max(trip_weight/_bf_max_w,trip_cube/_bf_max_c)*100:.1f}%")
                             found_candidate = True
-                            break  # เพิ่มได้ 1 สาขา → วนลูปใหม่
+                            # ไม่ break — วนต่อจนเต็มหรือหมด candidate
                 if not found_candidate:
                     safe_print(f"      🛑 epidemic candidates ถูกกรองหมด #{trip_counter} ({len(trip_codes)} สาขา) → ปิดทริป")
                     break
@@ -8105,8 +8134,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 if _vr > min_max_size:
                     break  # ห้ามเกินข้อจำกัดสาขา
                 _lim = limits[_veh]
-                if (total_w <= _lim['max_w'] * buffer and
-                        total_c <= _lim['max_c'] * buffer and
+                if (total_w <= _lim['max_w'] and                  # weight: hard limit, no buffer
+                        total_c <= _lim['max_c'] * buffer and       # cube: ยืดได้ตาม buffer
                         len(trip_codes) <= _lim['max_drops']):
                     correct_vehicle = _veh
                     break  # เล็กสุดที่รับโหลดได้
