@@ -7862,29 +7862,44 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 _dom_sd9 = str(_vcs9.index[0])
         _trip_dom_subdist9[trip_num] = _dom_sd9
 
-    # สร้าง province → max dist (global) และ province → region_order
-    _prov_global_max9: dict = {}
+    # dominant district
+    _dist_col9_name = next((c for c in ['District', '_district', 'อำเภอ'] if c in df.columns), None)
+    _trip_dom_dist9: dict = {}
+    for trip_num in df[df['Trip'] > 0]['Trip'].unique():
+        _dom_d9 = ''
+        if _dist_col9_name:
+            _vcd9 = df[df['Trip'] == trip_num][_dist_col9_name].dropna().value_counts()
+            if len(_vcd9):
+                _dom_d9 = str(_vcd9.index[0])
+        _trip_dom_dist9[trip_num] = _dom_d9
+
+    # province → avg dist (centroid) และ → region_order
+    _prov_avg_dist9: dict = {}
     _prov_region_ord9: dict = {}
     for _tn, _dp in _trip_dom_prov9.items():
-        _d = trip_max_distances.get(_tn, 0)
-        if _dp not in _prov_global_max9 or _d > _prov_global_max9[_dp]:
-            _prov_global_max9[_dp] = _d
+        _d = _trip_avg_dist9.get(_tn, 0)
+        if _dp not in _prov_avg_dist9:
+            _prov_avg_dist9[_dp] = _d
+        else:
+            _prov_avg_dist9[_dp] = (_prov_avg_dist9[_dp] + _d) / 2
         if _dp and _dp not in _prov_region_ord9:
             _prov_region_ord9[_dp] = REGION_ORDER.get(get_region_name(str(_dp)), 99)
 
-    # sort key: ภาค → จังหวัดไกลก่อน → กลุ่มจังหวัด → avg_dist ภายในจังหวัด → ตำบล
+    # sort key: ภาค → จังหวัด (ใกล้ก่อน) → อำเภอ (ใกล้ก่อน) → ตำบล (ใกล้ก่อน)
+    # เรียงต่อเนื่องจากตำบล → อำเภอ → จังหวัด → ภาค
     trip_sort9_keys = {
         trip_num: (
-            _prov_region_ord9.get(_trip_dom_prov9.get(trip_num, ''), 99),   # ภาค (เหนือ=1, อีสาน=2...)
-            -_prov_global_max9.get(_trip_dom_prov9.get(trip_num, ''), 0),   # จังหวัดไกลก่อน
+            _prov_region_ord9.get(_trip_dom_prov9.get(trip_num, ''), 99),   # ภาค
+            _prov_avg_dist9.get(_trip_dom_prov9.get(trip_num, ''), 0),      # จังหวัด ใกล้ก่อน
             _trip_dom_prov9.get(trip_num, ''),                               # กลุ่มจังหวัดเดียวกัน
-            -_trip_avg_dist9[trip_num],                                      # ภายในจังหวัด: avg ไกลก่อน
+            _trip_dom_dist9.get(trip_num, ''),                               # อำเภอ
+            _trip_avg_dist9[trip_num],                                       # ภายในอำเภอ: ใกล้ก่อน
             _trip_dom_subdist9.get(trip_num, ''),                            # ตำบล
         )
         for trip_num in trip_max_distances
     }
 
-    sorted_trips = sorted(trip_max_distances.keys(), key=lambda x: trip_sort9_keys.get(x, (99, 0, '', 0, '')))
+    sorted_trips = sorted(trip_max_distances.keys(), key=lambda x: trip_sort9_keys.get(x, (99, 0, '', '', 0, '')))
     
     # สร้าง mapping ใหม่
     trip_renumber = {old_trip: new_trip for new_trip, old_trip in enumerate(sorted_trips, 1)}
