@@ -538,7 +538,24 @@ def solve_vrp_by_province(
         return _hav(dc_lat, dc_lon,
                     float(sub['_lat'].mean()), float(sub['_lon'].mean()))
 
-    zones = sorted(vdf['_gz'].unique(), key=lambda z: _ctr(vdf[vdf['_gz']==z]))
+    # เรียง zone: province ก่อน (ตามระยะ centroid ของ province จาก DC)
+    # ภายใน province เรียง zone ตามระยะ — ทำให้ทริปของแต่ละจังหวัดอยู่ติดกัน
+    def _prov_of_zone(z):
+        from collections import Counter
+        zdf = vdf[vdf['_gz'] == z]
+        pv = Counter(zdf['_gp'].tolist()).most_common(1)
+        return pv[0][0] if pv else ''
+
+    prov_dist: Dict[str, float] = {}
+    for pv in vdf['_gp'].unique():
+        pv_df = vdf[vdf['_gp'] == pv]
+        prov_dist[pv] = _hav(dc_lat, dc_lon,
+                              float(pv_df['_lat'].mean()),
+                              float(pv_df['_lon'].mean()))
+
+    zones = sorted(vdf['_gz'].unique(),
+                   key=lambda z: (prov_dist.get(_prov_of_zone(z), 0),
+                                  _ctr(vdf[vdf['_gz'] == z])))
 
     # ── Sequential fill แยกตาม zone (ป้องกันทริปข้ามโซน) ────────────────────
     trip_counter = 1
