@@ -7776,9 +7776,8 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                 _new_w = _dom_cap['weight'] + _extra_w
                 _new_c = _dom_cap['cube'] + _extra_c
                 _dom_lim = (PUNTHAI_LIMITS if _dom_cap.get('is_punthai') else LIMITS).get(_dom_cap.get('allowed_vehicle', '6W'), LIMITS['6W'])
-                # อนุญาตให้เกินได้ไม่เกิน 150% (group lock สำคัญกว่า capacity)
-                if _new_w > _dom_lim['max_w'] * 1.5 or _new_c > _dom_lim['max_c'] * 1.5:
-                    _merge_ok = False
+                # group lock เด็ดขาด — ไม่มี capacity cap, Step 7.5 จะ split ทีหลัง
+                _ = _dom_lim  # suppress unused warning
             if _merge_ok:
                 for _, idx, _ in _mem_data:
                     df.at[idx, 'Trip'] = _dominant_trip
@@ -8833,47 +8832,32 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
             if len(_mups) < 2:
                 continue
             _trips_now = [_fl_code_trip[m] for m in _mups]
-            # เฉพาะ member ที่ถูก assign แล้ว (Trip>0) — ไม่ดึง Trip=0 (cut/overflow) กลับ
-            _assigned = [(m, t) for m, t in zip(_mups, _trips_now) if t > 0]
-            if len(_assigned) < 2:
+            # รวมทุก member — ทั้ง Trip>0 และ Trip=0 (orphan ก็ต้องดึงเข้ากลุ่ม)
+            _assigned   = [(m, t) for m, t in zip(_mups, _trips_now) if t > 0]
+            _orphans_fl = [(m, t) for m, t in zip(_mups, _trips_now) if t == 0]
+            if len(_assigned) < 1:
                 continue
             _trips_assigned = [t for _, t in _assigned]
-            if len(set(_trips_assigned)) == 1:
+            if len(set(_trips_assigned)) == 1 and not _orphans_fl:
                 continue  # ✓ ทุก member อยู่ทริปเดียวกันแล้ว
             # เลือกทริปที่มี member มากที่สุด
             _target_t = _FLC(_trips_assigned).most_common(1)[0][0]
-            for _mu, _mt in _assigned:
+            # วน: member ที่อยู่ต่างทริป + orphan (Trip=0) ทั้งหมด
+            for _mu, _mt in _assigned + _orphans_fl:
                 if _mt == _target_t:
                     continue
                 _fl_i = _fl_code_idx.get(_mu)
-                # Zone compatibility check before moving
-                _mu_zone = str(df.at[_fl_i, '_logistics_zone'] if _fl_i is not None else '').strip()
-                _mu_prov_fl = str(df.at[_fl_i, '_province'] if _fl_i is not None else '').strip() if _fl_i is not None else ''
+                # FINAL GROUP LOCK = ไม่มีข้อยกเว้น ยกเว้นข้ามจังหวัดเท่านั้น
+                _raw_prov_fl = df.at[_fl_i, '_province'] if _fl_i is not None else None
+                _mu_prov_fl = '' if (not _raw_prov_fl or str(_raw_prov_fl).strip().lower() in ('nan', 'none', '')) else str(_raw_prov_fl).strip()
                 _tgt_rows = df[df['Trip'] == _target_t]
-                _tgt_zones = set(_tgt_rows['_logistics_zone'].dropna().astype(str).str.strip().unique()) if not _tgt_rows.empty else set()
-                _tgt_zones.discard('')
                 _tgt_provs = set(_tgt_rows['_province'].dropna().astype(str).str.strip().unique()) if not _tgt_rows.empty else set()
-                _tgt_provs.discard('')
-                # Province-strict: ห้าม FINAL LOCK ย้ายข้ามจังหวัด
+                _tgt_provs = {p for p in _tgt_provs if p and p.lower() not in ('nan', 'none', '')}
+                # Province-strict เท่านั้น (zone/capacity ไม่บล็อค — group lock เด็ดขาด)
                 if _mu_prov_fl and _tgt_provs and _mu_prov_fl not in _tgt_provs:
                     safe_print(f"   ⚠️ FINAL LOCK skip: {_mu} จังหวัด {_mu_prov_fl} ≠ target trip {_target_t} ({_tgt_provs})")
                     continue
-                if _mu_zone and _tgt_zones and _mu_zone not in _tgt_zones:
-                    safe_print(f"   ⚠️ FINAL LOCK skip: {_mu} zone {_mu_zone} ≠ target trip {_target_t} zones {_tgt_zones}")
-                    continue
-                # ✅ Capacity check ก่อนย้าย — ห้ามย้ายถ้าทริปเป้าหมายจะเกิน max_w
-                _mu_w = float(df.at[_fl_i, 'Weight'] if _fl_i is not None else 0) if _fl_i is not None else 0.0
-                _mu_c = float(df.at[_fl_i, 'Cube']   if _fl_i is not None else 0) if _fl_i is not None else 0.0
-                _tgt_w = float(_tgt_rows['Weight'].fillna(0).sum()) if not _tgt_rows.empty else 0.0
-                _tgt_c = float(_tgt_rows['Cube'].fillna(0).sum())   if not _tgt_rows.empty else 0.0
-                _tgt_is_pt = all(branch_bu_cache.get(str(c).strip().upper(), False) for c in _tgt_rows['Code']) if not _tgt_rows.empty else False
-                _tgt_lims = PUNTHAI_LIMITS if _tgt_is_pt else LIMITS
-                _tgt_buf  = punthai_buffer if _tgt_is_pt else maxmart_buffer
-                _tgt_max_w = _tgt_lims['6W']['max_w']
-                _tgt_max_c = _tgt_lims['6W']['max_c'] * _tgt_buf
-                if _tgt_w + _mu_w > _tgt_max_w or _tgt_c + _mu_c > _tgt_max_c:
-                    safe_print(f"   ⚠️ FINAL LOCK skip: {_mu} จะทำให้ trip {_target_t} เกิน capacity ({_tgt_w+_mu_w:.0f}/{_tgt_max_w:.0f}kg)")
-                    continue
+                # zone/capacity: ยอมเกิน (group lock สำคัญกว่า) — Step 7.5 จะ split ทีหลังถ้าจำเป็น
                 if _fl_i is not None:
                     df.at[_fl_i, 'Trip'] = _target_t
                 else:
