@@ -171,11 +171,23 @@ def _sequential_fill(
     return tm, trm, tid
 
 
-# ── helpers สร้าง info dict ──────────────────────────────────────────────────
+# ── helpers ──────────────────────────────────────────────────────────────────
 def _most_common(series) -> str:
     from collections import Counter
     vals = [_s(v) for v in series if _s(v)]
     return Counter(vals).most_common(1)[0][0] if vals else ''
+
+
+def _mv_strict(rows: List[int], df: pd.DataFrame) -> str:
+    """หา max_vehicle เข้มงวดสุดในกลุ่ม rows"""
+    if '_max_vehicle' not in df.columns:
+        return '6W'
+    best = '6W'
+    for r in rows:
+        mv = _s(df.at[r, '_max_vehicle']) or '6W'
+        if mv not in LIMITS: mv = '6W'
+        if _RANK[mv] < _RANK[best]: best = mv
+    return best
 
 
 def _build_trip_info(df: pd.DataFrame) -> Dict[int, dict]:
@@ -184,11 +196,13 @@ def _build_trip_info(df: pd.DataFrame) -> Dict[int, dict]:
     for tid in sorted(df.loc[has_trip, 'Trip'].unique()):
         mask  = df['Trip'] == tid
         t_df  = df[mask]
-        truck = _s(t_df['Truck'].iloc[0]) if 'Truck' in t_df.columns else '6W'
-        if truck not in LIMITS: truck = '6W'
-        lim   = LIMITS[truck]
+        rows  = t_df.index.tolist()
+        # strict = max_vehicle ที่เข้มงวดสุดจากข้อมูลจริง (ไม่ใช่ truck ที่ assign)
+        strict = _mv_strict(rows, df)
+        lim   = LIMITS[strict]
         tw    = float(t_df['Weight'].sum())
         tc    = float(t_df['Cube'].sum())
+        truck = _best_truck(tw, tc, strict)
         gz = _most_common(t_df['_gz']) if '_gz' in t_df.columns else ''
         gp = _most_common(t_df['_gp']) if '_gp' in t_df.columns else ''
         gd = _most_common(t_df['_gd']) if '_gd' in t_df.columns else ''
@@ -203,8 +217,8 @@ def _build_trip_info(df: pd.DataFrame) -> Dict[int, dict]:
             'scope_d': f'{gz}||{gp}||{gd}',
             'scope_s': f'{gz}||{gp}||{gd}||{gs}',
             'fill': fill, 'lat': clat, 'lon': clon,
-            'rows': t_df.index.tolist(),
-            'strict': truck,
+            'rows': rows,
+            'strict': strict,
         }
     return info
 
@@ -430,18 +444,6 @@ def _split_over(df: pd.DataFrame, next_tid: int,
         if not found:
             break
     return df, next_tid
-
-
-def _mv_strict(rows: List[int], df: pd.DataFrame) -> str:
-    """หา max_vehicle เข้มงวดสุดในกลุ่ม rows"""
-    if '_max_vehicle' not in df.columns:
-        return '6W'
-    best = '6W'
-    for r in rows:
-        mv = _s(df.at[r,'_max_vehicle']) or '6W'
-        if mv not in LIMITS: mv = '6W'
-        if _RANK[mv] < _RANK[best]: best = mv
-    return best
 
 
 # ── ตรวจตำบลกระจายเกิน 2 ทริป → consolidate ──────────────────────────────
