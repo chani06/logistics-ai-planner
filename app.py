@@ -5545,6 +5545,7 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
     # จัด units เป็น zone-groups แล้ว pack ทีละ zone
     # key: (rord, -pmx, prov, zone)
     from itertools import groupby as _gbk
+    from math import radians as _zbp_rad, sin as _zbp_sin, cos as _zbp_cos, sqrt as _zbp_sqrt, atan2 as _zbp_at2
 
     def _zbp_zone_key(u):
         return (u['rord'], -u['pmx'], u['prov'], u['zone'])
@@ -5571,10 +5572,10 @@ def predict_trips(test_df, model_data, punthai_buffer=1.0, maxmart_buffer=1.10, 
                     _zdists = []
                     for _zu in _zrem:
                         if _zu['lat'] > 0:
-                            _dp = radians(_zu['lat'] - _zlast['lat'])
-                            _dl = radians(_zu['lon'] - _zlast['lon'])
-                            _a2 = sin(_dp/2)**2 + cos(radians(_zlast['lat']))*cos(radians(_zu['lat']))*sin(_dl/2)**2
-                            _zdists.append(2*6371*atan2(sqrt(_a2), sqrt(1-_a2)))
+                            _dp = _zbp_rad(_zu['lat'] - _zlast['lat'])
+                            _dl = _zbp_rad(_zu['lon'] - _zlast['lon'])
+                            _a2 = _zbp_sin(_dp/2)**2 + _zbp_cos(_zbp_rad(_zlast['lat']))*_zbp_cos(_zbp_rad(_zu['lat']))*_zbp_sin(_dl/2)**2
+                            _zdists.append(2*6371*_zbp_at2(_zbp_sqrt(_a2), _zbp_sqrt(1-_a2)))
                         else:
                             _zdists.append(999.0)
                     _zbest_idx = int(np.argmin(_zdists))
