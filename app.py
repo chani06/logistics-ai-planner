@@ -7925,15 +7925,6 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
         )
         _merged_set_cs: set = set()
 
-        # ดึงระยะถนนจริงทุกคู่ trip ด้วย OSRM batch ครั้งเดียวต่อ round
-        _trip_ids_cs = [t for t, m in _trips_by_util if m['clat'] > 0]
-        _trip_pts_cs = [(m['clat'], m['clon']) for t, m in _trips_by_util if m['clat'] > 0]
-        _road_dist_cs = {}  # (ta, tb) → km ถนนจริง
-        if len(_trip_pts_cs) >= 2:
-            _batch_result = _osrm_table_batch(_trip_pts_cs)
-            for (_i, _j), _km in _batch_result.items():
-                _road_dist_cs[(_trip_ids_cs[_i], _trip_ids_cs[_j])] = _km
-
         for _ta, _ma in _trips_by_util:
             if _ta in _merged_set_cs:
                 continue
@@ -7954,7 +7945,9 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
                 if _util_b >= _CONSOL_MIN_UTIL:
                     continue
 
-                _d_cs = _road_dist_cs.get((_ta, _tb), _road_dist_cs.get((_tb, _ta), 0.0))
+                _d_cs = haversine_distance(_ma['clat'], _ma['clon'],
+                                           _mb['clat'], _mb['clon'],
+                                           use_osrm_cache=False)
                 if _d_cs > _CONSOL_MAX_KM:
                     continue
 
