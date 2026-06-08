@@ -142,18 +142,16 @@ def _sequential_fill(
     cur = _Trip(tid); tid += 1
 
     for grp in _loc_groups(ordered_rows, df):
-        # คำนวณ weight/cube/mv รวมของทั้งกลุ่ม
         gw = sum(float(df.at[ri,'Weight']) for ri in grp)
         gc = sum(float(df.at[ri,'Cube'])   for ri in grp)
         gm = min((_get_mv(df, ri) for ri in grp),
-                 key=lambda x: _RANK.get(x, 2))   # mv เข้มงวดสุดในกลุ่ม
+                 key=lambda x: _RANK.get(x, 2))
 
         if cur.can_add(gw, gc, gm):
             for ri in grp:
                 cur.add(ri, float(df.at[ri,'Weight']),
                             float(df.at[ri,'Cube']), _get_mv(df, ri))
         else:
-            # ปิดทริปปัจจุบัน แล้วเปิดใหม่พร้อมกลุ่มนี้
             if cur.rows:
                 for r in cur.rows:
                     tm[r]  = cur.id
@@ -255,7 +253,7 @@ _DIST_DIST = 40_000   # อำเภอ: ≤ 40 km
 _DIST_PROV = 60_000   # จังหวัด: ≤ 60 km
 _DIST_ZONE = 80_000   # zone: ≤ 80 km
 
-
+_DIST_ADJ  =  5_000   # ข้ามตำบล/อำเภอ: ติดกัน ≤ 5 km เท่านั้น
 _DIST_CROSS_PROV = 20_000   # cross-province merge สูงสุด 20km
 
 
@@ -296,32 +294,37 @@ def _consolidate_one_level(
                     return d <= _DIST_CROSS_PROV
                 return d <= _md
 
+            # เรียงตามระยะล้วน ไม่มี priority ใดก่อน
+            # ลองเฉพาะ nearest → ถ้ารวมไม่ได้ หยุด ไม่ข้ามไปหาไกลกว่า
             candidates = sorted(
                 [(k, v) for k, v in info.items()
                  if k != sid and k not in used
                  and v.get(scope_key, '') == s_scope
                  and _dist_ok(v)],
-                key=lambda x: (
-                    0 if (prefer_key and x[1].get(prefer_key,'') == s_pref) else 1,
-                    _hav(s['lat'], s['lon'], x[1]['lat'], x[1]['lon'])
-                ))
+                key=lambda x: _hav(s['lat'], s['lon'], x[1]['lat'], x[1]['lon'])
+            )
 
             for tid2, _ in candidates:
                 if tid2 in used:
                     continue
-                if _do_merge(info, sid, tid2, df):
-                    used.add(tid2)
-                    changed = True
-                    if info[sid]['fill'] >= fill_ratio:
+                if not _do_merge(info, sid, tid2, df):
+                    break  # nearest ไม่ได้ → หยุด ไม่ข้าม
+                used.add(tid2)
+                changed = True
+                if info[sid]['fill'] >= fill_ratio:
                         break
     return df
 
 
 def _consolidate_tiered(df: pd.DataFrame) -> pd.DataFrame:
     """
-    รวมเฉพาะในตำบลเดียวกัน (scope_s) — ไม่ข้ามตำบล ไม่กระโดด
+    4 ระดับ: ตำบล → อำเภอ → จังหวัด → zone
+    แต่ละระดับรวมทริปใกล้ที่สุดก่อน prefer ระดับย่อยกว่าก่อนเสมอ
     """
-    df = _consolidate_one_level(df, 'scope_s', 0.95, _DIST_SUBD)
+    df = _consolidate_one_level(df, 'scope_s', 0.98, _DIST_SUBD)
+    df = _consolidate_one_level(df, 'scope_d', 0.98, _DIST_DIST, prefer_key='scope_s')
+    df = _consolidate_one_level(df, 'scope_p', 0.98, _DIST_PROV, prefer_key='scope_d')
+    df = _consolidate_one_level(df, 'scope_z', 0.98, _DIST_ZONE, prefer_key='scope_p')
     return df
 
 
@@ -555,7 +558,9 @@ def solve_vrp_by_province(
                                   _ctr(vdf[vdf['_gz'] == z])),
                    reverse=True)   # ไกลก่อน (province ไกลสุด → zone ไกลสุดในนั้น)
 
-    # ── Sequential fill แยกตาม zone (ป้องกันทริปข้ามโซน) ────────────────────
+    # ── เรียงสาขาตามลำดับภูมิศาสตร์ก่อน แล้วค่อย fill แยกตามประเภทรถ ──────────
+    # ขั้น 1: สร้าง global ordered list แต่ละ zone (zone ไม่ปนกัน)
+    # ขั้น 2: แยก rows ตาม max_vehicle (4W → JB → 6W) fill แต่ละประเภทก่อน
     trip_counter = 1
     prev_lat, prev_lon = dc_lat, dc_lon
 
@@ -564,16 +569,17 @@ def solve_vrp_by_province(
         z_df   = df[z_mask]
         dists  = sorted(z_df['_gd'].unique(),
                         key=lambda d: _ctr(z_df[z_df['_gd']==d]),
-                        reverse=True)   # ไกลก่อน
-        zone_ordered: List[int] = []
+                        reverse=True)
 
+        # ── ขั้น 1: เรียง rows ตามลำดับภูมิศาสตร์ทั้ง zone ──────────────────
+        zone_ordered: List[int] = []
         for dist in dists:
             d_mask = z_mask & (df['_gd'] == dist)
             d_df   = df[d_mask]
             if d_df.empty: continue
             subds = sorted(d_df['_gs'].unique(),
                            key=lambda s: _ctr(d_df[d_df['_gs']==s]),
-                           reverse=True)   # ไกลก่อน
+                           reverse=True)
             for subd in subds:
                 s_mask = d_mask & (df['_gs'] == subd)
                 s_rows = df[s_mask].index.tolist()
@@ -584,8 +590,24 @@ def solve_vrp_by_province(
                 prev_lat = float(df.at[last, '_lat'])
                 prev_lon = float(df.at[last, '_lon'])
 
-        if zone_ordered:
-            tm, trm, trip_counter = _sequential_fill(zone_ordered, df, trip_counter)
+        if not zone_ordered:
+            continue
+
+        # ── ขั้น 2: per-subdistrict fill — รวมทุกสาขาในตำบล หารถเล็กสุดที่จุได้ ──
+        # ไม่แยก type ก่อน: สาขา 6W-allowed ถูกดึงเข้า 4W ได้ถ้าน้ำหนัก/คิ้วจุ
+        # เมื่อเต็ม → ปิดทริป (truck = smallest fitting) เปิดใหม่ต่อในตำบลเดียวกัน
+        subd_buckets: Dict[str, List[int]] = {}
+        subd_order: List[str] = []
+        for ri in zone_ordered:
+            gs = _s(df.at[ri, '_gs']) if '_gs' in df.columns else ''
+            if gs not in subd_buckets:
+                subd_buckets[gs] = []
+                subd_order.append(gs)
+            subd_buckets[gs].append(ri)
+
+        for gs in subd_order:
+            tm, trm, trip_counter = _sequential_fill(
+                subd_buckets[gs], df, trip_counter)
             for ri, t in tm.items():
                 df.at[ri, 'Trip']  = t
                 df.at[ri, 'Truck'] = trm[ri]
