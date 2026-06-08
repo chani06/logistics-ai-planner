@@ -6334,6 +6334,38 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
         trip_renumber = {old: new for new, old in enumerate(remaining_trips, start=1)}
         df['Trip'] = df['Trip'].map(lambda x: trip_renumber.get(x, x) if x > 0 else x)
 
+    # ── Pre-seed DISTANCE_CACHE ด้วย OSRM road distance ทุกสาขา (1 batch call) ──
+    # ยิงก่อน consolidation เริ่ม — loop ทั้งหมดหลังนี้ lookup cache ทันที ไม่มี network
+    try:
+        _pre_lats = df['_lat'].fillna(0).to_numpy(dtype=float)
+        _pre_lons = df['_lon'].fillna(0).to_numpy(dtype=float)
+        _pre_valid = (_pre_lats > 0) & (_pre_lons > 0)
+        _pre_pts = list(zip(_pre_lats[_pre_valid].tolist(), _pre_lons[_pre_valid].tolist()))
+        # dedup พิกัด (round 4 ตำแหน่ง)
+        _pre_pts_u = list({(round(la,4), round(lo,4)) for la, lo in _pre_pts})
+        if len(_pre_pts_u) >= 2:
+            safe_print(f"📡 Pre-compute road distances: {len(_pre_pts_u)} จุด ({len(_pre_pts_u)**2} คู่)...")
+            coords_str = ";".join([f"{lo},{la}" for la, lo in _pre_pts_u])
+            _pre_url = (f"http://router.project-osrm.org/table/v1/driving/"
+                        f"{coords_str}?annotations=distance")
+            _pre_r = requests.get(_pre_url, timeout=30)
+            _pre_data = _pre_r.json()
+            if _pre_data.get("code") == "Ok":
+                _pre_mat = _pre_data["distances"]
+                _seeded = 0
+                for _pi, (_la1, _lo1) in enumerate(_pre_pts_u):
+                    for _pj, (_la2, _lo2) in enumerate(_pre_pts_u):
+                        if _pi == _pj: continue
+                        _dm = _pre_mat[_pi][_pj]
+                        if _dm and _dm > 0:
+                            _ck = f"{_la1:.4f},{_lo1:.4f}_{_la2:.4f},{_lo2:.4f}"
+                            if _ck not in DISTANCE_CACHE:
+                                DISTANCE_CACHE[_ck] = _dm / 1000.0
+                                _seeded += 1
+                safe_print(f"   ✅ Seeded {_seeded} road distances → consolidation ใช้ถนนจริง")
+    except Exception as _pre_ex:
+        safe_print(f"   ⚠️ Pre-compute skipped: {_pre_ex} (fallback haversine×1.35)")
+
     # ==========================================
     # Step 6.65: 🔗 AGGRESSIVE CONSOLIDATION — รวมทริปที่ยังว่างอยู่
     # หลักการ: "จะตัดใหม่ต้องเต็มก่อน" — รวม 2 ทริปที่ util ต่ำเข้าด้วยกัน
