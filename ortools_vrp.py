@@ -31,6 +31,36 @@ def _hav(lat1, lon1, lat2, lon2) -> float:
     return 2*R*math.asin(math.sqrt(max(0.0, min(1.0, a))))
 
 
+# ── OSRM road-distance cache (shared in-process) ─────────────────────────────
+_ROAD_DIST_CACHE: Dict[Tuple[float,float,float,float], float] = {}
+
+def _road_dist(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """ระยะถนนจริง (เมตร) — OSRM Table API + cache, fallback haversine×1.35"""
+    key = (round(lat1,4), round(lon1,4), round(lat2,4), round(lon2,4))
+    key_r = (round(lat2,4), round(lon2,4), round(lat1,4), round(lon1,4))
+    if key in _ROAD_DIST_CACHE:
+        return _ROAD_DIST_CACHE[key]
+    if key_r in _ROAD_DIST_CACHE:
+        return _ROAD_DIST_CACHE[key_r]
+    try:
+        import urllib.request as _ur, json as _js
+        url = (f"http://router.project-osrm.org/table/v1/driving/"
+               f"{lon1:.4f},{lat1:.4f};{lon2:.4f},{lat2:.4f}?annotations=distance")
+        with _ur.urlopen(url, timeout=6) as _r:
+            data = _js.loads(_r.read())
+        if data.get("code") == "Ok":
+            d = data["distances"][0][1]
+            if d and d > 0:
+                _ROAD_DIST_CACHE[key] = float(d)
+                return float(d)
+    except Exception:
+        pass
+    # fallback: haversine × 1.35
+    d = _hav(lat1, lon1, lat2, lon2) * 1.35
+    _ROAD_DIST_CACHE[key] = d
+    return d
+
+
 def _s(v) -> str:
     x = str(v).strip()
     return '' if x.lower() in ('nan','none','') else x
@@ -289,19 +319,19 @@ def _consolidate_one_level(
             s_prov  = s.get('scope_p', '')
 
             def _dist_ok(v, _s=s, _sp=s_prov, _md=max_dist, _izl=is_zone_level):
-                d = _hav(_s['lat'], _s['lon'], v['lat'], v['lon'])
+                d = _road_dist(_s['lat'], _s['lon'], v['lat'], v['lon'])
                 if _izl and v.get('scope_p','') != _sp:
                     return d <= _DIST_CROSS_PROV
                 return d <= _md
 
-            # เรียงตามระยะล้วน ไม่มี priority ใดก่อน
+            # เรียงตามระยะถนนจริง — nearest first
             # ลองเฉพาะ nearest → ถ้ารวมไม่ได้ หยุด ไม่ข้ามไปหาไกลกว่า
             candidates = sorted(
                 [(k, v) for k, v in info.items()
                  if k != sid and k not in used
                  and v.get(scope_key, '') == s_scope
                  and _dist_ok(v)],
-                key=lambda x: _hav(s['lat'], s['lon'], x[1]['lat'], x[1]['lon'])
+                key=lambda x: _road_dist(s['lat'], s['lon'], x[1]['lat'], x[1]['lon'])
             )
 
             for tid2, _ in candidates:
