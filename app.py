@@ -7910,7 +7910,10 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
         _clat  = float(_lats[_valid].mean()) if _valid.any() else 0.0
         _clon  = float(_lons[_valid].mean()) if _valid.any() else 0.0
         _pts   = list(zip(_lats[_valid].tolist(), _lons[_valid].tolist()))
-        return {'w': _w, 'c': _c, 'prov': _prov, 'subd': _subd,
+        _dist_col = next((c for c in ['District', '_district', 'อำเภอ'] if c in _td.columns), None)
+        _dist_vc  = _td[_dist_col].dropna().value_counts() if _dist_col else None
+        _dist_val = str(_dist_vc.index[0]) if (_dist_vc is not None and len(_dist_vc)) else ''
+        return {'w': _w, 'c': _c, 'prov': _prov, 'subd': _subd, 'dist': _dist_val,
                 'clat': _clat, 'clon': _clon, 'pts': _pts,
                 'max_w': _mw, 'max_c': _mc, 'buf': _buf, 'allow': _allow,
                 'veh': _veh, 'is_pt': _is_pt, 'codes': _codes}
@@ -7995,13 +7998,15 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
 
                 _u_comb = max(_comb_w / _lims_comb[_fit_veh]['max_w'],
                               _comb_c / _lims_comb[_fit_veh]['max_c'])
-                _candidates_cs.append((_d_cs, -_u_comb, _tb))
+                _same_subd = 0 if (_ma.get('subd') and _mb.get('subd') and _ma['subd'] == _mb['subd']) else 1
+                _same_dist = 0 if (_ma.get('dist') and _mb.get('dist') and _ma['dist'] == _mb['dist']) else 1
+                _candidates_cs.append((_same_subd, _same_dist, _d_cs, -_u_comb, _tb))
 
             if not _candidates_cs:
                 continue
-            _candidates_cs.sort()  # ใกล้สุดตามถนนจริงก่อน → util สูงก่อน
-            _best_tb = _candidates_cs[0][2]
-            _best_combined_util = -_candidates_cs[0][1]
+            _candidates_cs.sort()  # ตำบลเดียวกัน → อำเภอเดียวกัน → ใกล้สุด → util สูง
+            _best_tb = _candidates_cs[0][4]
+            _best_combined_util = -_candidates_cs[0][3]
 
             # รวมทริป _best_tb เข้า _ta
             df.loc[df['Trip'] == _best_tb, 'Trip'] = _ta

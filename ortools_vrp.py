@@ -325,25 +325,27 @@ def _consolidate_one_level(
                     return d <= _DIST_CROSS_PROV
                 return d <= _md
 
-            # เรียงตามระยะสั้นสุดระหว่างสาขาจริง (ไม่ใช่ centroid)
-            # ลองเฉพาะ nearest → ถ้ารวมไม่ได้ หยุด ไม่ข้ามไปหาไกลกว่า
+            # เรียง: prefer_key เดียวกันก่อน (ตำบล/อำเภอเดียวกัน) → ระยะสั้นสุดสาขาจริง
             candidates = sorted(
                 [(k, v) for k, v in info.items()
                  if k != sid and k not in used
                  and v.get(scope_key, '') == s_scope
                  and _dist_ok(k, v)],
-                key=lambda x: _min_branch_dist(s, x[1], df)
+                key=lambda x: (
+                    0 if (prefer_key and x[1].get(prefer_key, '') == s_pref) else 1,
+                    _min_branch_dist(s, x[1], df)
+                )
             )
 
             for tid2, _ in candidates:
                 if tid2 in used:
                     continue
-                if not _do_merge(info, sid, tid2, df):
-                    break  # nearest ไม่ได้ → หยุด ไม่ข้าม
-                used.add(tid2)
-                changed = True
-                if info[sid]['fill'] >= fill_ratio:
+                if _do_merge(info, sid, tid2, df):
+                    used.add(tid2)
+                    changed = True
+                    if info[sid]['fill'] >= fill_ratio:
                         break
+                # ถ้าไม่จุ → ลอง candidate ถัดไปในตำบล/อำเภอเดียวกัน (ไม่หยุด)
     return df
 
 
