@@ -35,7 +35,7 @@ def _hav(lat1, lon1, lat2, lon2) -> float:
 _ROAD_DIST_CACHE: Dict[Tuple[float,float,float,float], float] = {}
 
 def _road_dist(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """ระยะถนนโดยประมาณ (เมตร) — cache hit → ถนนจริง, miss → haversine×1.35 ทันที (zero latency)"""
+    """ระยะถนนโดยประมาณ (เมตร) — cache hit → ถนนจริง, miss → haversine×1.35 (zero latency)"""
     key = (round(lat1,4), round(lon1,4), round(lat2,4), round(lon2,4))
     key_r = (round(lat2,4), round(lon2,4), round(lat1,4), round(lon1,4))
     if key in _ROAD_DIST_CACHE:
@@ -45,6 +45,23 @@ def _road_dist(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     d = _hav(lat1, lon1, lat2, lon2) * 1.35
     _ROAD_DIST_CACHE[key] = d
     return d
+
+
+def _min_branch_dist(s: dict, t: dict, df: pd.DataFrame) -> float:
+    """ระยะสั้นสุดระหว่างสาขาจริงของสองทริป (เมตร) — ไม่ใช้ centroid"""
+    best = float('inf')
+    for ri in s['rows']:
+        la1 = float(df.at[ri, '_lat']) if '_lat' in df.columns else 0.0
+        lo1 = float(df.at[ri, '_lon']) if '_lon' in df.columns else 0.0
+        if la1 <= 0: continue
+        for rj in t['rows']:
+            la2 = float(df.at[rj, '_lat']) if '_lat' in df.columns else 0.0
+            lo2 = float(df.at[rj, '_lon']) if '_lon' in df.columns else 0.0
+            if la2 <= 0: continue
+            d = _road_dist(la1, lo1, la2, lo2)
+            if d < best:
+                best = d
+    return best if best < float('inf') else 0.0
 
 
 def _s(v) -> str:
@@ -304,20 +321,20 @@ def _consolidate_one_level(
             s_pref  = s.get(prefer_key, '') if prefer_key else None
             s_prov  = s.get('scope_p', '')
 
-            def _dist_ok(v, _s=s, _sp=s_prov, _md=max_dist, _izl=is_zone_level):
-                d = _road_dist(_s['lat'], _s['lon'], v['lat'], v['lon'])
-                if _izl and v.get('scope_p','') != _sp:
+            def _dist_ok(k2, v2, _s=s, _sp=s_prov, _md=max_dist, _izl=is_zone_level):
+                d = _min_branch_dist(_s, v2, df)
+                if _izl and v2.get('scope_p','') != _sp:
                     return d <= _DIST_CROSS_PROV
                 return d <= _md
 
-            # เรียงตามระยะถนนจริง — nearest first
+            # เรียงตามระยะสั้นสุดระหว่างสาขาจริง (ไม่ใช่ centroid)
             # ลองเฉพาะ nearest → ถ้ารวมไม่ได้ หยุด ไม่ข้ามไปหาไกลกว่า
             candidates = sorted(
                 [(k, v) for k, v in info.items()
                  if k != sid and k not in used
                  and v.get(scope_key, '') == s_scope
-                 and _dist_ok(v)],
-                key=lambda x: _road_dist(s['lat'], s['lon'], x[1]['lat'], x[1]['lon'])
+                 and _dist_ok(k, v)],
+                key=lambda x: _min_branch_dist(s, x[1], df)
             )
 
             for tid2, _ in candidates:

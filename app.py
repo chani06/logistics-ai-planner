@@ -7905,8 +7905,9 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
         _valid = (_lats > 0) & (_lons > 0)
         _clat  = float(_lats[_valid].mean()) if _valid.any() else 0.0
         _clon  = float(_lons[_valid].mean()) if _valid.any() else 0.0
+        _pts   = list(zip(_lats[_valid].tolist(), _lons[_valid].tolist()))
         return {'w': _w, 'c': _c, 'prov': _prov, 'subd': _subd,
-                'clat': _clat, 'clon': _clon,
+                'clat': _clat, 'clon': _clon, 'pts': _pts,
                 'max_w': _mw, 'max_c': _mc, 'buf': _buf, 'allow': _allow,
                 'veh': _veh, 'is_pt': _is_pt, 'codes': _codes}
 
@@ -7945,9 +7946,18 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
                 if _util_b >= _CONSOL_MIN_UTIL:
                     continue
 
-                _d_cs = haversine_distance(_ma['clat'], _ma['clon'],
-                                           _mb['clat'], _mb['clon'],
-                                           use_osrm_cache=False)
+                # ระยะสั้นสุดระหว่างสาขาจริง (ไม่ใช้ centroid)
+                _pts_a = _ma.get('pts', [])
+                _pts_b = _mb.get('pts', [])
+                if _pts_a and _pts_b:
+                    _d_cs = min(
+                        haversine_distance(_la, _loa, _lb, _lob, use_osrm_cache=False)
+                        for _la, _loa in _pts_a for _lb, _lob in _pts_b
+                    )
+                else:
+                    _d_cs = haversine_distance(_ma['clat'], _ma['clon'],
+                                               _mb['clat'], _mb['clon'],
+                                               use_osrm_cache=False)
                 if _d_cs > _CONSOL_MAX_KM:
                     continue
 
