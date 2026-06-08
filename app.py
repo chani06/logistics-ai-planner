@@ -4491,10 +4491,8 @@ def get_osrm_distance_live(lat1, lon1, lat2, lon2):
 
 def _osrm_table_batch(points):
     """
-    ดึงระยะถนนจริง (km) ทุกคู่จาก OSRM Table API แบบ batch ครั้งเดียว
-    points: list of (lat, lon)
-    คืน dict {(i,j): km} ทุกคู่ i→j
-    fallback haversine×1.35 ถ้า OSRM ล้มเหลว
+    ระยะ branch-to-branch (km) ทุกคู่ — zero latency
+    cache hit → ระยะถนนจริง, miss → haversine×1.35 ทันที (ไม่ยิง network)
     """
     import math as _m
     n = len(points)
@@ -4505,56 +4503,22 @@ def _osrm_table_batch(points):
         p1, p2 = _m.radians(la1), _m.radians(la2)
         a = (_m.sin(_m.radians(la2-la1)/2)**2 +
              _m.cos(p1)*_m.cos(p2)*_m.sin(_m.radians(lo2-lo1)/2)**2)
-        return 2*R*_m.atan2(_m.sqrt(a), _m.sqrt(1-a)) * 1.35
+        return 2*R*_m.atan2(_m.sqrt(max(0,a)), _m.sqrt(max(0,1-a))) * 1.35
 
-    if n == 0:
-        return result
-
-    # ตรวจ cache ก่อน
-    need = []
     for i in range(n):
         for j in range(n):
             if i == j:
                 continue
             la1, lo1 = points[i]
             la2, lo2 = points[j]
-            ck = f"{la1:.4f},{lo1:.4f}_{la2:.4f},{lo2:.4f}"
+            ck   = f"{la1:.4f},{lo1:.4f}_{la2:.4f},{lo2:.4f}"
             ck_r = f"{la2:.4f},{lo2:.4f}_{la1:.4f},{lo1:.4f}"
             if USE_CACHE and ck in DISTANCE_CACHE:
                 result[(i, j)] = DISTANCE_CACHE[ck]
             elif USE_CACHE and ck_r in DISTANCE_CACHE:
                 result[(i, j)] = DISTANCE_CACHE[ck_r]
             else:
-                need.append((i, j))
-
-    # ถ้า miss → ยิง OSRM Table batch
-    if need:
-        try:
-            coords_str = ";".join([f"{lo:.4f},{la:.4f}" for la, lo in points])
-            url = (f"http://router.project-osrm.org/table/v1/driving/"
-                   f"{coords_str}?annotations=distance")
-            r = requests.get(url, timeout=10)
-            data = r.json()
-            if data.get("code") == "Ok":
-                matrix = data["distances"]  # matrix[i][j] = เมตร i→j
-                for i in range(n):
-                    for j in range(n):
-                        if i == j:
-                            continue
-                        dist_m = matrix[i][j]
-                        km = (dist_m / 1000.0) if (dist_m and dist_m > 0) else _hav_km(*points[i], *points[j])
-                        result[(i, j)] = km
-                        la1, lo1 = points[i]; la2, lo2 = points[j]
-                        ck = f"{la1:.4f},{lo1:.4f}_{la2:.4f},{lo2:.4f}"
-                        if USE_CACHE:
-                            DISTANCE_CACHE[ck] = km
-            else:
-                raise ValueError("OSRM error")
-        except Exception:
-            # fallback haversine
-            for (i, j) in need:
-                if (i, j) not in result:
-                    result[(i, j)] = _hav_km(*points[i], *points[j])
+                result[(i, j)] = _hav_km(la1, lo1, la2, lo2)
 
     return result
 

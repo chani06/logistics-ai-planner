@@ -35,15 +35,13 @@ def _hav(lat1, lon1, lat2, lon2) -> float:
 _ROAD_DIST_CACHE: Dict[Tuple[float,float,float,float], float] = {}
 
 def _road_dist(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """ระยะถนนโดยประมาณ (เมตร) — cache hit → ถนนจริง, miss → haversine×1.35 (zero latency)"""
-    key = (round(lat1,4), round(lon1,4), round(lat2,4), round(lon2,4))
-    key_r = (round(lat2,4), round(lon2,4), round(lat1,4), round(lon1,4))
-    if key in _ROAD_DIST_CACHE:
-        return _ROAD_DIST_CACHE[key]
-    if key_r in _ROAD_DIST_CACHE:
-        return _ROAD_DIST_CACHE[key_r]
+    """cache hit → ระยะถนนจริง (เมตร), miss → haversine×1.35 ทันที (zero latency)"""
+    k  = (round(lat1,4), round(lon1,4), round(lat2,4), round(lon2,4))
+    kr = (round(lat2,4), round(lon2,4), round(lat1,4), round(lon1,4))
+    v  = _ROAD_DIST_CACHE.get(k) or _ROAD_DIST_CACHE.get(kr)
+    if v: return v
     d = _hav(lat1, lon1, lat2, lon2) * 1.35
-    _ROAD_DIST_CACHE[key] = d
+    _ROAD_DIST_CACHE[k] = d
     return d
 
 
