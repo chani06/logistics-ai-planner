@@ -6393,6 +6393,31 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
             if _c_cs:
                 _caps_cs[_t_cs] = _c_cs
 
+        # ── Pre-compute OSRM road distance ทุกคู่สาขา ครั้งเดียวต่อ round ──
+        _all_pts_665: list = []
+        _pt_trip_665: list = []
+        for _t6, _c6 in _caps_cs.items():
+            for _pt6 in _c6.get('branch_pts', []):
+                _all_pts_665.append(_pt6)
+                _pt_trip_665.append(_t6)
+        _road_mat_665 = _osrm_table_batch(_all_pts_665) if len(_all_pts_665) >= 2 else {}
+
+        def _min_road_665(ta, tb):
+            best = float('inf')
+            for i, ti in enumerate(_pt_trip_665):
+                if ti != ta: continue
+                for j, tj in enumerate(_pt_trip_665):
+                    if tj != tb: continue
+                    d = _road_mat_665.get((i, j), float('inf'))
+                    if d < best: best = d
+            if best == float('inf'):
+                ca, cb = _caps_cs.get(ta, {}), _caps_cs.get(tb, {})
+                return haversine_distance(
+                    float(ca.get('centroid_lat',0) or 0), float(ca.get('centroid_lon',0) or 0),
+                    float(cb.get('centroid_lat',0) or 0), float(cb.get('centroid_lon',0) or 0),
+                    use_osrm_cache=False)
+            return best
+
         # Find under-utilized trips (sorted: lowest util first)
         _under_cs = sorted(
             [t for t, c in _caps_cs.items()
@@ -6438,19 +6463,15 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
                               _ca_cs['cube'] / _ca_cs['max_c']) if _ca_cs['max_w'] > 0 else 0
                 _is_very_low = _util_a < 0.20  # ทริปที่ต่ำมาก (<20%) → ผ่อน zone ได้
 
-                # Must share province OR zone OR zone family — หรือ min branch dist ≤30km ภาคเดียวกัน
+                # Must share province OR zone OR zone family — หรือ min road dist ≤30km ภาคเดียวกัน
                 _cs_share_area = ((_pa_cs & _pb_cs) or (_za_cs & _zb_cs) or (_za_fam_cs & _zb_fam_cs))
                 if not _cs_share_area:
-                    _pts_a_sh = _ca_cs.get('branch_pts', [])
-                    _pts_b_sh = _cb_cs.get('branch_pts', [])
-                    if _pts_a_sh and _pts_b_sh:
-                        _cd = min(haversine_distance(_la, _loa, _lb, _lob, use_osrm_cache=False)
-                                  for _la, _loa in _pts_a_sh for _lb, _lob in _pts_b_sh)
-                        _same_r = bool(_ra_cs & _rb_cs) if (_ra_cs and _rb_cs) else True
-                        if _cd <= 30.0 and _same_r:
-                            _cs_share_area = True
-                        elif not _same_prov_only and _util_a < 0.60 and _same_r and _cd <= 80.0:
-                            _cs_share_area = True
+                    _cd = _min_road_665(_ta_cs, _tb_cs)
+                    _same_r = bool(_ra_cs & _rb_cs) if (_ra_cs and _rb_cs) else True
+                    if _cd <= 30.0 and _same_r:
+                        _cs_share_area = True
+                    elif not _same_prov_only and _util_a < 0.60 and _same_r and _cd <= 80.0:
+                        _cs_share_area = True
                 if not _cs_share_area:
                     continue
                 # Must share region (ภาค) — strict: if EITHER side has known region, both must match
@@ -6480,19 +6501,12 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
                     if not _prov_overlap:
                         continue  # คนละจังหวัด → ห้าม consolidate
 
-                # 📐 Subdistrict check — ข้ามตำบล: วัดระยะสาขาต่อสาขาจริง ใกล้สุดต้อง ≤ 5km
+                # 📐 Subdistrict check — ข้ามตำบล: ใช้ระยะถนนจริง สาขาต่อสาขา ≤ 5km
                 _sda_cs = _ca_cs.get('subdistricts', set())
                 _sdb_cs = _cb_cs.get('subdistricts', set())
                 if _sda_cs and _sdb_cs and not (_sda_cs & _sdb_cs):
-                    _pts_a65 = _ca_cs.get('branch_pts', [])
-                    _pts_b65 = _cb_cs.get('branch_pts', [])
-                    if _pts_a65 and _pts_b65:
-                        _min65 = min(
-                            haversine_distance(_la, _loa, _lb, _lob, use_osrm_cache=False)
-                            for _la, _loa in _pts_a65 for _lb, _lob in _pts_b65
-                        )
-                        if _min65 > 5.0:
-                            continue
+                    if _min_road_665(_ta_cs, _tb_cs) > 5.0:
+                        continue
                 # Zone isolation by centroid distance: จังหวัดเดียวกัน ≤80km, คู่จังหวัด ≤120km
                 if not (_pa_cs & _pb_cs):  # คู่จังหวัด (ผ่าน PROVINCE_PAIR_GROUPS มาแล้ว)
                     _ca_lat_cs = float(_ca_cs.get('centroid_lat', 0) or 0)
@@ -7913,6 +7927,30 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
         _meta_cs = {t: _trip_meta_consol(t) for t in _all_trips_cs}
         _meta_cs = {t: m for t, m in _meta_cs.items() if m}
 
+        # ── Pre-compute OSRM road distance ทุกคู่สาขาจริง ครั้งเดียวต่อ round ──
+        # รวมพิกัดสาขาทุกตัวจากทุกทริป พร้อม index กลับหาทริป
+        _all_pts_cs: list = []   # [(lat,lon), ...]
+        _pt_trip_cs: list = []   # trip id ของแต่ละ point
+        for _t, _m in _meta_cs.items():
+            for _pt in _m.get('pts', []):
+                _all_pts_cs.append(_pt)
+                _pt_trip_cs.append(_t)
+        _road_matrix_cs = _osrm_table_batch(_all_pts_cs) if len(_all_pts_cs) >= 2 else {}
+
+        def _min_road_dist_trips(ta, tb):
+            """ระยะถนนสั้นสุด (km) ระหว่างสาขาจริงของ ta กับ tb"""
+            best = float('inf')
+            for i, ti in enumerate(_pt_trip_cs):
+                if ti != ta: continue
+                for j, tj in enumerate(_pt_trip_cs):
+                    if tj != tb: continue
+                    d = _road_matrix_cs.get((i, j), float('inf'))
+                    if d < best:
+                        best = d
+            return best if best < float('inf') else haversine_distance(
+                _meta_cs[ta]['clat'], _meta_cs[ta]['clon'],
+                _meta_cs[tb]['clat'], _meta_cs[tb]['clon'], use_osrm_cache=False)
+
         # เรียงทริปตาม utilization น้อยสุดก่อน (รถว่างมากสุดก่อน)
         _trips_by_util = sorted(
             _meta_cs.items(),
@@ -7940,18 +7978,7 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
                 if _util_b >= _CONSOL_MIN_UTIL:
                     continue
 
-                # ระยะสั้นสุดระหว่างสาขาจริง (ไม่ใช้ centroid)
-                _pts_a = _ma.get('pts', [])
-                _pts_b = _mb.get('pts', [])
-                if _pts_a and _pts_b:
-                    _d_cs = min(
-                        haversine_distance(_la, _loa, _lb, _lob, use_osrm_cache=False)
-                        for _la, _loa in _pts_a for _lb, _lob in _pts_b
-                    )
-                else:
-                    _d_cs = haversine_distance(_ma['clat'], _ma['clon'],
-                                               _mb['clat'], _mb['clon'],
-                                               use_osrm_cache=False)
+                _d_cs = _min_road_dist_trips(_ta, _tb)
                 if _d_cs > _CONSOL_MAX_KM:
                     continue
 
