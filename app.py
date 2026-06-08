@@ -6057,6 +6057,9 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
             'highways': _hws,
             'regions': _regions,
             'subdistricts': _subds65,
+            'branch_pts': [(float(r['_lat']), float(r['_lon']))
+                           for _, r in trip_data.iterrows()
+                           if float(r.get('_lat', 0) or 0) > 0 and float(r.get('_lon', 0) or 0) > 0],
         }
     
     def can_add_branch_to_trip(branch_row, trip_capacity):
@@ -6435,23 +6438,17 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
                               _ca_cs['cube'] / _ca_cs['max_c']) if _ca_cs['max_w'] > 0 else 0
                 _is_very_low = _util_a < 0.20  # ทริปที่ต่ำมาก (<20%) → ผ่อน zone ได้
 
-                # Must share province OR zone OR zone family — หรือ centroid ใกล้กัน ≤30km ภาคเดียวกัน
+                # Must share province OR zone OR zone family — หรือ min branch dist ≤30km ภาคเดียวกัน
                 _cs_share_area = ((_pa_cs & _pb_cs) or (_za_cs & _zb_cs) or (_za_fam_cs & _zb_fam_cs))
                 if not _cs_share_area:
-                    # fallback 1: centroid ≤30km + same region
-                    _cla = float(_ca_cs.get('centroid_lat', 0) or 0)
-                    _clo = float(_ca_cs.get('centroid_lon', 0) or 0)
-                    _clb = float(_cb_cs.get('centroid_lat', 0) or 0)
-                    _clob = float(_cb_cs.get('centroid_lon', 0) or 0)
-                    if _cla > 0 and _clb > 0:
-                        from math import radians, sin, cos, atan2, sqrt
-                        _dlat = radians(_clb - _cla); _dlon = radians(_clob - _clo)
-                        _a = sin(_dlat/2)**2 + cos(radians(_cla))*cos(radians(_clb))*sin(_dlon/2)**2
-                        _cd = 6371 * 2 * atan2(sqrt(_a), sqrt(1-_a))
+                    _pts_a_sh = _ca_cs.get('branch_pts', [])
+                    _pts_b_sh = _cb_cs.get('branch_pts', [])
+                    if _pts_a_sh and _pts_b_sh:
+                        _cd = min(haversine_distance(_la, _loa, _lb, _lob, use_osrm_cache=False)
+                                  for _la, _loa in _pts_a_sh for _lb, _lob in _pts_b_sh)
                         _same_r = bool(_ra_cs & _rb_cs) if (_ra_cs and _rb_cs) else True
                         if _cd <= 30.0 and _same_r:
                             _cs_share_area = True
-                        # fallback 2 (pass 2 เท่านั้น): util ต่ำ (<60%) + same region + ≤80km
                         elif not _same_prov_only and _util_a < 0.60 and _same_r and _cd <= 80.0:
                             _cs_share_area = True
                 if not _cs_share_area:
@@ -6483,22 +6480,19 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
                     if not _prov_overlap:
                         continue  # คนละจังหวัด → ห้าม consolidate
 
-                # 📐 Subdistrict check — ข้ามตำบลได้เฉพาะตำบลติดกัน ≤ 5km
+                # 📐 Subdistrict check — ข้ามตำบล: วัดระยะสาขาต่อสาขาจริง ใกล้สุดต้อง ≤ 5km
                 _sda_cs = _ca_cs.get('subdistricts', set())
                 _sdb_cs = _cb_cs.get('subdistricts', set())
                 if _sda_cs and _sdb_cs and not (_sda_cs & _sdb_cs):
-                    # คนละตำบล → ต้องตรวจระยะ centroid ≤ 5km
-                    _cla65 = float(_ca_cs.get('centroid_lat', 0) or 0)
-                    _clo65 = float(_ca_cs.get('centroid_lon', 0) or 0)
-                    _clb65 = float(_cb_cs.get('centroid_lat', 0) or 0)
-                    _clob65 = float(_cb_cs.get('centroid_lon', 0) or 0)
-                    if _cla65 > 0 and _clb65 > 0:
-                        from math import radians as _r65, sin as _s65, cos as _c65, atan2 as _a65, sqrt as _sq65
-                        _dlat65 = _r65(_clb65 - _cla65); _dlon65 = _r65(_clob65 - _clo65)
-                        _ha65 = _s65(_dlat65/2)**2 + _c65(_r65(_cla65))*_c65(_r65(_clb65))*_s65(_dlon65/2)**2
-                        _dist65 = 2 * 6371 * _a65(_sq65(_ha65), _sq65(1 - _ha65))
-                        if _dist65 > 5.0:
-                            continue  # ต่างตำบล ห่างเกิน 5km → ห้าม consolidate
+                    _pts_a65 = _ca_cs.get('branch_pts', [])
+                    _pts_b65 = _cb_cs.get('branch_pts', [])
+                    if _pts_a65 and _pts_b65:
+                        _min65 = min(
+                            haversine_distance(_la, _loa, _lb, _lob, use_osrm_cache=False)
+                            for _la, _loa in _pts_a65 for _lb, _lob in _pts_b65
+                        )
+                        if _min65 > 5.0:
+                            continue
                 # Zone isolation by centroid distance: จังหวัดเดียวกัน ≤80km, คู่จังหวัด ≤120km
                 if not (_pa_cs & _pb_cs):  # คู่จังหวัด (ผ่าน PROVINCE_PAIR_GROUPS มาแล้ว)
                     _ca_lat_cs = float(_ca_cs.get('centroid_lat', 0) or 0)
