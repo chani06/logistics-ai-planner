@@ -359,7 +359,7 @@ def sync_branch_data_from_sheets():
     Returns:
         DataFrame หรือ None ถ้าล้มเหลว
     """
-    global SHEETS_AVAILABLE, sh, gc
+    global SHEETS_AVAILABLE, sh, gc, BRANCH_GROUPS, BRANCH_TO_GROUP
 
     # ── พยายาม reconnect ถ้า sh หรือ SHEETS_AVAILABLE เป็น False/None ──
     if not SHEETS_AVAILABLE or sh is None:
@@ -575,7 +575,7 @@ def sync_branch_data_from_sheets():
                     _new_groups[_gk] = sorted(_members)
                     for _m in _members: _new_b2g[_m] = _gk
 
-                # Merge กับ old groups
+                # Merge กับ old groups — เฉพาะ member ที่ใกล้ target group จริงๆ (≤ _COLOC km)
                 try:
                     with open('branch_groups.json', 'r', encoding='utf-8') as _f:
                         _old_bg = json.load(_f)
@@ -583,14 +583,26 @@ def sync_branch_data_from_sheets():
                         _old_mems = [str(_m).strip().upper() for _m in _ogm]
                         _tgt = next((_new_b2g[_om] for _om in _old_mems if _om in _new_b2g), None)
                         if _tgt:
+                            # หา centroid ของ target group
+                            _tgt_coords = [_coords_bg[_m] for _m in _new_groups[_tgt] if _m in _coords_bg]
+                            _tgt_clat = sum(x[0] for x in _tgt_coords) / len(_tgt_coords) if _tgt_coords else None
+                            _tgt_clon = sum(x[1] for x in _tgt_coords) / len(_tgt_coords) if _tgt_coords else None
+                            _tgt_prov = _prov_bg.get(_new_groups[_tgt][0], '') if _new_groups[_tgt] else ''
                             for _om in _old_mems:
-                                if _om not in _new_b2g:
-                                    _new_groups[_tgt].append(_om); _new_b2g[_om] = _tgt
+                                if _om in _new_b2g:
+                                    continue  # อยู่ใน proximity group อยู่แล้ว
+                                if _om not in _coords_bg:
+                                    continue  # ไม่มีพิกัด → ข้าม
+                                _om_lat, _om_lon = _coords_bg[_om]
+                                _om_prov = _prov_bg.get(_om, '')
+                                # ตรวจจังหวัดและระยะ — เกิน _COLOC km → ไม่รวม
+                                if _tgt_prov and _om_prov and _tgt_prov != _om_prov:
+                                    continue
+                                if _tgt_clat and _hav_m(_om_lat, _om_lon, _tgt_clat, _tgt_clon) > _COLOC:
+                                    continue
+                                _new_groups[_tgt].append(_om); _new_b2g[_om] = _tgt
                             _new_groups[_tgt] = sorted(set(_new_groups[_tgt]))
-                        else:
-                            _gk2 = f'G{_gi:04d}'; _gi += 1
-                            _new_groups[_gk2] = sorted(set(_old_mems))
-                            for _om in _old_mems: _new_b2g[_om] = _gk2
+                        # ถ้า _tgt is None → ไม่มีสมาชิกใด match new proximity → ข้าม (stale group)
                 except: pass
 
                 with open('branch_groups.json', 'w', encoding='utf-8') as _f:
@@ -598,7 +610,6 @@ def sync_branch_data_from_sheets():
                               _f, ensure_ascii=False, separators=(',', ':'))
                 safe_print(f"✅ Auto-rebuild branch_groups.json: {len(_new_groups)} groups, {len(_new_b2g)} branches")
                 # 🔄 Reload global ทันที
-                global BRANCH_GROUPS, BRANCH_TO_GROUP
                 BRANCH_GROUPS   = {k: [str(c).strip().upper() for c in v]
                                    for k, v in _new_groups.items()}
                 BRANCH_TO_GROUP = {str(k).strip().upper(): v
@@ -4644,9 +4655,12 @@ def _extract_all_info(file_content):
 
         # ── 2. style (row height + font จากแถวข้อมูลแรก) ──
         data_row_idx = hrow + 1
-        rd = ws.row_dimensions.get(data_row_idx)
-        if rd and rd.height:
-            style_dict['row_height'] = float(rd.height)
+        try:
+            rd = ws.row_dimensions.get(data_row_idx)
+            if rd and rd.height:
+                style_dict['row_height'] = float(rd.height)
+        except Exception:
+            pass
         for cell in ws[data_row_idx]:
             if cell.value is not None:
                 try:
@@ -4954,6 +4968,24 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
     # ==========================================
     location_map = {}  # {code: {province, district, subdistrict, route, lat, lon, distance_from_dc, region_name}}
     
+    def _sg(series_row, *keys, default=''):
+        """scalar-safe get: คืน scalar แรกที่เจอจาก Series row (ป้องกัน duplicate columns)"""
+        for key in keys:
+            try:
+                val = series_row.get(key, None)
+                if val is None:
+                    continue
+                if isinstance(val, (pd.Series, pd.DataFrame)):
+                    val = val.iloc[0] if len(val) > 0 else default
+                if pd.isna(val):
+                    continue
+                s = str(val).strip()
+                if s and s.lower() not in ('nan', 'none'):
+                    return s
+            except Exception:
+                pass
+        return default
+
     for _, row in test_df.iterrows():
         code = str(row.get('Code', '')).strip().upper()
         if not code:
@@ -4967,16 +4999,23 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
         # ── Priority 1: MASTER DATA (source of truth) ──
         _mrow = _master_dict.get(code)
         if _mrow is not None:
-            province    = str(_mrow.get('จังหวัด', '')).strip() if pd.notna(_mrow.get('จังหวัด')) else ''
-            district    = str(_mrow.get('อำเภอ', '')).strip()   if pd.notna(_mrow.get('อำเภอ'))   else ''
-            subdistrict = str(_mrow.get('ตำบล', '')).strip()    if pd.notna(_mrow.get('ตำบล'))    else ''
-            route       = str(_mrow.get('Route', '')).strip()   if pd.notna(_mrow.get('Route'))   else ''
+            province    = _sg(_mrow, 'จังหวัด')
+            district    = _sg(_mrow, 'อำเภอ')
+            subdistrict = _sg(_mrow, 'ตำบล')
+            route       = _sg(_mrow, 'Route')
 
-        # ── Priority 2: Excel upload (fallback เฉพาะที่ Master ว่าง) ──
-        if not province:    province    = str(row.get('Province', row.get('จังหวัด', ''))).strip() if pd.notna(row.get('Province', row.get('จังหวัด', ''))) else ''
-        if not district:    district    = str(row.get('District', row.get('อำเภอ', ''))).strip()   if pd.notna(row.get('District', row.get('อำเภอ', '')))   else ''
-        if not subdistrict: subdistrict = str(row.get('Subdistrict', row.get('ตำบล', ''))).strip() if pd.notna(row.get('Subdistrict', row.get('ตำบล', ''))) else ''
-        if not route:       route       = str(row.get('Route', '')).strip()                        if pd.notna(row.get('Route', ''))                        else ''
+        # ── Priority 2: Excel upload (fallback เฉพาะที่ Master ว่าง) — ใช้ _sg ป้องกัน duplicate columns ──
+        if not province:    province    = _sg(row, 'Province', 'จังหวัด')
+        if not district:    district    = _sg(row, 'District', 'อำเภอ')
+        if not subdistrict: subdistrict = _sg(row, 'Subdistrict', 'ตำบล')
+        if not route:       route       = _sg(row, 'Route')
+
+        # ── Priority 3: BRANCH_INFO (branch_clusters.json) fallback ──
+        # ใช้ lookup โดยตรงจาก code เพื่อเติม district/subdistrict ที่ขาดหาย
+        if (not district or not subdistrict) and BRANCH_INFO:
+            _bi_info = BRANCH_INFO.get(code, {})
+            if not district:    district    = str(_bi_info.get('district', '')    or '').strip()
+            if not subdistrict: subdistrict = str(_bi_info.get('subdistrict', '') or '').strip()
 
         # normalize province alias
         _prov_alias = {'พระนครศรีอยุธยา':'อยุธยา','กรุงเทพฯ':'กรุงเทพมหานคร',
@@ -5196,25 +5235,15 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
     # 🚀 CACHE: Pre-compute branch constraints และ BU type จาก Excel upload
     branch_max_vehicle_cache = {}
     branch_bu_cache = {}
-    for _, row in df.iterrows():
-        code = row['Code']
-        branch_max_vehicle_cache[code] = row['_max_vehicle']
-        
-        # 📊 ดึง BU จากไฟล์ Excel ที่ upload มา (คอลัมน์ BU)
-        bu = row.get('BU', None)  # อ่านค่าจริงจาก Excel
-        
-        # เช็คว่าเป็น Punthai หรือไม่
-        is_punthai = False
-        if bu is not None:
-            bu_str = str(bu).strip().upper()
-            # เช็ค BU = 211 หรือ 'PUNTHAI'
-            is_punthai = bu_str in ['211', 'PUNTHAI']
-        else:
-            # ถ้าไม่มีคอลัมน์ BU → ลองเช็คจากชื่อสาขา (fallback)
-            name = str(row.get('Name', '')).upper()
-            is_punthai = 'PUNTHAI' in name or 'PUN-' in name
-        
-        branch_bu_cache[code] = is_punthai
+    # vectorized — ไม่ใช้ iterrows
+    branch_max_vehicle_cache = dict(zip(df['Code'], df['_max_vehicle']))
+    if 'BU' in df.columns:
+        _bu_upper = df['BU'].astype(str).str.strip().str.upper()
+        _is_pt_series = _bu_upper.isin(['211', 'PUNTHAI'])
+    else:
+        _name_upper = df['Name'].astype(str).str.upper() if 'Name' in df.columns else pd.Series('', index=df.index)
+        _is_pt_series = _name_upper.str.contains('PUNTHAI|PUN-', na=False)
+    branch_bu_cache = dict(zip(df['Code'], _is_pt_series))
     
     # 🚀 Pre-compute limits with buffer
     def get_max_limits(allowed_vehicles, is_punthai):
@@ -5333,13 +5362,14 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
             if _nearby_in_run:
                 _rt_same_loc[_nc] = [_nc] + _nearby_in_run
 
-    # Pass 2: สาขาที่ไม่อยู่ใน NEARBY_BRANCHES → ใช้ haversine จาก df พิกัด
+    # Pass 2: สาขาที่ไม่อยู่ใน NEARBY_BRANCHES → ใช้ haversine จาก df พิกัด (vectorized)
     _df_coord_map = {}
-    for _, _sr in df.iterrows():
-        _slat = float(_sr.get('_lat', 0) or 0)
-        _slon = float(_sr.get('_lon', 0) or 0)
-        if _slat > 0 and _slon > 0:
-            _df_coord_map[str(_sr['Code']).strip().upper()] = (_slat, _slon)
+    if '_lat' in df.columns and '_lon' in df.columns:
+        _cm_lat = pd.to_numeric(df['_lat'], errors='coerce').fillna(0)
+        _cm_lon = pd.to_numeric(df['_lon'], errors='coerce').fillna(0)
+        _cm_mask = _cm_lat > 0
+        _df_coord_map = {str(c).strip().upper(): (float(la), float(lo))
+                         for c, la, lo, ok in zip(df['Code'], _cm_lat, _cm_lon, _cm_mask) if ok}
 
     for _nc in _df_codes_upper:
         if _nc not in _rt_same_loc and _nc in _df_coord_map:
@@ -5392,13 +5422,11 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
     # Pass 5: same-ตำบล/อำเภอ ≤5km — สาขาในพื้นที่เดียวกันและใกล้กันต้องไปทริปเดียวกัน
     # สร้าง _code_area_map ก่อน (fast lookup)
     _COLOC_AREA_KM = 5.0
-    _code_area_map: dict = {}   # code_upper → (subdistrict, district)
-    for _, _car in df.iterrows():
-        _ccu = str(_car['Code']).strip().upper()
-        _code_area_map[_ccu] = (
-            str(_car.get('_subdistrict', '') or ''),
-            str(_car.get('_district',    '') or ''),
-        )
+    # vectorized
+    _sub_s = df['_subdistrict'].astype(str).fillna('') if '_subdistrict' in df.columns else pd.Series('', index=df.index)
+    _dis_s = df['_district'].astype(str).fillna('')    if '_district'    in df.columns else pd.Series('', index=df.index)
+    _code_area_map: dict = {str(c).strip().upper(): (str(s), str(d))
+                            for c, s, d in zip(df['Code'], _sub_s, _dis_s)}
     # จัดกลุ่มตาม (subdistrict, district) เพื่อ lookup เร็ว
     _area_to_codes: dict = {}   # (sub, dis) → [code_upper]
     for _ccu, (_csub, _cdis) in _code_area_map.items():
@@ -5470,7 +5498,7 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
     trip_counter = 1
 
     # ─── INDEX: code_upper → df index (O(1) lookup แทน df.loc ตลอด algorithm) ───
-    _df_idx: dict = {str(r['Code']).strip().upper(): idx for idx, r in df[['Code']].iterrows()}
+    _df_idx: dict = {str(c).strip().upper(): idx for idx, c in df['Code'].items()}
 
     # ═══════════════════════════════════════════════════════════════════
     # 🔒 ABSOLUTE GROUP LOCK — กลุ่มสาขาจาก branch_groups.json
@@ -5531,8 +5559,10 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
     _follower_of: dict = {}       # follower_code_upper → anchor_code_upper
     _seen_groups: set = set()
 
-    # pre-build code→actual_code lookup เพื่อความเร็ว
-    _code_actual: dict = {str(r['Code']).strip().upper(): r['Code'] for _, r in df.iterrows()}
+    # vectorized — ไม่ใช้ iterrows
+    _code_actual: dict = {str(c).strip().upper(): c for c in df['Code']}
+    _code_order:  dict = {str(c).strip().upper(): i for i, c in enumerate(df['Code'])}
+    _unassigned_up: set = {str(u).strip().upper() for u in unassigned}
 
     for _pu in list(unassigned):
         _pu_up = str(_pu).strip().upper()
@@ -5542,19 +5572,11 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
         _seen_groups.add(_gid)
         _grp_all = [str(c).strip().upper() for c in BRANCH_GROUPS.get(_gid, [])]
         # กรองเฉพาะที่อยู่ใน order (df) และยัง unassigned
-        _grp_in_run = [c for c in _grp_all if c in _code_actual and
-                       any(str(u).strip().upper() == c for u in unassigned)]
+        _grp_in_run = [c for c in _grp_all if c in _code_actual and c in _unassigned_up]
         if len(_grp_in_run) <= 1:
             continue
-        # anchor = member แรกใน df (ตาม index df)
-        _anchor_up = None
-        for _, _dr in df.iterrows():
-            _dcu = str(_dr['Code']).strip().upper()
-            if _dcu in _grp_in_run:
-                _anchor_up = _dcu
-                break
-        if not _anchor_up:
-            _anchor_up = _grp_in_run[0]
+        # anchor = member แรกสุดตาม index df (vectorized — ไม่ iterrows)
+        _anchor_up = min(_grp_in_run, key=lambda c: _code_order.get(c, 999999))
         _followers = [c for c in _grp_in_run if c != _anchor_up]
         _anchor_followers[_anchor_up] = [_code_actual[f] for f in _followers]
         for _f_up in _followers:
@@ -5663,32 +5685,83 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
     # ==========================================
     safe_print("🔋 Group-Aware Best-Fit Fill-Up...")
     _FILLUP_MAX_KM = 150.0
-    _fu_code_idx   = {str(r['Code']).strip().upper(): idx
-                      for idx, r in df[['Code']].iterrows()}
+    # vectorized: ไม่ใช้ iterrows
+    _fu_code_idx   = {str(c).strip().upper(): idx for idx, c in df['Code'].items()}
     _fillup_added  = 0
 
+    # column presence flags (คำนวณครั้งเดียว)
+    _fu_has_cube = 'Cube' in df.columns
+    _fu_has_pv   = '_province' in df.columns
+    _fu_has_reg  = '_region_name' in df.columns
+    _fu_has_lat  = '_lat' in df.columns
+    _fu_has_lon  = '_lon' in df.columns
+    _fu_has_sub  = '_subdistrict' in df.columns
+    _fu_has_dist = '_district' in df.columns
+    _fu_has_zone = '_logistics_zone' in df.columns
+
+    def _build_all_trip_states():
+        """สร้าง trip states ทุกทริปด้วย groupby ครั้งเดียว O(n) — แทน O(n×trips)"""
+        _active = df[df['Trip'] > 0]
+        if _active.empty: return {}
+        _states: dict = {}
+        for _trip, _grp in _active.groupby('Trip'):
+            _trip = int(_trip)
+            _codes = _grp['Code'].tolist()
+            _w  = float(_grp['Weight'].sum())
+            _c  = float(_grp['Cube'].sum()) if _fu_has_cube else 0.0
+            _is_pt = any(branch_bu_cache.get(str(x).strip().upper(), False) for x in _codes)
+            _buf  = punthai_buffer if _is_pt else maxmart_buffer
+            _lims = PUNTHAI_LIMITS if _is_pt else LIMITS
+            _allow = get_allowed_from_codes(_codes, ['4W','JB','6W'])
+            _veh  = next((v for v in ['4W','JB','6W'] if v in (_allow or ['6W'])), '6W')
+            _lim  = _lims.get(_veh, _lims['6W'])
+            _reg  = str(_grp['_region_name'].iloc[0] or '') if _fu_has_reg else ''
+            _pv_s = _grp['_province'].dropna() if _fu_has_pv else pd.Series(dtype=str)
+            _prov = str(_pv_s.mode().iloc[0]) if not _pv_s.empty else ''
+            # coords: vectorized — ไม่ใช้ iterrows
+            if _fu_has_lat and _fu_has_lon:
+                _lat_s = pd.to_numeric(_grp['_lat'], errors='coerce').fillna(0)
+                _lon_s = pd.to_numeric(_grp['_lon'], errors='coerce').fillna(0)
+                _mask  = _lat_s > 0
+                _coords = list(zip(_lat_s[_mask].tolist(), _lon_s[_mask].tolist()))
+            else:
+                _coords = []
+            _states[_trip] = {
+                'codes':   _codes, 'w': _w, 'c': _c,
+                'max_w':   _lim['max_w'] * _buf,
+                'max_c':   _lim['max_c'] * _buf,
+                'buf': _buf, 'lims': _lims, 'allow': _allow, 'veh': _veh,
+                'region':  _reg, 'prov': _prov, 'coords': _coords,
+                'subdists': set(_grp['_subdistrict'].dropna().unique()) if _fu_has_sub else set(),
+                'dists':    set(_grp['_district'].dropna().unique())    if _fu_has_dist else set(),
+                'zones':    set(_grp['_logistics_zone'].dropna().unique()) if _fu_has_zone else set(),
+            }
+        return _states
+
     def _fu_get_trip_state(trip_num):
-        """คืน (codes, w, c, max_w, max_c, buf, lims, region, prov, coords) ของทริป"""
-        _rows  = df[df['Trip'] == trip_num]
+        """compat wrapper — ใช้เฉพาะกรณีต้องการ single trip"""
+        _rows = df[df['Trip'] == trip_num]
         if _rows.empty: return None
         _codes = _rows['Code'].tolist()
-        _w     = float(_rows['Weight'].sum())
-        _c     = float(_rows['Cube'].sum())
-        _is_pt = all(branch_bu_cache.get(str(x).strip().upper(), False) for x in _codes)
-        _buf   = punthai_buffer if _is_pt else maxmart_buffer
-        _lims  = PUNTHAI_LIMITS if _is_pt else LIMITS
+        _w  = float(_rows['Weight'].sum())
+        _c  = float(_rows['Cube'].sum()) if _fu_has_cube else 0.0
+        _is_pt = any(branch_bu_cache.get(str(x).strip().upper(), False) for x in _codes)
+        _buf  = punthai_buffer if _is_pt else maxmart_buffer
+        _lims = PUNTHAI_LIMITS if _is_pt else LIMITS
         _allow = get_allowed_from_codes(_codes, ['4W','JB','6W'])
-        _veh   = next((v for v in ['4W','JB','6W'] if v in (_allow or ['6W'])), '6W')
-        _lim   = _lims.get(_veh, _lims['6W'])
-        _mw    = _lim['max_w'] * _buf
-        _mc    = _lim['max_c'] * _buf
-        _reg   = str(_rows.iloc[0].get('_region_name','') or '')
-        # ใช้ dominant province (mode) ไม่ใช่แค่ iloc[0]
-        _prov_series = _rows['_province'].dropna() if '_province' in _rows.columns else pd.Series(dtype=str)
-        _prov  = str(_prov_series.mode().iloc[0]) if not _prov_series.empty else ''
-        _coords= [(float(r['_lat'] or 0), float(r['_lon'] or 0))
-                  for _, r in _rows.iterrows() if float(r.get('_lat',0) or 0) > 0]
-        return {'codes':_codes,'w':_w,'c':_c,'max_w':_mw,'max_c':_mc,
+        _veh  = next((v for v in ['4W','JB','6W'] if v in (_allow or ['6W'])), '6W')
+        _lim  = _lims.get(_veh, _lims['6W'])
+        _reg  = str(_rows.iloc[0].get('_region_name','') or '') if _fu_has_reg else ''
+        _pv_s = _rows['_province'].dropna() if _fu_has_pv else pd.Series(dtype=str)
+        _prov = str(_pv_s.mode().iloc[0]) if not _pv_s.empty else ''
+        if _fu_has_lat and _fu_has_lon:
+            _lat_s = pd.to_numeric(_rows['_lat'], errors='coerce').fillna(0)
+            _lon_s = pd.to_numeric(_rows['_lon'], errors='coerce').fillna(0)
+            _mask  = _lat_s > 0
+            _coords = list(zip(_lat_s[_mask].tolist(), _lon_s[_mask].tolist()))
+        else:
+            _coords = []
+        return {'codes':_codes,'w':_w,'c':_c,'max_w':_lim['max_w']*_buf,'max_c':_lim['max_c']*_buf,
                 'buf':_buf,'lims':_lims,'allow':_allow,'veh':_veh,
                 'region':_reg,'prov':_prov,'coords':_coords}
 
@@ -5754,16 +5827,8 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
         # เรียง unit ตาม weight มากสุดก่อน (best-fit decreasing)
         _units.sort(key=lambda x: -x[0])
 
-        # ── สร้าง trip state cache (เพิ่ม subdistricts/districts/zones) ──
-        _trip_states = {}
-        for _ft in df[df['Trip'] > 0]['Trip'].unique():
-            _ts = _fu_get_trip_state(_ft)
-            if not _ts: continue
-            _ft_rows2 = df[df['Trip'] == _ft]
-            _ts['subdists'] = set(_ft_rows2['_subdistrict'].dropna().unique()) if '_subdistrict' in _ft_rows2 else set()
-            _ts['dists']    = set(_ft_rows2['_district'].dropna().unique())    if '_district'    in _ft_rows2 else set()
-            _ts['zones']    = set(_ft_rows2['_logistics_zone'].dropna().unique()) if '_logistics_zone' in _ft_rows2 else set()
-            _trip_states[_ft] = _ts
+        # ── สร้าง trip state cache ทุกทริปในครั้งเดียว (O(n) groupby) ──
+        _trip_states = _build_all_trip_states()
 
         _added_this_round = 0
         for _uw, _uc, _ucodes, _ulat, _ulon, _ureg, _uprov, _udist, _usub, _uzone, _forced_trip in _units:
@@ -5803,11 +5868,12 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
                     # ห้าม fill-up ข้ามจังหวัด — hard rule ก่อน distance
                     if _uprov and _ts['prov'] and _uprov != _ts['prov']:
                         continue
+                    _ft_dist = 9e9
                     if _ulat > 0 and _ts['coords']:
-                        _min_d = min(haversine_distance(_ulat,_ulon,lt,ln,use_osrm_cache=False)
-                                     for lt,ln in _ts['coords'] if lt > 0)
+                        _ft_dist = min(haversine_distance(_ulat,_ulon,lt,ln,use_osrm_cache=False)
+                                       for lt,ln in _ts['coords'] if lt > 0)
                         _radius = 10.0 if (_uprov==_BKK or _ts['prov']==_BKK) else _FILLUP_MAX_KM
-                        if _min_d > _radius: continue
+                        if _ft_dist > _radius: continue
                     _tw = _ts['w'] + _uw; _tc = _ts['c'] + _uc
                     _vok = None
                     for _v in ['4W','JB','6W']:
@@ -5822,9 +5888,9 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
                     elif _udist and _udist in _ts.get('dists',    set()):         _zprio = 2
                     elif _uprov and _uprov == _ts['prov']:                        _zprio = 3
                     else:                                                          _zprio = 4
-                    _gap = _ts['max_w'] - _tw
-                    if (_zprio, _gap) < (_best_zprio, _best_gap):
-                        _best_zprio = _zprio; _best_gap = _gap; _best_t = _ft
+                    # sort: zone-priority → ใกล้สุด (reuse _ft_dist จาก radius check ด้านบน)
+                    if (_zprio, _ft_dist) < (_best_zprio, _best_gap):
+                        _best_zprio = _zprio; _best_gap = _ft_dist; _best_t = _ft
 
             if _best_t is None: continue
 
@@ -6021,9 +6087,11 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
             'highways': _hws,
             'regions': _regions,
             'subdistricts': _subds65,
-            'branch_pts': [(float(r['_lat']), float(r['_lon']))
-                           for _, r in trip_data.iterrows()
-                           if float(r.get('_lat', 0) or 0) > 0 and float(r.get('_lon', 0) or 0) > 0],
+            'branch_pts': list(zip(
+                pd.to_numeric(trip_data['_lat'], errors='coerce').fillna(0).pipe(lambda s: s[s > 0]),
+                pd.to_numeric(trip_data['_lon'], errors='coerce').fillna(0).loc[
+                    pd.to_numeric(trip_data['_lat'], errors='coerce').fillna(0) > 0]
+            )) if '_lat' in trip_data.columns and '_lon' in trip_data.columns else [],
         }
     
     def can_add_branch_to_trip(branch_row, trip_capacity):
@@ -6087,25 +6155,34 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
         
         return nearby_codes
     
+    # pre-build trip capacity ทุกทริปครั้งเดียว (O(n) groupby แทน O(n×trips))
+    _tc_cache: dict = {}
+    for _tc_trip, _tc_grp in df[df['Trip'] > 0].groupby('Trip'):
+        _tc_trip = int(_tc_trip)
+        _tc_cache[_tc_trip] = get_trip_capacity(_tc_trip)  # ยังต้องเรียก 1 ครั้งต่อ trip แต่ไม่ซ้ำ
+
     # วนลูปทริปจากไกลสุด (1) ไปใกล้สุด
     all_trips = sorted(df[df['Trip'] > 0]['Trip'].unique())
+    # pre-build trip data cache
+    _trip_df_cache: dict = {int(t): df[df['Trip'] == t].copy() for t in all_trips}
     moved_branches = 0
-    
+
     for i, current_trip in enumerate(all_trips[:-1]):  # ไม่รวมทริปสุดท้าย
-        trip_cap = get_trip_capacity(current_trip)
+        trip_cap = _tc_cache.get(int(current_trip)) or get_trip_capacity(current_trip)
         if not trip_cap:
             continue
-        
+
         # เช็คว่าทริปนี้ยังมีที่เหลือไหม
         w_util = trip_cap['weight'] / trip_cap['max_w']
         c_util = trip_cap['cube'] / trip_cap['max_c']
-        
+
         if max(w_util, c_util) >= 0.97:  # ถ้าเต็มแล้วไม่ต้องเติม
             continue
-        
+
         # หาสาขาจากทริปถัดไปทันที (i+1 เท่านั้น ไม่ข้ามทริป)
         for next_trip in all_trips[i+1:i+2]:
-            next_trip_data = df[df['Trip'] == next_trip].copy()
+            _cached_ntd = _trip_df_cache.get(int(next_trip))
+            next_trip_data = (_cached_ntd if _cached_ntd is not None else df[df['Trip'] == next_trip]).copy()
             if len(next_trip_data) == 0:
                 continue
             
@@ -6344,25 +6421,51 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
         # dedup พิกัด (round 4 ตำแหน่ง)
         _pre_pts_u = list({(round(la,4), round(lo,4)) for la, lo in _pre_pts})
         if len(_pre_pts_u) >= 2:
-            safe_print(f"📡 Pre-compute road distances: {len(_pre_pts_u)} จุด ({len(_pre_pts_u)**2} คู่)...")
-            coords_str = ";".join([f"{lo},{la}" for la, lo in _pre_pts_u])
-            _pre_url = (f"http://router.project-osrm.org/table/v1/driving/"
-                        f"{coords_str}?annotations=distance")
-            _pre_r = requests.get(_pre_url, timeout=30)
-            _pre_data = _pre_r.json()
-            if _pre_data.get("code") == "Ok":
-                _pre_mat = _pre_data["distances"]
+            # ตรวจ cache hit rate ก่อน — ถ้า > 85% cached แล้ว ข้าม OSRM
+            _n = len(_pre_pts_u)
+            _total_pairs = _n * (_n - 1)
+            _cached_count = 0
+            _sample_step = max(1, _n // 20)  # sample 5% ของ pairs
+            for _pi in range(0, _n, _sample_step):
+                for _pj in range(0, _n, _sample_step):
+                    if _pi == _pj: continue
+                    _la1, _lo1 = _pre_pts_u[_pi]
+                    _la2, _lo2 = _pre_pts_u[_pj]
+                    if f"{_la1:.4f},{_lo1:.4f}_{_la2:.4f},{_lo2:.4f}" in DISTANCE_CACHE:
+                        _cached_count += 1
+            _sample_pairs = sum(1 for _pi in range(0, _n, _sample_step)
+                               for _pj in range(0, _n, _sample_step) if _pi != _pj)
+            _hit_rate = _cached_count / _sample_pairs if _sample_pairs > 0 else 0
+
+            if _hit_rate >= 0.85:
+                safe_print(f"📡 Pre-compute: {_n} จุด cache hit {_hit_rate*100:.0f}% → ข้าม OSRM")
+            else:
+                # แบ่ง batch ≤ 200 จุด เพื่อไม่ให้ URL ยาวเกิน
+                _BATCH = 200
                 _seeded = 0
-                for _pi, (_la1, _lo1) in enumerate(_pre_pts_u):
-                    for _pj, (_la2, _lo2) in enumerate(_pre_pts_u):
-                        if _pi == _pj: continue
-                        _dm = _pre_mat[_pi][_pj]
-                        if _dm and _dm > 0:
-                            _ck = f"{_la1:.4f},{_lo1:.4f}_{_la2:.4f},{_lo2:.4f}"
-                            if _ck not in DISTANCE_CACHE:
-                                DISTANCE_CACHE[_ck] = _dm / 1000.0
-                                _seeded += 1
-                safe_print(f"   ✅ Seeded {_seeded} road distances → consolidation ใช้ถนนจริง")
+                safe_print(f"📡 Pre-compute road distances: {_n} จุด → {(_n-1)//_BATCH+1} batch...")
+                for _b0 in range(0, _n, _BATCH):
+                    _batch = _pre_pts_u[_b0: _b0 + _BATCH]
+                    _coords_str = ";".join([f"{lo},{la}" for la, lo in _batch])
+                    _pre_url = (f"http://router.project-osrm.org/table/v1/driving/"
+                                f"{_coords_str}?annotations=distance")
+                    try:
+                        _pre_r = requests.get(_pre_url, timeout=15)
+                        _pre_data = _pre_r.json()
+                        if _pre_data.get("code") == "Ok":
+                            _pre_mat = _pre_data["distances"]
+                            for _pi, (_la1, _lo1) in enumerate(_batch):
+                                for _pj, (_la2, _lo2) in enumerate(_batch):
+                                    if _pi == _pj: continue
+                                    _dm = _pre_mat[_pi][_pj]
+                                    if _dm and _dm > 0:
+                                        _ck = f"{_la1:.4f},{_lo1:.4f}_{_la2:.4f},{_lo2:.4f}"
+                                        if _ck not in DISTANCE_CACHE:
+                                            DISTANCE_CACHE[_ck] = _dm / 1000.0
+                                            _seeded += 1
+                    except Exception as _be:
+                        safe_print(f"   ⚠️ batch {_b0}: {_be}")
+                safe_print(f"   ✅ Seeded {_seeded} road distances")
     except Exception as _pre_ex:
         safe_print(f"   ⚠️ Pre-compute skipped: {_pre_ex} (fallback haversine×1.35)")
 
@@ -8220,67 +8323,238 @@ def _predict_trips_inner(test_df, model_data, punthai_buffer=1.0, maxmart_buffer
     _fl_groups_fresh = BRANCH_GROUPS
     safe_print(f"🔒 FINAL LOCK: {len(_fl_groups_fresh)} กลุ่ม")
 
-    # สร้าง code_upper → (index, trip) จาก df ปัจจุบัน
-    _fl_code_idx: dict = {}
-    _fl_code_trip: dict = {}
-    for _fl_i, _fl_r in df[['Code', 'Trip']].iterrows():
-        _fl_cu = str(_fl_r['Code']).strip().upper()
-        _fl_code_idx[_fl_cu]  = _fl_i
-        _fl_code_trip[_fl_cu] = safe_int_trip(_fl_r['Trip'])
+    _has_cube_fl = 'Cube' in df.columns
+    _has_bu_fl   = 'BU' in df.columns
+    _has_pv_fl   = '_province' in df.columns
+
+    # ── vectorized build: code → idx, trip, w, c, pv ──
+    _fl_cols = ['Code', 'Trip', 'Weight'] + \
+               (['Cube'] if _has_cube_fl else []) + \
+               (['_province'] if _has_pv_fl else []) + \
+               (['BU'] if _has_bu_fl else [])
+    _fl_sub  = df[_fl_cols].copy()
+    _fl_sub['_cu'] = _fl_sub['Code'].astype(str).str.strip().str.upper()
+    _fl_sub['_t']  = pd.to_numeric(_fl_sub['Trip'],   errors='coerce').fillna(0).astype(int)
+    _fl_sub['_w']  = pd.to_numeric(_fl_sub['Weight'], errors='coerce').fillna(0.0)
+    _fl_sub['_c']  = pd.to_numeric(_fl_sub['Cube'],   errors='coerce').fillna(0.0) if _has_cube_fl else 0.0
+
+    _fl_code_idx  = dict(zip(_fl_sub['_cu'], _fl_sub.index))
+    _fl_code_trip = dict(zip(_fl_sub['_cu'], _fl_sub['_t']))
+    _fl_code_w    = dict(zip(_fl_sub['_cu'], _fl_sub['_w']))
+    _fl_code_c    = dict(zip(_fl_sub['_cu'], _fl_sub['_c'])) if _has_cube_fl else {}
+
+    if _has_pv_fl:
+        _fl_code_pv = {cu: ('' if str(pv or '').strip().lower() in ('nan', 'none', '') else str(pv or '').strip())
+                       for cu, pv in zip(_fl_sub['_cu'], _fl_sub['_province'])}
+    else:
+        _fl_code_pv = {}
+
+    # ── vectorized build trip cache (groupby แทน iterrows) ──
+    def _fl_build_trip_cache_fast():
+        _s = _fl_sub[_fl_sub['_t'] > 0]
+        if _s.empty:
+            return {}
+        _tc: dict = {}
+        _g_w  = _s.groupby('_t')['_w'].sum().to_dict()
+        _g_c  = _s.groupby('_t')['_c'].sum().to_dict() if _has_cube_fl else {}
+        # is_pt, provs, codes
+        for _t, _grpdf in _s.groupby('_t'):
+            _is_pt = False
+            if _has_bu_fl:
+                _bus = _grpdf['BU'].astype(str).str.upper()
+                _is_pt = bool(_bus.isin(['211', 'PUNTHAI']).any())
+            _provs: set = set()
+            if _has_pv_fl:
+                for _pv in _grpdf['_province'].astype(str).str.strip():
+                    if _pv and _pv.lower() not in ('nan', 'none', ''):
+                        _provs.add(_pv)
+            _tc[int(_t)] = {
+                'w':     float(_g_w.get(_t, 0)),
+                'c':     float(_g_c.get(_t, 0)) if _has_cube_fl else 0.0,
+                'is_pt': _is_pt,
+                'provs': _provs,
+                'codes': set(_grpdf['_cu'].tolist()),
+            }
+        return _tc
+
+    # helper: อัปเดต cache in-place เมื่อย้าย code จาก trip old → new
+    def _fl_cache_move(tc, cu, old_t, new_t):
+        _w = _fl_code_w.get(cu, 0.0)
+        _c = _fl_code_c.get(cu, 0.0)
+        if old_t and old_t in tc:
+            tc[old_t]['w'] -= _w
+            tc[old_t]['c'] -= _c
+            tc[old_t]['codes'].discard(cu)
+        if new_t not in tc:
+            tc[new_t] = {'w': 0.0, 'c': 0.0, 'is_pt': False, 'provs': set(), 'codes': set()}
+        tc[new_t]['w'] += _w
+        tc[new_t]['c'] += _c
+        tc[new_t]['codes'].add(cu)
 
     from collections import Counter as _FLC
 
-    # วนซ้ำจนกว่า stable (ไม่มีการเปลี่ยนแปลง) — ป้องกัน chain dependency
     _total_fixed = 0
-    for _pass in range(10):   # max 10 rounds กันวนไม่จบ
+    for _pass in range(10):
         _pass_fixed = 0
+        if _pass == 0:
+            _trip_cache = _fl_build_trip_cache_fast()
+        _cur_max_trip = max(_trip_cache.keys()) if _trip_cache else int(df['Trip'].max() or 0)
+
         for _fgid, _fgmems in _fl_groups_fresh.items():
             _mups = [str(c).strip().upper() for c in _fgmems
                      if str(c).strip().upper() in _fl_code_trip]
             if len(_mups) < 2:
                 continue
-            _trips_now = [_fl_code_trip[m] for m in _mups]
-            # รวมทุก member — ทั้ง Trip>0 และ Trip=0 (orphan ก็ต้องดึงเข้ากลุ่ม)
-            _assigned   = [(m, t) for m, t in zip(_mups, _trips_now) if t > 0]
-            _orphans_fl = [(m, t) for m, t in zip(_mups, _trips_now) if t == 0]
-            if len(_assigned) < 1:
+            _trips_now   = [_fl_code_trip[m] for m in _mups]
+            _assigned    = [(m, t) for m, t in zip(_mups, _trips_now) if t > 0]
+            _orphans_fl  = [(m, t) for m, t in zip(_mups, _trips_now) if t == 0]
+            if not _assigned:
                 continue
             _trips_assigned = [t for _, t in _assigned]
             if len(set(_trips_assigned)) == 1 and not _orphans_fl:
-                continue  # ✓ ทุก member อยู่ทริปเดียวกันแล้ว
-            # เลือกทริปที่มี member มากที่สุด
+                continue  # ✓ stable
+
             _target_t = _FLC(_trips_assigned).most_common(1)[0][0]
-            # วน: member ที่อยู่ต่างทริป + orphan (Trip=0) ทั้งหมด
+            _ts_tgt   = _trip_cache.get(_target_t, {'w': 0.0, 'c': 0.0, 'is_pt': False,
+                                                     'provs': set(), 'codes': set()})
+
+            # capacity check
+            _grp_w    = sum(_fl_code_w.get(m, 0.0) for m in _mups)
+            _grp_c    = sum(_fl_code_c.get(m, 0.0) for m in _mups)
+            _is_pt    = _ts_tgt.get('is_pt', False)
+            _buf_grp  = punthai_buffer if _is_pt else maxmart_buffer
+            _lims_g   = PUNTHAI_LIMITS if _is_pt else LIMITS
+            _6w_lim   = _lims_g.get('6W', {'max_w': 5500, 'max_c': 25.0})
+            _6w_max_w = _6w_lim['max_w'] * _buf_grp
+            _6w_max_c = _6w_lim['max_c'] * _buf_grp
+            _tgt_codes = _ts_tgt.get('codes', set())
+            _non_w = _ts_tgt.get('w', 0.0) - sum(_fl_code_w.get(m, 0.0) for m in _mups if m in _tgt_codes)
+            _non_c = _ts_tgt.get('c', 0.0) - sum(_fl_code_c.get(m, 0.0) for m in _mups if m in _tgt_codes)
+            _fits  = (_non_w + _grp_w <= _6w_max_w and
+                      (_non_c + _grp_c <= _6w_max_c if _has_cube_fl else True))
+
+            if not _fits:
+                _cur_max_trip += 1
+                _new_grp_trip = _cur_max_trip
+                _over_warn = ' ⚠️over-6W' if (_grp_w > _6w_max_w or
+                                               (_has_cube_fl and _grp_c > _6w_max_c)) else ''
+                safe_print(f"   ⚡ FINAL LOCK new-trip: group {_fgid} → trip {_new_grp_trip}"
+                           f"{_over_warn} (grp w={_grp_w:.0f}kg c={_grp_c:.2f}m³ | "
+                           f"non-grp w={_non_w:.0f}kg c={_non_c:.2f}m³ | limit {_6w_max_w:.0f}kg/{_6w_max_c:.1f}m³)")
+                for _mu2 in _mups:
+                    _old_t2 = _fl_code_trip.get(_mu2, 0)
+                    _fl_i2  = _fl_code_idx.get(_mu2)
+                    if _fl_i2 is not None:
+                        df.at[_fl_i2, 'Trip'] = _new_grp_trip
+                    _fl_code_trip[_mu2] = _new_grp_trip
+                    _fl_cache_move(_trip_cache, _mu2, _old_t2, _new_grp_trip)  # อัปเดต cache ทันที
+                _pass_fixed += len(_mups)
+                continue
+
+            # merge สมาชิกที่ต่างทริป/orphan เข้า target
+            _tgt_provs = _ts_tgt.get('provs', set())
             for _mu, _mt in _assigned + _orphans_fl:
                 if _mt == _target_t:
                     continue
-                _fl_i = _fl_code_idx.get(_mu)
-                # FINAL GROUP LOCK = ไม่มีข้อยกเว้น ยกเว้นข้ามจังหวัดเท่านั้น
-                _raw_prov_fl = df.at[_fl_i, '_province'] if _fl_i is not None else None
-                _mu_prov_fl = '' if (not _raw_prov_fl or str(_raw_prov_fl).strip().lower() in ('nan', 'none', '')) else str(_raw_prov_fl).strip()
-                _tgt_rows = df[df['Trip'] == _target_t]
-                _tgt_provs = set(_tgt_rows['_province'].dropna().astype(str).str.strip().unique()) if not _tgt_rows.empty else set()
-                _tgt_provs = {p for p in _tgt_provs if p and p.lower() not in ('nan', 'none', '')}
-                # Province-strict เท่านั้น (zone/capacity ไม่บล็อค — group lock เด็ดขาด)
-                if _mu_prov_fl and _tgt_provs and _mu_prov_fl not in _tgt_provs:
-                    safe_print(f"   ⚠️ FINAL LOCK skip: {_mu} จังหวัด {_mu_prov_fl} ≠ target trip {_target_t} ({_tgt_provs})")
+                _mu_prov = _fl_code_pv.get(_mu, '')
+                if _mu_prov and _tgt_provs and _mu_prov not in _tgt_provs:
+                    safe_print(f"   ⚠️ FINAL LOCK skip: {_mu} จังหวัด {_mu_prov} ≠ trip {_target_t} ({_tgt_provs})")
                     continue
-                # zone/capacity: ยอมเกิน (group lock สำคัญกว่า) — Step 7.5 จะ split ทีหลังถ้าจำเป็น
+                _fl_i = _fl_code_idx.get(_mu)
                 if _fl_i is not None:
                     df.at[_fl_i, 'Trip'] = _target_t
                 else:
-                    df.loc[df['Code'].str.strip().str.upper() == _mu, 'Trip'] = _target_t
+                    df.loc[df['Code'].astype(str).str.strip().str.upper() == _mu, 'Trip'] = _target_t
+                _fl_cache_move(_trip_cache, _mu, _mt, _target_t)  # อัปเดต cache ทันที
                 _fl_code_trip[_mu] = _target_t
                 _pass_fixed += 1
                 safe_print(f"   🔒 FINAL LOCK pass{_pass+1}: {_mu} Trip {_mt}→{_target_t} (group {_fgid})")
+
         _total_fixed += _pass_fixed
         if _pass_fixed == 0:
-            break  # stable แล้ว
+            break
 
     if _total_fixed:
         safe_print(f"🔒 FINAL GROUP LOCK: แก้ {_total_fixed} สาขาที่แยกกลุ่ม ({_pass+1} passes)")
     else:
         safe_print("🔒 FINAL GROUP LOCK: ✅ ทุก group อยู่ทริปเดียวกัน")
+
+    # ── POST-LOCK SPLIT: ทริปที่ยังเกิน capacity หลัง GROUP LOCK → ย้าย non-group members ออก ──
+    _fl_all_grp_codes: set = set()
+    for _fg_mems in _fl_groups_fresh.values():
+        for _fc in _fg_mems:
+            _fl_all_grp_codes.add(str(_fc).strip().upper())
+
+    _post_split_count = 0
+    for _pt, _ptc in list(_trip_cache.items()):
+        _pt_is_pt   = _ptc.get('is_pt', False)
+        _pt_buf     = punthai_buffer if _pt_is_pt else maxmart_buffer
+        _pt_lims    = PUNTHAI_LIMITS if _pt_is_pt else LIMITS
+        _pt_6w      = _pt_lims.get('6W', {'max_w': 5500, 'max_c': 25.0})
+        _pt_max_w   = _pt_6w['max_w'] * _pt_buf
+        _pt_max_c   = _pt_6w['max_c'] * _pt_buf
+        _pt_over_w  = _ptc['w'] > _pt_max_w
+        _pt_over_c  = _has_cube_fl and _ptc['c'] > _pt_max_c
+        if not (_pt_over_w or _pt_over_c):
+            continue
+        # หา non-group members ที่ย้ายได้
+        _movable = [cu for cu in list(_ptc['codes'])
+                    if cu not in _fl_all_grp_codes and _fl_code_trip.get(cu, 0) == _pt]
+        if not _movable:
+            # group-only overflow — หาว่า group ไหนทำให้เกิน แล้ว split ออกเป็น 2 ทริป (group ยังอยู่ด้วยกัน)
+            _grp_overflow_codes = [cu for cu in list(_ptc['codes'])
+                                   if cu in _fl_all_grp_codes and _fl_code_trip.get(cu, 0) == _pt]
+            _grp_ids_in_trip = set()
+            for _gu in _grp_overflow_codes:
+                for _gid2, _gmems2 in _fl_groups_fresh.items():
+                    if _gu in [str(x).strip().upper() for x in _gmems2]:
+                        _grp_ids_in_trip.add(_gid2)
+                        break
+            safe_print(f"   ⚠️ POST-LOCK trip {_pt}: group-only overflow "
+                       f"w={_ptc['w']:.0f}/{_pt_max_w:.0f}kg c={_ptc['c']:.2f}/{_pt_max_c:.1f}m³ "
+                       f"— groups: {sorted(_grp_ids_in_trip)} — ตรวจสอบ branch_groups.json")
+            # ถ้ามีหลาย group ในทริป → แยก group ที่เบาที่สุดออกไปทริปใหม่ (แก้ overflow บางส่วน)
+            if len(_grp_ids_in_trip) > 1:
+                # หา group ที่มีน้ำหนักน้อยสุด (ย้ายออกก่อน)
+                _gid_wt = {}
+                for _gid2 in _grp_ids_in_trip:
+                    _gmems2 = [str(x).strip().upper() for x in _fl_groups_fresh.get(_gid2, [])]
+                    _gid_wt[_gid2] = (sum(_fl_code_c.get(m, 0.0) for m in _gmems2),  # cube (ปัญหาหลัก)
+                                      sum(_fl_code_w.get(m, 0.0) for m in _gmems2))
+                _lightest_gid = min(_gid_wt, key=lambda g: _gid_wt[g])
+                _light_mems = [str(x).strip().upper() for x in _fl_groups_fresh.get(_lightest_gid, [])
+                               if _fl_code_trip.get(str(x).strip().upper(), 0) == _pt]
+                if _light_mems:
+                    _cur_max_trip += 1
+                    _grp_split_trip = _cur_max_trip
+                    for _lm in _light_mems:
+                        _fl_i4 = _fl_code_idx.get(_lm)
+                        if _fl_i4 is not None:
+                            df.at[_fl_i4, 'Trip'] = _grp_split_trip
+                        _fl_cache_move(_trip_cache, _lm, _pt, _grp_split_trip)
+                        _fl_code_trip[_lm] = _grp_split_trip
+                        _post_split_count += 1
+                    safe_print(f"   ✂️ POST-LOCK split group {_lightest_gid} → trip {_grp_split_trip} "
+                               f"(trip {_pt} ลดเหลือ w={_trip_cache[_pt]['w']:.0f}kg c={_trip_cache[_pt]['c']:.2f}m³)")
+            continue
+        # ย้าย non-group members ออกจนกว่าจะไม่เกิน
+        _cur_max_trip += 1
+        _overflow_trip = _cur_max_trip
+        for _mcu in _movable:
+            _fl_i3 = _fl_code_idx.get(_mcu)
+            if _fl_i3 is not None:
+                df.at[_fl_i3, 'Trip'] = _overflow_trip
+            _fl_cache_move(_trip_cache, _mcu, _pt, _overflow_trip)
+            _fl_code_trip[_mcu] = _overflow_trip
+            _post_split_count += 1
+            _still_over = (_trip_cache[_pt]['w'] > _pt_max_w or
+                           (_has_cube_fl and _trip_cache[_pt]['c'] > _pt_max_c))
+            if not _still_over:
+                break
+        safe_print(f"   ✂️ POST-LOCK split trip {_pt} → overflow trip {_overflow_trip} "
+                   f"(ย้าย {_post_split_count} สาขา, trip {_pt} เหลือ w={_trip_cache[_pt]['w']:.0f}kg c={_trip_cache[_pt]['c']:.2f}m³)")
+    if _post_split_count:
+        safe_print(f"✂️ POST-LOCK SPLIT: ย้าย {_post_split_count} สาขาออกจากทริปที่เกิน capacity")
 
     # ── FINAL RE-NUMBER: sort key เดียวกับ Step 9 + Export ──
     # (-province_max_dist, province_name, subdistrict, -trip_max_dist)
